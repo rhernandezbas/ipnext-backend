@@ -63,7 +63,9 @@ export function createWifiRouter(
         return;
       }
       try {
-        await setAdminWifiBand.execute(req.params['serial'] as string, parsed.data);
+        // wifi-password-snapshot — `staffUserId` SOLO de la sesión ya
+        // autenticada (`req.user`, poblado por `auth` arriba), NUNCA del body.
+        await setAdminWifiBand.execute(req.params['serial'] as string, parsed.data, req.user!.id);
         res.status(200).json({ applied: true });
       } catch (err) {
         if (err instanceof WifiValidationError) {

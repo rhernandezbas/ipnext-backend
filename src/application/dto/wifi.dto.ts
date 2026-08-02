@@ -9,7 +9,13 @@ export type PortalWifiStatusDto =
   | { eligible: false; reason: WifiEligibilityReason }
   | {
       eligible: true;
-      bands: Array<{ band: '2.4' | '5'; ssid: string | null }>;
+      /**
+       * wifi-password-snapshot — `password: null` = esta banda nunca se
+       * escribió desde Prominense (portal ni admin) — la app muestra el
+       * campo vacío, NUNCA null-como-string. SmartOLT no la devuelve, ver
+       * `OnuWifiCredentialRepository`.
+       */
+      bands: Array<{ band: '2.4' | '5'; ssid: string | null; password: string | null }>;
       /** Hosts con `active=true`. `null` si el fetch de hosts falló — nunca rompe la pantalla por el contador. */
       connectedCount: number | null;
     };
@@ -52,13 +58,24 @@ export function toAdminWifiDeviceDto(host: RouterHost): AdminWifiDeviceDto {
   return { name: host.hostName, ip: host.ip, mac: host.mac, interface: host.interfaceType, active: host.active, vendor: host.vendor };
 }
 
+/**
+ * wifi-password-snapshot — banda WiFi (dato SmartOLT, `WifiBandStatus`) +
+ * `password` (dato Prominense, `OnuWifiCredentialRepository`) — DOS fuentes
+ * distintas, unidas acá en el use case, NUNCA en `mapWifiPortsToBands`
+ * (función pura, sin I/O — ver su docblock).
+ */
+export interface AdminWifiBandStatusDto extends WifiBandStatus {
+  /** `null` = esta banda nunca se escribió desde Prominense. */
+  password: string | null;
+}
+
 export interface AdminOnuWifiStatusDto {
   sn: string;
   found: boolean;
   onuType: string | null;
   online: boolean;
   tr069Enabled: boolean;
-  bands: WifiBandStatus[];
+  bands: AdminWifiBandStatusDto[];
   hosts: AdminWifiDeviceDto[];
 }
 

@@ -22,6 +22,7 @@ import { InMemoryPasswordHasher } from '@infrastructure/adapters/in-memory/InMem
 import { InMemorySettingsRepository } from '@infrastructure/adapters/in-memory/InMemorySettingsRepository';
 import { JwtPortalTokenService } from '@infrastructure/adapters/jwt/JwtPortalTokenService';
 import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
+import { InMemoryOnuWifiCredentialRepository } from '@infrastructure/adapters/in-memory/InMemoryOnuWifiCredentialRepository';
 
 import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
 import { ResolveWifiEligibility } from '@application/use-cases/wifi/ResolveWifiEligibility';
@@ -121,6 +122,7 @@ class FakeWifiManagementPort implements WifiManagementPort {
 function buildStack(opts?: {
   customers?: Pick<CustomerRepository, 'listContracts'>;
   wifiUpdateLimit?: number;
+  credentials?: InMemoryOnuWifiCredentialRepository;
 }) {
   const accounts = new InMemoryPortalAccountRepository();
   const sessions = new InMemoryPortalSessionRepository();
@@ -137,10 +139,11 @@ function buildStack(opts?: {
   const inventory = new InMemoryContractInventoryRepository();
   const wifi = new FakeWifiManagementPort();
   const customers = opts?.customers ?? fakeCustomers({});
+  const credentials = opts?.credentials ?? new InMemoryOnuWifiCredentialRepository();
 
   const resolveWifiEligibility = new ResolveWifiEligibility(customers, inventory, wifi);
-  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, wifi);
-  const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, wifi);
+  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, wifi, credentials);
+  const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, wifi, credentials);
   const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, wifi);
 
   const app = express();
@@ -162,7 +165,7 @@ function buildStack(opts?: {
     }),
   );
 
-  return { app, accounts, hasher, inventory, wifi };
+  return { app, accounts, hasher, inventory, wifi, credentials };
 }
 
 async function loginAs(app: express.Express, accounts: InMemoryPortalAccountRepository, hasher: InMemoryPasswordHasher, clientId: string): Promise<string> {
@@ -360,5 +363,112 @@ describe('wifi-self-service (F0) — portal /api/portal/wifi', () => {
     const res = await request(app).get('/api/portal/wifi/c1').set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ eligible: false, reason: 'not_configured' });
+  });
+});
+
+/**
+ * wifi-password-snapshot — SmartOLT nunca devuelve la password (verificado en
+ * vivo, `get_onu_details` la trae SIEMPRE `null`); Prominense la recuerda en
+ * `OnuWifiCredential` (upsert por sn+port) cada vez que alguien la escribe.
+ * Cubre los casos TDD 1 (round-trip PUT->GET), 2 (banda nunca escrita ->
+ * null, fixture de 2 bandas), 5 (snapshot falla -> el PUT IGUAL responde
+ * 200), 6 (anti-IDOR: la password de otro cliente no se filtra) y la mitad
+ * portal del 7 (`updatedBy: 'portal'`).
+ */
+describe('wifi-password-snapshot — portal /api/portal/wifi', () => {
+  it('caso 1: tras un PUT, el GET devuelve la password escrita PARA ESA banda', async () => {
+    const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
+    const { app, accounts, hasher, inventory, wifi } = buildStack({ customers });
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', ELIGIBLE_STATUS);
+
+    const putRes = await request(app)
+      .put('/api/portal/wifi/c1')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ band: '2.4', ssid: 'RedNueva', password: 'clave1234' });
+    expect(putRes.status).toBe(200);
+
+    const getRes = await request(app).get('/api/portal/wifi/c1').set('Authorization', `Bearer ${token}`);
+    const band24 = getRes.body.bands.find((b: { band: string }) => b.band === '2.4');
+    expect(band24.password).toBe('clave1234');
+  });
+
+  it('caso 2: banda NUNCA escrita por nosotros -> password:null (fixture de 2 bandas, una escrita y otra no)', async () => {
+    const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
+    const { app, accounts, hasher, inventory, wifi } = buildStack({ customers });
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', ELIGIBLE_STATUS); // 2 bandas: 2.4 y 5
+
+    // Escribimos SOLO la 2.4 — la 5 nunca se tocó desde Prominense.
+    await request(app)
+      .put('/api/portal/wifi/c1')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ band: '2.4', ssid: 'RedNueva', password: 'clave1234' });
+
+    const getRes = await request(app).get('/api/portal/wifi/c1').set('Authorization', `Bearer ${token}`);
+    const bands = getRes.body.bands as Array<{ band: string; password: string | null }>;
+    expect(bands.find((b) => b.band === '2.4')!.password).toBe('clave1234');
+    expect(bands.find((b) => b.band === '5')!.password).toBeNull();
+  });
+
+  it('caso 5: el snapshot falla al guardar -> el PUT IGUAL responde 200 (el equipo ya cambió)', async () => {
+    const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
+    const { app, accounts, hasher, inventory, wifi, credentials } = buildStack({ customers });
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', ELIGIBLE_STATUS);
+    credentials.upsert = async () => {
+      throw new Error('DB caída (simulado)');
+    };
+
+    const res = await request(app)
+      .put('/api/portal/wifi/c1')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ band: '2.4', ssid: 'RedNueva', password: 'clave1234' });
+
+    expect(res.status).toBe(200);
+    expect(wifi.setWifiBandCalls).toHaveLength(1); // el equipo SÍ se tocó.
+  });
+
+  it('caso 6 — anti-IDOR: la password de la ONU de OTRO cliente no se filtra (contrato ajeno -> 404, sin password)', async () => {
+    const customers = fakeCustomers({
+      'client-a': [makeContract({ id: 'c1' })],
+      'client-b': [makeContract({ id: 'c2' })],
+    });
+    const { app, accounts, hasher, inventory, wifi } = buildStack({ customers });
+
+    // client-b es el DUEÑO real de c2 y ya escribió su password.
+    const tokenB = await loginAs(app, accounts, hasher, 'client-b');
+    await inventory.create(makeItem({ contractId: 'c2', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', ELIGIBLE_STATUS);
+    await request(app)
+      .put('/api/portal/wifi/c2')
+      .set('Authorization', `Bearer ${tokenB}`)
+      .send({ band: '2.4', ssid: 'RedDeB', password: 'secretoDeB' });
+
+    // client-a pide el contrato AJENO c2.
+    const tokenA = await loginAs(app, accounts, hasher, 'client-a');
+    const res = await request(app).get('/api/portal/wifi/c2').set('Authorization', `Bearer ${tokenA}`);
+
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(res.body)).not.toMatch(/secretoDeB/);
+  });
+
+  it('caso 7 (mitad portal): el PUT del portal guarda updatedBy:"portal"', async () => {
+    const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
+    const { app, accounts, hasher, inventory, wifi, credentials } = buildStack({ customers });
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', ELIGIBLE_STATUS);
+
+    await request(app)
+      .put('/api/portal/wifi/c1')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ band: '2.4', ssid: 'RedNueva', password: 'clave1234' });
+
+    const saved = credentials.all().find((c) => c.sn === 'HWTC189C07AA' && c.port === 'wifi_0/1');
+    expect(saved?.updatedBy).toBe('portal');
   });
 });

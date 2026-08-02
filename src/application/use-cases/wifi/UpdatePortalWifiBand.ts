@@ -1,5 +1,6 @@
 import type { ResolveWifiEligibility } from './ResolveWifiEligibility';
 import type { WifiManagementPort } from '@domain/ports/WifiManagementPort';
+import type { OnuWifiCredentialRepository } from '@domain/ports/OnuWifiCredentialRepository';
 import { validateWifiSsid, validateWifiPassword } from '@domain/services/validateWifiCredentials';
 import { WifiNotEligibleError } from '@domain/errors/wifi';
 
@@ -21,11 +22,18 @@ export interface UpdatePortalWifiBandInput {
  *
  * `setWifiBand` SIEMPRE fuerza WPA2 (a nivel adapter — ver
  * `SmartOltHttpGateway.postSetWifiPort`) — la app nunca puede pedir Open-system.
+ *
+ * wifi-password-snapshot — tras un `setWifiBand` EXITOSO, upsert del snapshot
+ * (`updatedBy: 'portal'`). Si el upsert falla, NO tumba el PUT — el equipo YA
+ * cambió, un 500 acá mentiría ("no se aplicó") sobre un cambio que sí se
+ * aplicó. Se loguea best-effort y se sigue (mismo criterio que el resto de
+ * los `console.warn(...best-effort...)` del repo, ver p.ej. `AddContractService`).
  */
 export class UpdatePortalWifiBand {
   constructor(
     private readonly resolveEligibility: ResolveWifiEligibility,
     private readonly wifi: Pick<WifiManagementPort, 'setWifiBand'>,
+    private readonly credentials: Pick<OnuWifiCredentialRepository, 'upsert'>,
   ) {}
 
   async execute(clientId: string, contractId: string, input: UpdatePortalWifiBandInput): Promise<void> {
@@ -46,5 +54,17 @@ export class UpdatePortalWifiBand {
     }
 
     await this.wifi.setWifiBand(result.sn, { port: target.port, ssid: input.ssid, password: input.password });
+
+    try {
+      await this.credentials.upsert({
+        sn: result.sn,
+        port: target.port,
+        ssid: input.ssid,
+        password: input.password,
+        updatedBy: 'portal',
+      });
+    } catch (err) {
+      console.warn('[UpdatePortalWifiBand] snapshot de password falló (best-effort — el equipo ya cambió):', err);
+    }
   }
 }

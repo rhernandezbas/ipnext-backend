@@ -4529,3 +4529,34 @@ model AssistantRun {
   @@index([subjectType, subjectId])
   @@index([createdAt])
 }
+
+// wifi-password-snapshot — SmartOLT NUNCA devuelve la password de una red
+// WiFi via `get_onu_details` (verificado en vivo, experimento 2026-08-02:
+// `password: null` SIEMPRE en las 925 ONUs del parque con WiFi) — sólo la
+// ACEPTA al escribir (`set_wifi_port_lan`). El SSID sí se puede releer una vez
+// que Prominense lo escribió; la password, nunca. Por eso Prominense la
+// RECUERDA acá: cada escritura exitosa (portal o admin, ver
+// UpdatePortalWifiBand / SetAdminWifiBand) hace upsert por (sn, port) — este
+// modelo es el ÚNICO lugar donde la password sobrevive.
+//
+// Riesgo aceptado: si alguien cambia la password por FUERA de Prominense (la
+// web local del equipo, la UI de SmartOLT) este snapshot queda
+// DESACTUALIZADO — no hay forma de detectarlo, SmartOLT no la expone para
+// comparar.
+//
+// Seguridad: password en TEXTO PLANO — mismo criterio que PppoeService.password
+// (ya en este schema, ver arriba) — mejora futura: cifrado at-rest.
+model OnuWifiCredential {
+  id String @id @default(uuid())
+  /// Serial NORMALIZADO (normalizeOnuSerial) — misma clave que el resto de wifi-self-service.
+  sn String
+  /// 'wifi_0/1'..'wifi_0/8'.
+  port      String
+  ssid      String
+  password  String
+  updatedAt DateTime @updatedAt
+  /// 'portal' | 'staff:<rbacUserId>' — quién la escribió por última vez.
+  updatedBy String?
+
+  @@unique([sn, port])
+}
