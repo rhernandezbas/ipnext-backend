@@ -16,6 +16,10 @@ import { ListPortalTicketMessages } from '@application/use-cases/portal/ListPort
 import { SendPortalTicketMessage } from '@application/use-cases/portal/SendPortalTicketMessage';
 import { GetPortalTicketMessageAttachmentFile } from '@application/use-cases/portal/GetPortalTicketMessageAttachmentFile';
 import { SendPortalTicketMessageSchema } from '@application/dto/portal/portalTicketMessage.dto';
+import { ListPortalPromos } from '@application/use-cases/portal/ListPortalPromos';
+import { GetPortalPromo } from '@application/use-cases/portal/GetPortalPromo';
+import { InterestInPortalPromo } from '@application/use-cases/portal/InterestInPortalPromo';
+import { DismissPortalPromo } from '@application/use-cases/portal/DismissPortalPromo';
 import {
   InvalidPortalCredentialsError,
   InvalidPortalRefreshTokenError,
@@ -86,6 +90,12 @@ export interface PortalRouterDeps {
   /** Defaults to `createPortalTicketMessageSendRateLimiter()` when omitted.
    * Applied ONLY a `POST /tickets/:number/messages`, además de `generalRateLimiter`. */
   ticketMessageSendRateLimiter?: RequestHandler;
+
+  // ── portal-promos — promociones en la app de clientes ──────────────────────
+  listPortalPromos?: ListPortalPromos;
+  getPortalPromo?: GetPortalPromo;
+  interestInPortalPromo?: InterestInPortalPromo;
+  dismissPortalPromo?: DismissPortalPromo;
 }
 
 /**
@@ -626,6 +636,114 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           } else {
             next(err);
           }
+        }
+      },
+    );
+  }
+
+  // ── portal-promos — promociones en la app de clientes ──────────────────────
+  // Estáticas antes que `:id` (mismo criterio que el resto del archivo);
+  // `:id/interest` y `:id/dismiss` son sub-paths, sin colisión posible.
+  if (deps.listPortalPromos) {
+    const listPortalPromos = deps.listPortalPromos;
+    router.get(
+      '/promos',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await listPortalPromos.execute(clientId);
+          // M6 — mismo envelope {data} que el resto de las colecciones del portal.
+          res.status(200).json({ data: result });
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.getPortalPromo) {
+    const getPortalPromo = deps.getPortalPromo;
+    router.get(
+      '/promos/:id',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await getPortalPromo.execute(clientId, req.params['id'] as string);
+          if (!result) {
+            // Re-chequeo de TODAS las condiciones (portal-promos design) —
+            // 404 indistinguible: no existe, borrador, archivada, fuera de
+            // ventana, otro segmento, o ya respondida.
+            res.status(404).json({ error: 'Promo not found', code: 'PORTAL_PROMO_NOT_FOUND' });
+            return;
+          }
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.interestInPortalPromo) {
+    const interestInPortalPromo = deps.interestInPortalPromo;
+    router.post(
+      '/promos/:id/interest',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const { contractId } = (req.body ?? {}) as { contractId?: unknown };
+        if (contractId !== undefined && contractId !== null && typeof contractId !== 'string') {
+          res.status(400).json({ error: 'contractId inválido', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        try {
+          const result = await interestInPortalPromo.execute(clientId, req.params['id'] as string, { contractId });
+          if (!result) {
+            res.status(404).json({ error: 'Promo not found', code: 'PORTAL_PROMO_NOT_FOUND' });
+            return;
+          }
+          // IDEMPOTENTE — 201 la primera vez que crea el ticket, 200 cuando
+          // ya existía (mismo ticketNumber, ningún ticket nuevo).
+          res.status(result.created ? 201 : 200).json({ ticketNumber: result.ticketNumber });
+        } catch (err) {
+          if (err instanceof PortalContractRequiredError) {
+            res.status(400).json({ error: err.message, code: err.code });
+          } else if (err instanceof PortalContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+          } else {
+            next(err);
+          }
+        }
+      },
+    );
+  }
+
+  if (deps.dismissPortalPromo) {
+    const dismissPortalPromo = deps.dismissPortalPromo;
+    router.post(
+      '/promos/:id/dismiss',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const ok = await dismissPortalPromo.execute(clientId, req.params['id'] as string);
+          if (!ok) {
+            res.status(404).json({ error: 'Promo not found', code: 'PORTAL_PROMO_NOT_FOUND' });
+            return;
+          }
+          res.status(204).send();
+        } catch (err) {
+          next(err);
         }
       },
     );

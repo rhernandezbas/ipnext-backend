@@ -37,4 +37,12 @@ export interface PortalAccountRepository {
    * `CustomerRepository.list` (page=1, limit=25 when omitted/invalid).
    */
   list(query: PaginatedQuery): Promise<PaginatedResult<PortalAccount>>;
+  /**
+   * portal-promos (`audience-preview`) — cuántos de estos `clientId` tienen
+   * cuenta de portal. Es el ÚNICO número del preview que refleja a quién le
+   * llega DE VERDAD (una promo no sirve de nada para un cliente sin app). UNA
+   * query agregada (`count` con `clientId IN (...)`), nunca N llamadas a
+   * `findByClientId`. `[]` de input -> 0 sin disparar query.
+   */
+  countByClientIds(clientIds: string[]): Promise<number>;
 }

@@ -14,6 +14,7 @@ import {
   OptOutRegistry,
   PortalBalanceSummary,
   PortalBalanceEntry,
+  SegmentMembershipChecker,
 } from '@domain/ports/CustomerRepository';
 import { Customer, CustomerStatus, Contract, ClientLog } from '@domain/entities/customer';
 import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
@@ -378,6 +379,21 @@ export function buildSegmentWhere(segment: CampaignSegmentFilter): Record<string
 }
 
 /**
+ * portal-promos — construye el WHERE de `clientMatchesSegment` reusando
+ * `buildSegmentWhere` TAL CUAL (spread, sin tocar ninguna de sus keys) y
+ * agregándole `id: clientId`. Es la ÚNICA razón por la que
+ * `listSegmentRecipients` (universo del segmento) y `clientMatchesSegment`
+ * (¿este cliente entra?) no pueden divergir en silencio — ver el docblock de
+ * `SegmentMembershipChecker` en el port. Extraída como función pura (mismo
+ * criterio que `buildSegmentWhere`/`buildClientListWhere`) para poder pinear
+ * la forma exacta del WHERE sin Prisma/DB (`PrismaCustomerRepository
+ * .clientMatchesSegment.test.ts`).
+ */
+export function buildClientMatchesSegmentWhere(clientId: string, segment: CampaignSegmentFilter): Record<string, unknown> {
+  return { ...buildSegmentWhere(segment), id: clientId };
+}
+
+/**
  * messaging-bulk (F2, Batch 6, T6.3) — mapea una fila narrow de Prisma
  * (`id/name/phone/balanceDue/whatsappOptOutAt`) al candidato de dominio. Molde
  * `toActiveClientContact`/`toInvoice` (Decimal→number, Date→ISO string).
@@ -405,7 +421,8 @@ export class PrismaCustomerRepository
     CampaignSegmentSource,
     CampaignRecipientLookup,
     ManualRecipientSource,
-    OptOutRegistry
+    OptOutRegistry,
+    SegmentMembershipChecker
 {
   /**
    * @param balanceTtlMinutes - TTL for balance staleness in minutes. Defaults to 60.
@@ -584,6 +601,19 @@ export class PrismaCustomerRepository
       select: { id: true, name: true, phone: true, balanceDue: true, whatsappOptOutAt: true, status: true },
     });
     return rows.map(toCampaignRecipientCandidate);
+  }
+
+  /**
+   * portal-promos — implementa `SegmentMembershipChecker`. UNA query dirigida
+   * (`count` con `id: clientId` ANDeado al WHERE del segmento) — nunca trae el
+   * universo completo a memoria para responder una pregunta de un solo
+   * cliente. El WHERE sale de `buildClientMatchesSegmentWhere`, que reusa
+   * `buildSegmentWhere` (la MISMA función de `listSegmentRecipients`) — ver el
+   * docblock del port para el porqué esto es la garantía anti-divergencia.
+   */
+  async clientMatchesSegment(clientId: string, segment: CampaignSegmentFilter): Promise<boolean> {
+    const count = await prisma.client.count({ where: buildClientMatchesSegmentWhere(clientId, segment) });
+    return count > 0;
   }
 
   /**
