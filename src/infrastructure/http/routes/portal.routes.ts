@@ -53,6 +53,7 @@ import {
   createPortalTicketMessageSendRateLimiter,
   createPortalWifiUpdateRateLimiter,
   createPortalEquipmentRebootRateLimiter,
+  createPortalStoreOrderRateLimiter,
 } from '../middleware/rateLimiters';
 import { parsePagination } from '../parsePagination';
 import { createTicketMessageUploadMiddleware } from './ticketMessageUpload';
@@ -62,6 +63,12 @@ import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWif
 import { UpdatePortalWifiBandSchema } from '@application/dto/wifi.dto';
 import { GetPortalEquipmentStatus } from '@application/use-cases/equipment/GetPortalEquipmentStatus';
 import { RebootPortalEquipment } from '@application/use-cases/equipment/RebootPortalEquipment';
+import { ListPortalStoreProducts } from '@application/use-cases/portal/store/ListPortalStoreProducts';
+import { GetPortalStoreProduct } from '@application/use-cases/portal/store/GetPortalStoreProduct';
+import { GetPortalStoreProductImage } from '@application/use-cases/portal/store/GetPortalStoreProductImage';
+import { PlaceStorePortalOrder } from '@application/use-cases/portal/store/PlaceStorePortalOrder';
+import { PlaceStorePortalOrderSchema } from '@application/dto/storeOrders.dto';
+import { StoreOrderInstallmentsInvalidError } from '@domain/errors/storeProduct.errors';
 
 /** Content-Disposition inline seguro (RFC 5987) — molde `newsMedia.routes.ts`. */
 function contentDisposition(filename: string): string {
@@ -148,6 +155,14 @@ export interface PortalRouterDeps {
    * por cuenta). Applied ONLY to `POST /equipment/:contractId/reboot` — cada
    * reinicio corta el servicio ~2 minutos. */
   equipmentRebootRateLimiter?: RequestHandler;
+  // ── store-backend — tienda del ISP dentro de la app de clientes ────────────
+  listPortalStoreProducts?: ListPortalStoreProducts;
+  getPortalStoreProduct?: GetPortalStoreProduct;
+  getPortalStoreProductImage?: GetPortalStoreProductImage;
+  placeStorePortalOrder?: PlaceStorePortalOrder;
+  /** Defaults to `createPortalStoreOrderRateLimiter()` when omitted. Applied
+   * ONLY to `POST /store/products/:id/order` — anti spam de pedidos. */
+  storeOrderRateLimiter?: RequestHandler;
 }
 
 /**
@@ -824,6 +839,123 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           res.status(200).json(result);
         } catch (err) {
           next(err);
+        }
+      },
+    );
+  }
+
+  // ── store-backend — tienda del ISP dentro de la app de clientes ────────────
+  // `/store/products` y `/store/products/:id` -> estáticas antes que `:id`.
+  // `/store/products/:id/image` y `/store/products/:id/order` son sub-paths de
+  // 4 segmentos, sin colisión posible con `/store/products/:id` (2 segmentos).
+  const storeOrderRateLimiter = deps.storeOrderRateLimiter ?? createPortalStoreOrderRateLimiter();
+
+  if (deps.listPortalStoreProducts) {
+    const listPortalStoreProducts = deps.listPortalStoreProducts;
+    router.get(
+      '/store/products',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await listPortalStoreProducts.execute();
+          res.status(200).json({ data: result });
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.getPortalStoreProduct) {
+    const getPortalStoreProduct = deps.getPortalStoreProduct;
+    router.get(
+      '/store/products/:id',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await getPortalStoreProduct.execute(req.params['id'] as string);
+          if (!result) {
+            res.status(404).json({ error: 'Store product not found', code: 'STORE_PRODUCT_NOT_FOUND' });
+            return;
+          }
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.getPortalStoreProductImage) {
+    const getPortalStoreProductImage = deps.getPortalStoreProductImage;
+    router.get(
+      '/store/products/:id/image',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const file = await getPortalStoreProductImage.execute(req.params['id'] as string);
+          if (!file) {
+            res.status(404).json({ error: 'Store product image not found', code: 'STORE_PRODUCT_NOT_FOUND' });
+            return;
+          }
+          res.setHeader('Content-Type', file.mimeType);
+          res.send(file.buffer);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.placeStorePortalOrder) {
+    const placeStorePortalOrder = deps.placeStorePortalOrder;
+    router.post(
+      '/store/products/:id/order',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      storeOrderRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        const parsed = PlaceStorePortalOrderSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          const result = await placeStorePortalOrder.execute(clientId, accountId, req.params['id'] as string, {
+            contractId: parsed.data.contractId ?? null,
+            installments: parsed.data.installments,
+          });
+          if (!result) {
+            res.status(404).json({ error: 'Store product not found', code: 'STORE_PRODUCT_NOT_FOUND' });
+            return;
+          }
+          res.status(201).json({ ticketNumber: result.ticketNumber });
+        } catch (err) {
+          if (err instanceof StoreOrderInstallmentsInvalidError) {
+            res.status(400).json({ error: err.message, code: err.code });
+          } else if (err instanceof PortalContractRequiredError) {
+            res.status(400).json({ error: err.message, code: err.code });
+          } else if (err instanceof PortalContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+          } else {
+            next(err);
+          }
         }
       },
     );

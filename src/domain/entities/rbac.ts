@@ -199,6 +199,13 @@ export const RBAC_MODULES = [
   // separado del resto de operaciones de red. Usa las base actions
   // read/manage sin agregar action codes nuevos (mismo criterio que 'promos'/'uisp').
   'wifi',
+  // store-backend — tienda del ISP dentro de la app de clientes (catálogo
+  // admin + pedidos). Módulo PROPIO (no una sub-acción de `portal`): "quién
+  // puede cargar/editar productos que el cliente puede comprar con cuotas en
+  // la factura" es una acción de alto impacto financiero/legal, distinta de
+  // administrar cuentas del portal. Usa las base actions read/manage sin
+  // agregar action codes nuevos (mismo criterio que 'promos'/'wifi').
+  'store',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];
