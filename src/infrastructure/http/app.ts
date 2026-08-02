@@ -1008,10 +1008,13 @@ import { CreatePortalPromo } from '@application/use-cases/promos/CreatePortalPro
 import { UpdatePortalPromo } from '@application/use-cases/promos/UpdatePortalPromo';
 import { PreviewPromoAudience } from '@application/use-cases/promos/PreviewPromoAudience';
 
-// portal-push-notifications — dispositivos + preferencias (client-facing) y
-// avisos de servicio (admin, push.send).
+// portal-push-notifications / push-per-device — dispositivos + preferencias
+// POR DISPOSITIVO (client-facing) y avisos de servicio (admin, push.send).
+// `PrismaPortalPushPreferenceRepository` YA NO se wirea acá — la tabla
+// `PortalPushPreference` queda huérfana a propósito (ver su docblock en
+// schema.prisma); `GetPortalPushPreferences`/`UpdatePortalPushPreferences`
+// leen/escriben `PortalPushToken` directamente.
 import { PrismaPortalPushTokenRepository } from '../adapters/prisma/PrismaPortalPushTokenRepository';
-import { PrismaPortalPushPreferenceRepository } from '../adapters/prisma/PrismaPortalPushPreferenceRepository';
 import { RegisterPortalPushToken } from '@application/use-cases/portal/RegisterPortalPushToken';
 import { UnregisterPortalPushToken } from '@application/use-cases/portal/UnregisterPortalPushToken';
 import { GetPortalPushPreferences } from '@application/use-cases/portal/GetPortalPushPreferences';
@@ -3798,7 +3801,6 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // `logoutPortal`) porque `LogoutPortal` lo necesita para revocar el token de
   // push del dispositivo que cierra sesión (ver el docblock del use case).
   const portalPushTokenRepo = new PrismaPortalPushTokenRepository();
-  const portalPushPreferenceRepo = new PrismaPortalPushPreferenceRepository();
   const logoutPortal = new LogoutPortal(portalSessionRepo, portalPushTokenRepo);
   // M1 (fix wave): con el session repo — el cambio de password revoca TODAS
   // las sesiones de la cuenta (el refresh robado muere con la password vieja).
@@ -3892,13 +3894,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     config.portal.ticketAreaName,
   );
 
-  // portal-push-notifications — registro de dispositivos + preferencias
-  // (client-facing). `portalPushTokenRepo`/`portalPushPreferenceRepo` ya se
-  // declararon arriba (junto a `logoutPortal`, que los necesita antes).
+  // portal-push-notifications / push-per-device — registro de dispositivos +
+  // preferencias POR DISPOSITIVO (client-facing). `portalPushTokenRepo` ya se
+  // declaró arriba (junto a `logoutPortal`, que lo necesita antes) — las 4
+  // use cases comparten el MISMO repo, ya no hay uno separado de preferencias.
   const registerPortalPushToken = new RegisterPortalPushToken(portalPushTokenRepo);
   const unregisterPortalPushToken = new UnregisterPortalPushToken(portalPushTokenRepo);
-  const getPortalPushPreferences = new GetPortalPushPreferences(portalPushPreferenceRepo);
-  const updatePortalPushPreferences = new UpdatePortalPushPreferences(portalPushPreferenceRepo);
+  const getPortalPushPreferences = new GetPortalPushPreferences(portalPushTokenRepo);
+  const updatePortalPushPreferences = new UpdatePortalPushPreferences(portalPushTokenRepo);
 
   // portal-notification-inbox — el buzón, `portalNotificationRepo` ya se
   // declaró arriba (junto a `sendPushServiceAlert`, que lo necesita antes).

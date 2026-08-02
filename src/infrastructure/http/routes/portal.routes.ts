@@ -25,7 +25,12 @@ import { RegisterPortalPushToken } from '@application/use-cases/portal/RegisterP
 import { UnregisterPortalPushToken } from '@application/use-cases/portal/UnregisterPortalPushToken';
 import { GetPortalPushPreferences } from '@application/use-cases/portal/GetPortalPushPreferences';
 import { UpdatePortalPushPreferences } from '@application/use-cases/portal/UpdatePortalPushPreferences';
-import { RegisterPortalPushTokenSchema, UnregisterPortalPushTokenSchema, UpdatePortalPushPreferencesSchema } from '@application/dto/portal/portalPush.dto';
+import {
+  RegisterPortalPushTokenSchema,
+  UnregisterPortalPushTokenSchema,
+  GetPortalPushPreferencesQuerySchema,
+  UpdatePortalPushPreferencesSchema,
+} from '@application/dto/portal/portalPush.dto';
 import { ListPortalNotifications } from '@application/use-cases/portal/ListPortalNotifications';
 import { GetPortalNotificationsUnreadCount } from '@application/use-cases/portal/GetPortalNotificationsUnreadCount';
 import { MarkPortalNotificationsRead } from '@application/use-cases/portal/MarkPortalNotificationsRead';
@@ -1020,6 +1025,10 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
     );
   }
 
+  // push-per-device — GET/PUT ahora son POR TOKEN (`token` obligatorio): la
+  // preferencia ya no es de la cuenta, es del dispositivo. `token` DEBE
+  // pertenecer a `accountId` (el token de sesión) — si no, 404 indistinguible
+  // (anti-IDOR, mismo criterio que el resto del portal, ver `PUSH_TOKEN_NOT_FOUND`).
   if (deps.getPortalPushPreferences) {
     const getPortalPushPreferences = deps.getPortalPushPreferences;
     router.get(
@@ -1032,8 +1041,19 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
           return;
         }
+        const parsed = GetPortalPushPreferencesQuerySchema.safeParse(req.query);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
         try {
-          const result = await getPortalPushPreferences.execute(accountId);
+          const result = await getPortalPushPreferences.execute(accountId, parsed.data.token);
+          if (!result) {
+            // push-per-device — 404 indistinguible: el token no existe O es
+            // de otra cuenta, nunca se filtra cuál de los dos pasó.
+            res.status(404).json({ error: 'Push token not found', code: 'PUSH_TOKEN_NOT_FOUND' });
+            return;
+          }
           res.status(200).json(result);
         } catch (err) {
           next(err);
@@ -1063,6 +1083,10 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         const appVersion = typeof appVersionHeader === 'string' && appVersionHeader.trim() ? appVersionHeader.trim() : null;
         try {
           const result = await updatePortalPushPreferences.execute(accountId, parsed.data, appVersion);
+          if (!result) {
+            res.status(404).json({ error: 'Push token not found', code: 'PUSH_TOKEN_NOT_FOUND' });
+            return;
+          }
           res.status(200).json(result);
         } catch (err) {
           next(err);

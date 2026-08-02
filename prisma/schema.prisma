@@ -525,8 +525,10 @@ model PortalAccount {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   sessions           PortalSession[]
-  // portal-push-notifications — dispositivos registrados + preferencia de push.
+  // portal-push-notifications — dispositivos registrados (push-per-device: la
+  // preferencia vive en CADA PortalPushToken, no acá).
   pushTokens         PortalPushToken[]
+  // @deprecated — huérfana, ver el docblock de `PortalPushPreference`.
   pushPreference     PortalPushPreference?
   // portal-notification-inbox — buzón: rastro persistente de cada aviso enviado.
   notifications      PortalNotification[]
@@ -3172,32 +3174,50 @@ model StoreOrder {
 // mandando push al dueño anterior. `invalidAt` NUNCA borra la fila: FCM
 // reporta un token como UNREGISTERED/INVALID_ARGUMENT y queda marcado para
 // auditoría, no eliminado.
-model PortalPushToken {
-  id          String        @id @default(uuid())
-  accountId   String
-  account     PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  token       String        @unique
-  // 'android' | 'ios' — hoy solo Android tiene build (proposal "Out of Scope:
-  // Push a iOS"), pero la columna ya modela ambos valores.
-  platform    String
-  // Modelo legible del dispositivo, para una futura UI de "mis sesiones".
-  deviceLabel String?
-  createdAt   DateTime      @default(now())
-  lastSeenAt  DateTime      @default(now())
-  invalidAt   DateTime?
-
-  @@index([accountId])
-}
-
-// portal-push-notifications — 1 fila por cuenta (única). `serviceAlerts`
-// default TRUE: es transaccional (avisos de servicio), sin restricción de
+// push-per-device — `serviceAlerts`/`promos`/`promosOptInAt`/
+// `promosOptInAppVersion` viven ACÁ (por TOKEN, no por cuenta). Una cuenta
+// del portal = un contrato = una CASA: marido, mujer, hijos, varios
+// teléfonos con la MISMA cuenta. Con la preferencia por cuenta, uno apaga las
+// promos y se las apaga a TODOS; peor, uno acepta marketing y el otro —que
+// nunca consintió— empieza a recibirlo. El APARATO se parece más a la
+// persona que la cuenta en una cuenta compartida. `serviceAlerts` default
+// TRUE: es transaccional (avisos de servicio), sin restricción de
 // Apple/Google — no requiere opt-in. `promos` default FALSE: el opt-in de
 // marketing es EXPLÍCITO (Apple 4.5.4 exige texto de consentimiento + baja
 // desde la app; Ley 25.326 art. 27 exige poder pedir salir de bases de
 // marketing) — jamás se asume encendido. `promosOptInAt`/
 // `promosOptInAppVersion` quedan estampados la PRIMERA vez que `promos` pasa
-// de false a true y NUNCA se limpian al apagarlo — es el rastro auditable del
-// consentimiento, no el estado actual del toggle.
+// de false a true, en ESE dispositivo, y NUNCA se limpian al apagarlo — es el
+// rastro auditable del consentimiento, no el estado actual del toggle. Un
+// re-registro del mismo token (`upsertByToken`) NUNCA las resetea.
+model PortalPushToken {
+  id                    String        @id @default(uuid())
+  accountId             String
+  account               PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  token                 String        @unique
+  // 'android' | 'ios' — hoy solo Android tiene build (proposal "Out of Scope:
+  // Push a iOS"), pero la columna ya modela ambos valores.
+  platform              String
+  // Modelo legible del dispositivo, para una futura UI de "mis sesiones".
+  deviceLabel           String?
+  createdAt             DateTime      @default(now())
+  lastSeenAt            DateTime      @default(now())
+  invalidAt             DateTime?
+  serviceAlerts         Boolean       @default(true)
+  promos                Boolean       @default(false)
+  promosOptInAt         DateTime?
+  promosOptInAppVersion String?
+
+  @@index([accountId])
+}
+
+// @deprecated push-per-device — la preferencia se mudó a `PortalPushToken`
+// (arriba). Esta tabla queda HUÉRFANA A PROPÓSITO: sin lecturas en el código
+// (`GetPortalPushPreferences`/`UpdatePortalPushPreferences` ya no la tocan),
+// backfilleada UNA vez hacia `PortalPushToken` en la migración que agregó las
+// columnas de arriba. NO se borra en este change — borrarla (DROP TABLE) es
+// una migración DESTRUCTIVA aparte, a propósito, para no perder el rastro
+// mientras el cambio de contrato termina de asentarse en prod.
 model PortalPushPreference {
   id                     String        @id @default(uuid())
   accountId              String        @unique

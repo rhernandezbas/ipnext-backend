@@ -5,8 +5,9 @@ import type { PortalPushTokenRepository, PushServiceAlertTarget } from '@domain/
  * resolvePushServiceAlertTargets — helper COMPARTIDO por `SendPushServiceAlert`
  * y `PreviewPushServiceAlert` (portal-push-notifications).
  *
- * `networkSiteId` ausente/null: universo completo (todas las cuentas con
- * `serviceAlerts=true` y >=1 token vivo). Con `networkSiteId`: reusa el MISMO
+ * `networkSiteId` ausente/null: universo completo (todas las cuentas con >=1
+ * token en `serviceAlerts=true` y vivo — push-per-device, el filtro es por
+ * TOKEN, no por cuenta). Con `networkSiteId`: reusa el MISMO
  * motor de segmentos que las campañas de mensajería/promos
  * (`listSegmentRecipients`, `statuses: []` = sin filtro de estado — SOLO nodo)
  * para resolver "qué clientes tienen >=1 contrato vigente en este nodo", y
