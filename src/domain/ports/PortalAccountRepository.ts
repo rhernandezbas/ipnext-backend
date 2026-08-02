@@ -21,6 +21,12 @@ export interface UpdatePortalAccountInput {
   lastLoginAt?: Date;
 }
 
+/** portal-notification-inbox — referencia narrow (accountId + clientId), sin el resto de `PortalAccount`. */
+export interface PortalAccountClientRef {
+  accountId: string;
+  clientId: string;
+}
+
 export interface PortalAccountRepository {
   findById(id: string): Promise<PortalAccount | null>;
   /** Login lookup — exact match on the unique `dni` column. */
@@ -45,4 +51,13 @@ export interface PortalAccountRepository {
    * `findByClientId`. `[]` de input -> 0 sin disparar query.
    */
   countByClientIds(clientIds: string[]): Promise<number>;
+  /**
+   * portal-notification-inbox — TODAS las cuentas cuyo `clientId` está en
+   * `clientIds`, SIN mirar `PortalPushPreference` — el buzón es REGISTRO
+   * (¿existió el aviso?), no TIMBRE (¿sonó el teléfono?). Esas son dos
+   * preguntas distintas y esta query solo responde la primera. `undefined` =
+   * TODAS las cuentas (aviso sin filtro de nodo); `[]` = ninguna, sin
+   * disparar query (mismo criterio que `countByClientIds`).
+   */
+  listByClientIds(clientIds?: string[]): Promise<PortalAccountClientRef[]>;
 }

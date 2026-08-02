@@ -9,6 +9,7 @@ import type {
   PortalAccountRepository,
   CreatePortalAccountInput,
   UpdatePortalAccountInput,
+  PortalAccountClientRef,
 } from '@domain/ports/PortalAccountRepository';
 import type { PaginatedResult, PaginatedQuery } from '@application/dto/pagination';
 
@@ -101,5 +102,15 @@ export class PrismaPortalAccountRepository implements PortalAccountRepository {
   async countByClientIds(clientIds: string[]): Promise<number> {
     if (clientIds.length === 0) return 0;
     return (this.db as any).portalAccount.count({ where: { clientId: { in: clientIds } } }) as Promise<number>;
+  }
+
+  /** portal-notification-inbox — SIN mirar `pushPreference`, ver el docblock del port. */
+  async listByClientIds(clientIds?: string[]): Promise<PortalAccountClientRef[]> {
+    if (clientIds && clientIds.length === 0) return [];
+    const rows = (await (this.db as any).portalAccount.findMany({
+      where: clientIds ? { clientId: { in: clientIds } } : {},
+      select: { id: true, clientId: true },
+    })) as { id: string; clientId: string }[];
+    return rows.map((r) => ({ accountId: r.id, clientId: r.clientId }));
   }
 }

@@ -1,7 +1,9 @@
 import type { CampaignSegmentSource } from '@domain/ports/CustomerRepository';
 import type { PortalPushTokenRepository } from '@domain/ports/PortalPushTokenRepository';
 import type { PushSender } from '@domain/ports/PushSender';
-import { resolvePushServiceAlertTargets } from './resolvePushServiceAlertTargets';
+import type { PortalNotificationRepository } from '@domain/ports/PortalNotificationRepository';
+import type { PortalAccountRepository } from '@domain/ports/PortalAccountRepository';
+import { resolveServiceAlertClientIds } from './resolvePushServiceAlertTargets';
 
 export interface SendPushServiceAlertInput {
   title: string;
@@ -19,6 +21,13 @@ export interface SendPushServiceAlertResult {
   invalidated: number;
   /** `true` cuando `PushSender` es un stub (sin Firebase configurado) — nada se mandó de verdad. */
   dryRun: boolean;
+  /**
+   * portal-notification-inbox — cuántas filas `PortalNotification` se
+   * crearon con éxito. Universo TOTAL del filtro de nodo (TODAS las cuentas
+   * del segmento, sin mirar `serviceAlerts` — ver el docblock de la clase),
+   * casi siempre >= `recipients`.
+   */
+  inboxed: number;
 }
 
 /**
@@ -32,16 +41,35 @@ export interface SendPushServiceAlertResult {
  * `recipients`/`devices`/`invalidated` son conteos REALES (nunca estimados):
  * salen de resolver el universo de destinatarios de verdad, no de una
  * proyección — mismo criterio que `PreviewPromoAudience`.
+ *
+ * portal-notification-inbox — TIMBRE vs REGISTRO (decisión explícita, no
+ * "arreglar" agregando un filtro de `serviceAlerts` acá abajo):
+ *   - El PUSH (arriba, `this.tokens.listServiceAlertTargets`) SÍ filtra por
+ *     `serviceAlerts` — esa preferencia va a pasar a ser POR DISPOSITIVO
+ *     (una cuenta de portal puede ser compartida por una familia, cada
+ *     teléfono es una persona distinta) y controla si ESE teléfono suena.
+ *   - El BUZÓN (`this.accounts.listByClientIds`) NO mira `serviceAlerts`:
+ *     escribe una fila `PortalNotification` para TODA cuenta del
+ *     segmento/nodo del aviso. Que ningún teléfono haya sonado no significa
+ *     que el aviso no exista — el buzón es justamente el registro/respaldo,
+ *     independiente de si algún dispositivo lo hizo sonar.
+ * La escritura del buzón NUNCA tumba el envío: si el insert de una cuenta
+ * falla, se loguea y se sigue con la siguiente (el push ya salió antes de
+ * este paso).
  */
 export class SendPushServiceAlert {
   constructor(
     private readonly tokens: Pick<PortalPushTokenRepository, 'listServiceAlertTargets' | 'markInvalid'>,
     private readonly sender: PushSender,
     private readonly segments: Pick<CampaignSegmentSource, 'listSegmentRecipients'>,
+    private readonly notifications: Pick<PortalNotificationRepository, 'create'>,
+    private readonly accounts: Pick<PortalAccountRepository, 'listByClientIds'>,
   ) {}
 
   async execute(input: SendPushServiceAlertInput): Promise<SendPushServiceAlertResult> {
-    const targets = await resolvePushServiceAlertTargets(this.segments, this.tokens, input.networkSiteId);
+    const clientIds = await resolveServiceAlertClientIds(this.segments, input.networkSiteId);
+
+    const targets = await this.tokens.listServiceAlertTargets(clientIds);
     const allTokens = targets.flatMap((t) => t.tokens);
 
     let invalidTokens: string[] = [];
@@ -53,11 +81,29 @@ export class SendPushServiceAlert {
       }
     }
 
+    const inboxAccounts = await this.accounts.listByClientIds(clientIds);
+    let inboxed = 0;
+    for (const account of inboxAccounts) {
+      try {
+        await this.notifications.create({
+          accountId: account.accountId,
+          channel: 'service',
+          title: input.title,
+          body: input.body,
+        });
+        inboxed++;
+      } catch (err) {
+        // portal-notification-inbox — best-effort: el buzón nunca tumba el envío.
+        console.error('[push-service-alert] no se pudo persistir PortalNotification para la cuenta', account.accountId, err);
+      }
+    }
+
     return {
       recipients: targets.length,
       devices: allTokens.length,
       invalidated: invalidTokens.length,
       dryRun: this.sender.dryRun === true,
+      inboxed,
     };
   }
 }
