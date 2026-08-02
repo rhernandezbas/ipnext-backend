@@ -521,6 +521,9 @@ model PortalAccount {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   sessions           PortalSession[]
+  // portal-push-notifications — dispositivos registrados + preferencia de push.
+  pushTokens         PortalPushToken[]
+  pushPreference     PortalPushPreference?
 }
 
 // Refresh tokens rotativos del portal. tokenHash = sha256 del refresh opaco (32 bytes
@@ -3076,6 +3079,54 @@ model PortalPromoResponse {
 
   @@unique([promoId, clientId])
   @@index([clientId])
+}
+
+// =============================================
+// PORTAL PUSH NOTIFICATIONS DOMAIN
+// =============================================
+
+// portal-push-notifications — un dispositivo (token de registro FCM) de una
+// cuenta del portal. `token` es GLOBALMENTE único (no por-cuenta): un mismo
+// teléfono vendido/prestado reasigna su token a la cuenta que lo registra de
+// último (RegisterPortalPushToken hace upsert por `token`) — jamás sigue
+// mandando push al dueño anterior. `invalidAt` NUNCA borra la fila: FCM
+// reporta un token como UNREGISTERED/INVALID_ARGUMENT y queda marcado para
+// auditoría, no eliminado.
+model PortalPushToken {
+  id          String        @id @default(uuid())
+  accountId   String
+  account     PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  token       String        @unique
+  // 'android' | 'ios' — hoy solo Android tiene build (proposal "Out of Scope:
+  // Push a iOS"), pero la columna ya modela ambos valores.
+  platform    String
+  // Modelo legible del dispositivo, para una futura UI de "mis sesiones".
+  deviceLabel String?
+  createdAt   DateTime      @default(now())
+  lastSeenAt  DateTime      @default(now())
+  invalidAt   DateTime?
+
+  @@index([accountId])
+}
+
+// portal-push-notifications — 1 fila por cuenta (única). `serviceAlerts`
+// default TRUE: es transaccional (avisos de servicio), sin restricción de
+// Apple/Google — no requiere opt-in. `promos` default FALSE: el opt-in de
+// marketing es EXPLÍCITO (Apple 4.5.4 exige texto de consentimiento + baja
+// desde la app; Ley 25.326 art. 27 exige poder pedir salir de bases de
+// marketing) — jamás se asume encendido. `promosOptInAt`/
+// `promosOptInAppVersion` quedan estampados la PRIMERA vez que `promos` pasa
+// de false a true y NUNCA se limpian al apagarlo — es el rastro auditable del
+// consentimiento, no el estado actual del toggle.
+model PortalPushPreference {
+  id                     String        @id @default(uuid())
+  accountId              String        @unique
+  account                PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  serviceAlerts          Boolean       @default(true)
+  promos                 Boolean       @default(false)
+  promosOptInAt          DateTime?
+  promosOptInAppVersion  String?
+  updatedAt              DateTime      @updatedAt
 }
 
 // =============================================
