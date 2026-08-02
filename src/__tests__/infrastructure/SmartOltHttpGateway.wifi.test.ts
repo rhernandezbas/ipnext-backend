@@ -286,11 +286,52 @@ describe('SmartOltHttpGateway — getRouterHosts', () => {
     expect(await gateway.getRouterHosts('HWTC1')).toEqual([]);
   });
 
-  it('NO está cacheado — cada call pega la red', async () => {
-    const { gateway, transport } = buildGateway();
-    transport.responses.set('onu/get_onu_router_hosts/HWTC1', { status: true, response: [] });
+  /**
+   * wifi-portal-read-perf — a diferencia del draft original ("NO cacheado —
+   * no se llama seguido"), medido en prod: CADA visita a "Dispositivos
+   * conectados" en la app pega en vivo, y sumado a la pausa anti-burst
+   * (ver SmartOltHttpGateway.test.ts) daba 8-12s por request. TTL 60s: la
+   * lista de hosts cambia lento (asociaciones DHCP/wifi), y el propio panel
+   * de SmartOLT avisa que refresca este dato cada ~15 min — 60s es
+   * conservador en comparación y ya elimina el hit en vivo de navegaciones
+   * consecutivas del usuario.
+   */
+  it('cache: 2do call dentro del TTL (60s) NO vuelve a pegarle a la red', async () => {
+    const { gateway, transport, advance } = buildGateway();
+    transport.responses.set('onu/get_onu_router_hosts/HWTC1', { status: true, response: { hostlist: {} } });
+
     await gateway.getRouterHosts('HWTC1');
+    advance(59_000);
     await gateway.getRouterHosts('HWTC1');
+
+    expect(transport.calls).toHaveLength(1);
+  });
+
+  it('cache: expira a los 60s -> vuelve a pegarle a la red', async () => {
+    const { gateway, transport, advance } = buildGateway();
+    transport.responses.set('onu/get_onu_router_hosts/HWTC1', { status: true, response: { hostlist: {} } });
+
+    await gateway.getRouterHosts('HWTC1');
+    advance(60_001);
+    await gateway.getRouterHosts('HWTC1');
+
     expect(transport.calls).toHaveLength(2);
+  });
+
+  it('reboot(sn) invalida SOLO la cache de hosts de ESA sn', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_router_hosts/SN_A', { status: true, response: { hostlist: {} } });
+    transport.responses.set('onu/get_onu_router_hosts/SN_B', { status: true, response: { hostlist: {} } });
+
+    await gateway.getRouterHosts('SN_A'); // cachea SN_A
+    await gateway.getRouterHosts('SN_B'); // cachea SN_B
+    await gateway.reboot('SN_A');
+    await gateway.getRouterHosts('SN_A'); // cache invalidada -> pega la red
+    await gateway.getRouterHosts('SN_B'); // sigue cacheado -> NO pega la red
+
+    const hostCalls = transport.calls.filter(
+      (c) => c.method === 'get' && c.url.startsWith('onu/get_onu_router_hosts'),
+    );
+    expect(hostCalls).toHaveLength(3); // SN_A, SN_B, SN_A de nuevo
   });
 });

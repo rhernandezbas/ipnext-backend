@@ -33,6 +33,16 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_STEP_PAUSE_MS = 2_000;
 /** wifi-self-service (F0) — TTL de la cache de `getOnuWifiStatus` (proposal F0: "cache corto"). */
 const WIFI_STATUS_CACHE_TTL_MS = 60_000;
+/**
+ * wifi-portal-read-perf — TTL de la cache de `getRouterHosts`. Elegido en
+ * 60s (igual que la de wifi status, por consistencia): la lista de hosts
+ * cambia lento (asociaciones DHCP/wifi de la LAN del cliente) y el propio
+ * panel de SmartOLT advierte que este dato se refresca cada ~15 min — 60s
+ * ya es conservador frente a eso, y alcanza para que navegaciones
+ * consecutivas del usuario en la app ("Dispositivos conectados") no
+ * vuelvan a pegarle a la red.
+ */
+const ROUTER_HOSTS_CACHE_TTL_MS = 60_000;
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -168,6 +178,8 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
   private lastCallAt: number | null = null;
   /** wifi-self-service (F0) — cache in-memory de `getOnuWifiStatus`, keyed por sn normalizada. */
   private readonly wifiStatusCache = new Map<string, { value: OnuWifiStatus; expiresAt: number }>();
+  /** wifi-portal-read-perf — cache in-memory de `getRouterHosts`, keyed por sn normalizada. */
+  private readonly routerHostsCache = new Map<string, { value: RouterHost[]; expiresAt: number }>();
 
   constructor(opts: SmartOltHttpGatewayOptions) {
     this.token = opts.token;
@@ -189,20 +201,18 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
     return { 'X-Token': this.token };
   }
 
-  /**
-   * Guard de configuración + pausa anti-burst + mapeo de errores. TODA llamada
-   * a SmartOLT pasa por acá.
-   */
-  private async call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
+  /** Guard de configuración — feature apagada si faltan baseUrl/token. Compartido por lecturas y escrituras. */
+  private assertConfigured(): void {
     if (!this.configured) {
       throw new OltProvisioningError(
         'not_configured',
         'SmartOLT no está configurado (SMARTOLT_BASE_URL / SMARTOLT_API_TOKEN ausentes) — feature apagada',
       );
     }
-    if (this.lastCallAt !== null) await this.sleep(this.stepPauseMs);
-    this.lastCallAt = Date.now();
+  }
 
+  /** Fetch + mapeo de errores/response, SIN pausa. Compartido por `call()` y `callRead()`. */
+  private async execute<T>(fn: () => Promise<{ data: T }>): Promise<T> {
     let data: T;
     try {
       const res = await fn();
@@ -247,6 +257,38 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
     return data;
   }
 
+  /**
+   * Guard de configuración + pausa anti-burst + mapeo de errores. Para
+   * ESCRITURAS y flujos encadenados de provisioning (authorize → mgmt-ip →
+   * tr069 → wifi, etc): el rate limit de SmartOLT es 10/s y esos flujos
+   * encadenan varias escrituras seguidas — la pausa espacia esa ráfaga.
+   */
+  private async call<T>(fn: () => Promise<{ data: T }>): Promise<T> {
+    this.assertConfigured();
+    if (this.lastCallAt !== null) await this.sleep(this.stepPauseMs);
+    this.lastCallAt = Date.now();
+    return this.execute(fn);
+  }
+
+  /**
+   * wifi-portal-read-perf — guard de configuración + mapeo de errores IGUAL
+   * que `call()`, pero SIN la pausa anti-burst y SIN tocar `lastCallAt`. Para
+   * LECTURAS sueltas (GET) que un cliente dispara directo — el rate limit de
+   * SmartOLT es 10/s: un GET aislado no lo viola, la pausa existe para
+   * proteger RÁFAGAS de escrituras encadenadas, no lecturas.
+   *
+   * Antes de este fix, `lastCallAt` era de la instancia COMPARTIDA (un solo
+   * gateway wireado en toda la app): un GET pagaba 2s de pausa por una
+   * escritura de OTRO flujo que había ocurrido segundos antes, sin ningún
+   * burst que proteger. Medido en prod: `GET /api/portal/wifi/:contractId/
+   * devices` tardaba 8-12s consistentemente — al borde del timeout de 15s
+   * del cliente de la app.
+   */
+  private async callRead<T>(fn: () => Promise<{ data: T }>): Promise<T> {
+    this.assertConfigured();
+    return this.execute(fn);
+  }
+
   private post(url: string, form: URLSearchParams): Promise<unknown> {
     return this.call(() => this.http.post(url, form, { headers: this.headers() }));
   }
@@ -254,7 +296,7 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
   // ── OltProvisioningGateway ─────────────────────────────────────────────────
 
   async listUnconfiguredOnus(): Promise<UnconfiguredOnu[]> {
-    const data = await this.call<unknown>(() =>
+    const data = await this.callRead<unknown>(() =>
       this.http.get('onu/unconfigured_onus', { headers: this.headers() }),
     );
     const rows: unknown = (data as { response?: unknown } | null)?.response;
@@ -315,10 +357,14 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
 
   /**
    * portal-equipment-reboot — POST onu/reboot/<sn> (skill smartolt-ipnext).
-   * Sin params extra, mismo patrón que `allowRemoteWanAccess`.
+   * Sin params extra, mismo patrón que `allowRemoteWanAccess`. wifi-portal-
+   * read-perf: invalida la cache de `getRouterHosts` de ESA sn — tras
+   * reiniciar el equipo, la lista de hosts conectados cambia y no puede
+   * quedar sirviendo el snapshot pre-reboot hasta que expire el TTL.
    */
   async reboot(sn: string): Promise<void> {
     await this.post(`onu/reboot/${encodeURIComponent(sn)}`, new URLSearchParams());
+    this.routerHostsCache.delete(sn);
   }
 
   /** POST onu/set_wifi_port_lan/<sn> — SIEMPRE WPA2, compartido por `setWifi` y `setWifiBand`. */
@@ -350,7 +396,7 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
 
     let status: OnuWifiStatus;
     try {
-      const data = await this.call<unknown>(() =>
+      const data = await this.callRead<unknown>(() =>
         this.http.get(`onu/get_onu_details/${encodeURIComponent(sn)}`, { headers: this.headers() }),
       );
       status = toOnuWifiStatus(data);
@@ -378,22 +424,32 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
   }
 
   /**
-   * GET onu/get_onu_router_hosts/<sn>. NO cacheado — a diferencia del status,
-   * no se llama seguido.
+   * GET onu/get_onu_router_hosts/<sn>, cacheado (TTL 60s — wifi-portal-read-
+   * perf: cada visita a "Dispositivos conectados" de la app lo pegaba en
+   * vivo, sumado a la pausa anti-burst compartida daba 8-12s por request,
+   * al borde del timeout de 15s del cliente). Invalidado por `reboot(sn)`.
    *
    * Payload REAL (experimento 2026-08-02): `{ response: { hostlist: { "1":
    * {...}, "2": {...} } } }` — un OBJETO indexado por string, NO un array. El
    * primer draft esperaba `response` como array y devolvía `[]` siempre.
    */
   async getRouterHosts(sn: string): Promise<RouterHost[]> {
-    const data = await this.call<unknown>(() =>
+    const cached = this.routerHostsCache.get(sn);
+    if (cached && cached.expiresAt > this.now()) {
+      return cached.value;
+    }
+
+    const data = await this.callRead<unknown>(() =>
       this.http.get(`onu/get_onu_router_hosts/${encodeURIComponent(sn)}`, { headers: this.headers() }),
     );
     const response = (data as { response?: unknown } | null)?.response;
     const hostlist = (response as { hostlist?: unknown } | null)?.hostlist;
     const rows = hostlist != null && typeof hostlist === 'object' ? Object.values(hostlist) : [];
-    return rows
+    const hosts = rows
       .filter((r: unknown): r is Record<string, unknown> => typeof r === 'object' && r !== null)
       .map(toRouterHost);
+
+    this.routerHostsCache.set(sn, { value: hosts, expiresAt: this.now() + ROUTER_HOSTS_CACHE_TTL_MS });
+    return hosts;
   }
 }
