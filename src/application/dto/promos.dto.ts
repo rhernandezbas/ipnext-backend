@@ -76,7 +76,21 @@ const PortalPromoFieldsSchema = z.object({
   title: z.string().trim().min(1).max(200),
   summary: z.string().trim().min(1).max(500),
   body: z.string().trim().min(1).max(20000),
-  imageStorageKey: z.string().trim().min(1).nullish(),
+  // ⚠️ `imageStorageKey` NO se acepta por acá A PROPÓSITO, aunque la columna
+  // exista y el DTO del portal sepa derivar la URL. La rebanada de imagen está
+  // INCOMPLETA en las DOS puntas: no hay endpoint que SUBA el archivo (que es
+  // lo único que produce una key válida de MinIO) ni endpoint que lo SIRVA.
+  //
+  // Si se dejara escribir, el portal emitiría `/api/portal/promos/:id/image`
+  // apuntando a una ruta que devuelve 404 ⇒ imagen rota en la app del cliente,
+  // y sin ningún error del lado del operador que lo delate. Un campo que se
+  // puede setear pero produce un estado ROTO es peor que uno que falta.
+  //
+  // Mientras tanto la key queda SIEMPRE null ⇒ `toPortalPromoImageUrl` devuelve
+  // null ⇒ la app cae al degradado de marca, que es exactamente lo que muestra
+  // la maqueta aprobada. Cuando se implemente la rebanada completa (upload con
+  // validación por magic bytes + serve, reusando el pipeline de adjuntos de
+  // mensajería), este campo vuelve acá.
   ctaLabel: z.string().trim().min(1).max(60).optional(),
   ticketAreaId: z.string().min(1).nullish(),
   startsAt: DateInputSchema,

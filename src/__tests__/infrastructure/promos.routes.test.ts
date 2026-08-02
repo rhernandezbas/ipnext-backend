@@ -214,6 +214,28 @@ describe('POST /api/promos — create (promos.manage)', () => {
     const res = await asUser(request(fx.app).post('/api/promos').send(body), fx.manageUserId);
     expect(res.status).toBe(400);
   });
+
+  // La rebanada de imagen está INCOMPLETA: no hay endpoint que SUBA el archivo
+  // (lo único que produce una key válida de MinIO) ni endpoint que lo SIRVA.
+  // Si el CRUD dejara escribir `imageStorageKey`, el portal emitiría
+  // `/api/portal/promos/:id/image` apuntando a una ruta que da 404 ⇒ imagen
+  // ROTA en la app del cliente, sin ningún error que se lo delate al operador.
+  //
+  // Este test es el guard de esa decisión: el día que alguien devuelva el campo
+  // al schema SIN implementar upload+serve, se pone rojo acá. Ver el comentario
+  // de `PortalPromoFieldsSchema` en `promos.dto.ts`.
+  it('IGNORA un imageStorageKey mandado a mano — la promo queda sin imagen, nunca con una URL que da 404', async () => {
+    const fx = await buildApp();
+    const body = { ...validPromoBody(), imageStorageKey: 'promos/inventada.jpg' };
+    const res = await asUser(request(fx.app).post('/api/promos').send(body), fx.manageUserId);
+
+    expect(res.status).toBe(201);
+    expect(res.body.imageStorageKey ?? null).toBeNull();
+
+    // Y lo que importa de verdad: lo que ve el cliente NO trae una URL rota.
+    const detail = await asUser(request(fx.app).get(`/api/promos/${res.body.id}`), fx.readOnlyUserId);
+    expect(detail.body.imageStorageKey ?? null).toBeNull();
+  });
 });
 
 describe('GET /api/promos/:id + PATCH — 404 sobre id inexistente', () => {
