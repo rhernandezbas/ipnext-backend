@@ -192,6 +192,13 @@ export const RBAC_MODULES = [
   // de notificaciones. Reusa la action 'send' (ya existe, messaging-inbox F1)
   // — sin agregar action codes nuevos, mismo criterio que 'promos'/'news'.
   'push',
+  // wifi-self-service (F0) — configuración de WiFi de ONUs Huawei (SSID/pass
+  // por banda + hosts conectados) desde Prominense staff. Módulo PROPIO (no
+  // una sub-acción de `network`/`iclass`): "wifi.manage" cambia la
+  // contraseña del WiFi del cliente y dispara TR-069 — riesgo/alcance propio,
+  // separado del resto de operaciones de red. Usa las base actions
+  // read/manage sin agregar action codes nuevos (mismo criterio que 'promos'/'uisp').
+  'wifi',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

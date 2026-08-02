@@ -38,15 +38,21 @@ import {
   PortalContractNotFoundError,
   PortalTicketTopicNotFoundError,
 } from '@domain/errors/portal.errors';
+import { WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError } from '@domain/errors/wifi';
 import {
   createPortalLoginRateLimiter,
   createPortalLoginIpRateLimiter,
   createPortalGeneralRateLimiter,
   createPortalTicketCreateRateLimiter,
   createPortalTicketMessageSendRateLimiter,
+  createPortalWifiUpdateRateLimiter,
 } from '../middleware/rateLimiters';
 import { parsePagination } from '../parsePagination';
 import { createTicketMessageUploadMiddleware } from './ticketMessageUpload';
+import { GetPortalWifiStatus } from '@application/use-cases/wifi/GetPortalWifiStatus';
+import { UpdatePortalWifiBand } from '@application/use-cases/wifi/UpdatePortalWifiBand';
+import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWifiDevices';
+import { UpdatePortalWifiBandSchema } from '@application/dto/wifi.dto';
 
 /** Content-Disposition inline seguro (RFC 5987) — molde `newsMedia.routes.ts`. */
 function contentDisposition(filename: string): string {
@@ -111,6 +117,14 @@ export interface PortalRouterDeps {
   unregisterPortalPushToken?: UnregisterPortalPushToken;
   getPortalPushPreferences?: GetPortalPushPreferences;
   updatePortalPushPreferences?: UpdatePortalPushPreferences;
+
+  // ── wifi-self-service (F0) — "Mi WiFi": elegibilidad + cambio de SSID/pass ──
+  getPortalWifiStatus?: GetPortalWifiStatus;
+  updatePortalWifiBand?: UpdatePortalWifiBand;
+  listPortalWifiDevices?: ListPortalWifiDevices;
+  /** Defaults to `createPortalWifiUpdateRateLimiter()` when omitted. Applied
+   * ONLY to `PUT /wifi/:contractId` — cada escritura reinicia la radio. */
+  wifiUpdateRateLimiter?: RequestHandler;
 }
 
 /**
@@ -254,6 +268,7 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   const ticketCreateRateLimiter = deps.ticketCreateRateLimiter ?? createPortalTicketCreateRateLimiter();
   const ticketMessageSendRateLimiter = deps.ticketMessageSendRateLimiter ?? createPortalTicketMessageSendRateLimiter();
   const uploadTicketMessageFiles = createTicketMessageUploadMiddleware();
+  const wifiUpdateRateLimiter = deps.wifiUpdateRateLimiter ?? createPortalWifiUpdateRateLimiter();
 
   /**
    * F7 (fix wave, v2.B) — `ListPortalTickets.toDto` hace UN `countUnread` por
@@ -894,6 +909,99 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           const result = await updatePortalPushPreferences.execute(accountId, parsed.data, appVersion);
           res.status(200).json(result);
         } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── wifi-self-service (F0) — "Mi WiFi" ──────────────────────────────────────
+  // `contractId` viene por PARAM pero se verifica SIEMPRE contra `req.portalClientId`
+  // dentro de `ResolveWifiEligibility` (anti-IDOR estructural, mismo criterio que
+  // el resto del portal): 404 indistinguible entre "no existe" y "es de otro cliente".
+  // `not_configured`/`no_onu`/`no_tr069`/`no_wifi_ports` son ESTADOS NORMALES (200),
+  // nunca errores — la app decide qué mostrar (proposal.md F0).
+
+  if (deps.getPortalWifiStatus) {
+    const getPortalWifiStatus = deps.getPortalWifiStatus;
+    router.get(
+      '/wifi/:contractId',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await getPortalWifiStatus.execute(clientId, req.params['contractId'] as string);
+          res.status(200).json(result);
+        } catch (err) {
+          if (err instanceof WifiContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.updatePortalWifiBand) {
+    const updatePortalWifiBand = deps.updatePortalWifiBand;
+    router.put(
+      '/wifi/:contractId',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      wifiUpdateRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const parsed = UpdatePortalWifiBandSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          await updatePortalWifiBand.execute(clientId, req.params['contractId'] as string, parsed.data);
+          res.status(200).json({ applied: true });
+        } catch (err) {
+          if (err instanceof WifiContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof WifiValidationError) {
+            res.status(400).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof WifiNotEligibleError) {
+            // Re-verificación (proposal regla 2): la ONU dejó de ser elegible
+            // entre el GET y este PUT — 409, el request está bien formado pero
+            // el ESTADO actual no lo permite.
+            res.status(409).json({ error: err.message, code: err.code, reason: err.reason });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.listPortalWifiDevices) {
+    const listPortalWifiDevices = deps.listPortalWifiDevices;
+    router.get(
+      '/wifi/:contractId/devices',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await listPortalWifiDevices.execute(clientId, req.params['contractId'] as string);
+          res.status(200).json(result);
+        } catch (err) {
+          if (err instanceof WifiContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
           next(err);
         }
       },

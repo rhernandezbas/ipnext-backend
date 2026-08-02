@@ -5,7 +5,9 @@ import {
   AuthorizeOnuInput,
   SetWifiInput,
 } from '@domain/ports/OltProvisioningGateway';
+import { WifiManagementPort, OnuWifiStatus, SetWifiBandInput, RouterHost } from '@domain/ports/WifiManagementPort';
 import { OltProvisioningError } from '@domain/errors/smartolt';
+import { mapWifiPortsToBands, RawWifiPort } from '@domain/services/mapWifiPortsToBands';
 
 export interface SmartOltHttpGatewayOptions {
   /** Base de la API, ej. https://ipnext.smartolt.com/api. Vacío = feature apagada. */
@@ -23,13 +25,96 @@ export interface SmartOltHttpGatewayOptions {
   http?: AxiosInstance;
   /** Reloj inyectable para tests — default setTimeout real. */
   sleep?: (ms: number) => Promise<void>;
+  /** wifi-self-service (F0) — reloj inyectable para tests de TTL de cache. Default Date.now. */
+  now?: () => number;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_STEP_PAUSE_MS = 2_000;
+/** wifi-self-service (F0) — TTL de la cache de `getOnuWifiStatus` (proposal F0: "cache corto"). */
+const WIFI_STATUS_CACHE_TTL_MS = 60_000;
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * wifi-self-service (F0) — shape crudo de GET onu/get_onu_details/<sn>.
+ *
+ * ✅ VERIFICADO CONTRA EL PAYLOAD REAL del experimento 2026-08-02 (ONU
+ * HWTC189C07AA): el wrapper es `onu_details` (NO `response` como los otros
+ * endpoints de este gateway), cada puerto trae `admin_state:
+ * 'Enabled'|'Disabled'` (NO `enable`), y `status: 'Online'`. El primer draft
+ * de esta función usaba `response`/`enable` — con eso la elegibilidad daba
+ * `found:false` SIEMPRE en prod, con todos los tests verdes (fixtures
+ * inventados). Los fixtures del test ahora son el payload real.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toOnuWifiStatus(raw: any): OnuWifiStatus {
+  const r = raw?.onu_details as Record<string, unknown> | null | undefined;
+  if (r == null || typeof r !== 'object') {
+    return { found: false, onuType: null, online: false, tr069Enabled: false, bands: [] };
+  }
+
+  const tr069Raw = r['tr069'];
+  const tr069Enabled = typeof tr069Raw === 'string' && tr069Raw.toLowerCase() === 'enabled';
+
+  const stateRaw = r['state'] ?? r['onu_state'] ?? r['status'];
+  const online = typeof stateRaw === 'string' && stateRaw.toLowerCase() === 'online';
+
+  const onuTypeRaw = r['onu_type'] ?? r['onu_type_name'];
+  const onuType = onuTypeRaw != null ? String(onuTypeRaw) : null;
+
+  const rawPorts = r['wifi_ports'] ?? r['ports'] ?? [];
+  const ports: RawWifiPort[] = (Array.isArray(rawPorts) ? rawPorts : [])
+    .filter((p: unknown): p is Record<string, unknown> => typeof p === 'object' && p !== null)
+    .map((p) => ({
+      port: String(p['port'] ?? ''),
+      ssid: p['ssid'] != null && p['ssid'] !== '' ? String(p['ssid']) : null,
+      // Payload real: `admin_state: 'Enabled'|'Disabled'` — no existe `enable`.
+      enabled:
+        typeof p['admin_state'] === 'string'
+          ? p['admin_state'].toLowerCase() === 'enabled'
+          : false,
+    }))
+    .filter((p) => p.port !== '');
+
+  return {
+    found: true,
+    onuType,
+    online,
+    tr069Enabled,
+    bands: mapWifiPortsToBands(ports),
+  };
+}
+
+/**
+ * wifi-self-service (F0) — shape crudo de una fila de
+ * GET onu/get_onu_router_hosts/<sn>.
+ *
+ * ✅ VERIFICADO CONTRA EL PAYLOAD REAL (experimento 2026-08-02): las claves
+ * son `HostName`/`IPAddress`/`MACAddress`/`InterfaceType`/`Active` y el
+ * vendor viene como **`VendorClassID`** (ej. "android-dhcp-14") — no existe
+ * ninguna clave `Vendor`. `InterfaceType === '802.11' -> wifi`.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toRouterHost(raw: any): RouterHost {
+  const interfaceRaw = raw?.InterfaceType ?? raw?.interface_type;
+  const interfaceType: RouterHost['interfaceType'] = interfaceRaw === '802.11' ? 'wifi' : 'ethernet';
+  const activeRaw = raw?.Active ?? raw?.active;
+  const active = activeRaw === true || activeRaw === 'true' || activeRaw === 1 || activeRaw === '1';
+  const hostNameRaw = raw?.HostName ?? raw?.hostname;
+  const ipRaw = raw?.IPAddress ?? raw?.ip;
+  const macRaw = raw?.MACAddress ?? raw?.mac;
+  const vendorRaw = raw?.VendorClassID ?? raw?.vendor;
+  return {
+    hostName: hostNameRaw != null && hostNameRaw !== '' ? String(hostNameRaw) : null,
+    ip: ipRaw != null && ipRaw !== '' ? String(ipRaw) : null,
+    mac: macRaw != null && macRaw !== '' ? String(macRaw) : null,
+    interfaceType,
+    active,
+    vendor: vendorRaw != null && vendorRaw !== '' ? String(vendorRaw) : null,
+  };
 }
 
 /**
@@ -73,19 +158,23 @@ function toUnconfiguredOnu(r: any): UnconfiguredOnu {
  *  - Pausa `stepPauseMs` entre llamadas consecutivas (primera sin pausa) —
  *    respeta el rate limit 10/s de la instancia.
  */
-export class SmartOltHttpGateway implements OltProvisioningGateway {
+export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManagementPort {
   private readonly http: AxiosInstance;
   private readonly token: string;
   private readonly configured: boolean;
   private readonly stepPauseMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
   private lastCallAt: number | null = null;
+  /** wifi-self-service (F0) — cache in-memory de `getOnuWifiStatus`, keyed por sn normalizada. */
+  private readonly wifiStatusCache = new Map<string, { value: OnuWifiStatus; expiresAt: number }>();
 
   constructor(opts: SmartOltHttpGatewayOptions) {
     this.token = opts.token;
     this.configured = opts.baseUrl !== '' && opts.token !== '';
     this.stepPauseMs = opts.stepPauseMs ?? DEFAULT_STEP_PAUSE_MS;
     this.sleep = opts.sleep ?? defaultSleep;
+    this.now = opts.now ?? (() => Date.now());
     this.http =
       opts.http ??
       axios.create({
@@ -221,13 +310,82 @@ export class SmartOltHttpGateway implements OltProvisioningGateway {
   }
 
   async setWifi(sn: string, input: SetWifiInput): Promise<void> {
+    await this.postSetWifiPort(sn, input.port, input.ssid, input.password);
+  }
+
+  /** POST onu/set_wifi_port_lan/<sn> — SIEMPRE WPA2, compartido por `setWifi` y `setWifiBand`. */
+  private async postSetWifiPort(sn: string, port: string, ssid: string, password: string): Promise<void> {
     const form = new URLSearchParams();
-    form.set('wifi_port', input.port);
-    form.set('ssid', input.ssid);
-    form.set('password', input.password);
+    form.set('wifi_port', port);
+    form.set('ssid', ssid);
+    form.set('password', password);
     // Verificado en vivo (skill smartolt-ipnext): WPA2 + dhcp "No control".
     form.set('authentication_mode', 'WPA2');
     form.set('dhcp', 'No control');
     await this.post(`onu/set_wifi_port_lan/${encodeURIComponent(sn)}`, form);
+  }
+
+  // ── WifiManagementPort ──────────────────────────────────────────────────────
+
+  /**
+   * GET onu/get_onu_details/<sn>, cacheado (TTL 60s — el resolver de
+   * elegibilidad lo llama seguido). Un "rejected" de SmartOLT (serial
+   * desconocido, el caso más común de una GET) se traduce a `found: false` en
+   * vez de tirar — es un resultado válido, no una falla de infra.
+   * `not_configured`/`unreachable` SÍ propagan (y no se cachean).
+   */
+  async getOnuWifiStatus(sn: string): Promise<OnuWifiStatus> {
+    const cached = this.wifiStatusCache.get(sn);
+    if (cached && cached.expiresAt > this.now()) {
+      return cached.value;
+    }
+
+    let status: OnuWifiStatus;
+    try {
+      const data = await this.call<unknown>(() =>
+        this.http.get(`onu/get_onu_details/${encodeURIComponent(sn)}`, { headers: this.headers() }),
+      );
+      status = toOnuWifiStatus(data);
+    } catch (err) {
+      if (err instanceof OltProvisioningError && err.reason === 'rejected') {
+        status = { found: false, onuType: null, online: false, tr069Enabled: false, bands: [] };
+      } else {
+        throw err;
+      }
+    }
+
+    this.wifiStatusCache.set(sn, { value: status, expiresAt: this.now() + WIFI_STATUS_CACHE_TTL_MS });
+    return status;
+  }
+
+  /**
+   * POST onu/set_wifi_port_lan/<sn> con un puerto EXPLÍCITO (a diferencia de
+   * `setWifi`, que solo acepta 'wifi_0/1' | 'wifi_0/5' — acá el caller decide,
+   * mismo endpoint). Invalida la cache de `getOnuWifiStatus` de ESA sn: el
+   * próximo GET tiene que reflejar el SSID nuevo, no el stale.
+   */
+  async setWifiBand(sn: string, input: SetWifiBandInput): Promise<void> {
+    await this.postSetWifiPort(sn, input.port, input.ssid, input.password);
+    this.wifiStatusCache.delete(sn);
+  }
+
+  /**
+   * GET onu/get_onu_router_hosts/<sn>. NO cacheado — a diferencia del status,
+   * no se llama seguido.
+   *
+   * Payload REAL (experimento 2026-08-02): `{ response: { hostlist: { "1":
+   * {...}, "2": {...} } } }` — un OBJETO indexado por string, NO un array. El
+   * primer draft esperaba `response` como array y devolvía `[]` siempre.
+   */
+  async getRouterHosts(sn: string): Promise<RouterHost[]> {
+    const data = await this.call<unknown>(() =>
+      this.http.get(`onu/get_onu_router_hosts/${encodeURIComponent(sn)}`, { headers: this.headers() }),
+    );
+    const response = (data as { response?: unknown } | null)?.response;
+    const hostlist = (response as { hostlist?: unknown } | null)?.hostlist;
+    const rows = hostlist != null && typeof hostlist === 'object' ? Object.values(hostlist) : [];
+    return rows
+      .filter((r: unknown): r is Record<string, unknown> => typeof r === 'object' && r !== null)
+      .map(toRouterHost);
   }
 }

@@ -1,0 +1,57 @@
+import { WifiBandStatus } from '@domain/services/mapWifiPortsToBands';
+
+/**
+ * wifi-self-service (F0) — port NARROW (ISP) para la lectura/escritura de
+ * WiFi de una ONU. Separado de `OltProvisioningGateway` (aprovisionamiento:
+ * autorizar, mgmt IP, TR-069) a propósito — son responsabilidades distintas
+ * aunque hablen con la MISMA API; un consumer que solo necesita leer el
+ * estado del WiFi no debe depender de la superficie de aprovisionamiento
+ * completa. El adapter concreto (`SmartOltHttpGateway`) implementa AMBOS
+ * ports sobre el mismo cliente HTTP — ver ese archivo.
+ *
+ * Errores: igual que `OltProvisioningGateway`, toda falla del plano SmartOLT
+ * se lanza como `OltProvisioningError` (`@domain/errors/smartolt`) con
+ * `reason` tipado ('not_configured' | 'unreachable' | 'rejected') — EXCEPTO
+ * "serial no encontrado en SmartOLT", que `getOnuWifiStatus` modela con
+ * `found: false` en vez de tirar (es un resultado válido y frecuente, no una
+ * falla de infraestructura).
+ */
+
+export interface OnuWifiStatus {
+  /** false = SmartOLT no tiene registrada esta ONU (serial desconocido). */
+  found: boolean;
+  onuType: string | null;
+  online: boolean;
+  /** TR-069 = Enabled en SmartOLT. La app NUNCA lo prende — solo lee. */
+  tr069Enabled: boolean;
+  /** [] = sin puertos WiFi (bridge) o ONU no encontrada. */
+  bands: WifiBandStatus[];
+}
+
+export interface SetWifiBandInput {
+  /** 'wifi_0/1'..'wifi_0/8' — el admin puede mandar cualquiera; el portal solo el "principal" de su banda. */
+  port: string;
+  ssid: string;
+  password: string;
+}
+
+export interface RouterHost {
+  hostName: string | null;
+  ip: string | null;
+  mac: string | null;
+  interfaceType: 'wifi' | 'ethernet';
+  active: boolean;
+  vendor: string | null;
+}
+
+export interface WifiManagementPort {
+  /** GET onu/get_onu_details/<sn>. Cacheado (TTL corto) — el resolver de elegibilidad lo llama seguido. */
+  getOnuWifiStatus(sn: string): Promise<OnuWifiStatus>;
+  /**
+   * POST onu/set_wifi_port_lan/<sn>. SIEMPRE WPA2 (el adapter lo fuerza, jamás
+   * Open-system). Invalida la entrada de cache de `getOnuWifiStatus` para ESTA sn.
+   */
+  setWifiBand(sn: string, input: SetWifiBandInput): Promise<void>;
+  /** GET onu/get_onu_router_hosts/<sn>. NO cacheado. */
+  getRouterHosts(sn: string): Promise<RouterHost[]>;
+}

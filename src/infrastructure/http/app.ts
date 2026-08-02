@@ -1022,6 +1022,17 @@ import { FcmPushSender } from '../adapters/fcm/FcmPushSender';
 import { NoopPushSender } from '../adapters/fcm/NoopPushSender';
 import type { PushSender } from '@domain/ports/PushSender';
 
+// wifi-self-service (F0) — "Mi WiFi" (portal, ResolveWifiEligibility +
+// GET/PUT/devices) y `/api/wifi` (admin, wifi.read/wifi.manage).
+import { ResolveWifiEligibility } from '@application/use-cases/wifi/ResolveWifiEligibility';
+import { GetPortalWifiStatus } from '@application/use-cases/wifi/GetPortalWifiStatus';
+import { UpdatePortalWifiBand } from '@application/use-cases/wifi/UpdatePortalWifiBand';
+import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWifiDevices';
+import { GetAdminOnuWifiStatus } from '@application/use-cases/wifi/GetAdminOnuWifiStatus';
+import { SetAdminWifiBand } from '@application/use-cases/wifi/SetAdminWifiBand';
+import { EnableOnuTr069 } from '@application/use-cases/wifi/EnableOnuTr069';
+import { createWifiRouter } from './routes/wifi.routes';
+
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
  *
@@ -3827,6 +3838,25 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const portalTicketCreateRateLimiter = createPortalTicketCreateRateLimiter();
   const portalTicketMessageSendRateLimiter = createPortalTicketMessageSendRateLimiter();
 
+  // wifi-self-service (F0) — instancia PROPIA de SmartOltHttpGateway (mismo
+  // config.smartolt que el bloque fiber-provisioning más arriba, pero una
+  // instancia separada a propósito: ese `smartoltGateway` queda block-scoped
+  // dentro de `{ ... }` del wiring de PPPoE, y fiber-provisioning nunca llama
+  // getOnuWifiStatus — no hay beneficio en compartir su cache in-memory).
+  // Opt-in / NO fail-fast: sin SMARTOLT_BASE_URL/SMARTOLT_API_TOKEN, los use
+  // cases fallan AL USARSE con SMARTOLT_NOT_CONFIGURED (503 admin) /
+  // `reason:'not_configured'` (200 portal) — el resto de la app arranca igual.
+  const smartoltWifiGateway = new SmartOltHttpGateway({
+    baseUrl: config.smartolt.baseUrl,
+    token: config.smartolt.token,
+    timeoutMs: config.smartolt.timeoutMs,
+    stepPauseMs: config.smartolt.stepPauseMs,
+  });
+  const resolveWifiEligibility = new ResolveWifiEligibility(customerAdapter, contractInventoryRepo, smartoltWifiGateway);
+  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, smartoltWifiGateway);
+  const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, smartoltWifiGateway);
+  const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, smartoltWifiGateway);
+
   app.use('/api/portal', createPortalRouter({
     portalLogin,
     refreshPortalSession,
@@ -3860,7 +3890,26 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     unregisterPortalPushToken,
     getPortalPushPreferences,
     updatePortalPushPreferences,
+    getPortalWifiStatus,
+    updatePortalWifiBand,
+    listPortalWifiDevices,
   }));
+
+  // wifi-self-service (F0) — admin `/api/wifi` (wifi.read/wifi.manage). Por
+  // SERIAL, no por contrato — staff opera ONUs aunque no estén asociadas
+  // todavía (proposal.md F0). Reusa la MISMA instancia de smartoltWifiGateway
+  // de arriba (cache compartida entre portal y admin para la misma sn).
+  const getAdminOnuWifiStatus = new GetAdminOnuWifiStatus(smartoltWifiGateway);
+  const setAdminWifiBand = new SetAdminWifiBand(smartoltWifiGateway);
+  const enableOnuTr069 = new EnableOnuTr069(smartoltWifiGateway);
+  app.use('/api/wifi', createWifiRouter(
+    authAdapter,
+    sessionRepo,
+    requirePerm,
+    getAdminOnuWifiStatus,
+    setAdminWifiBand,
+    enableOnuTr069,
+  ));
 
   // portal-promos — admin CRUD (`promos.read`/`promos.manage`).
   const listPortalPromosAdmin = new ListPortalPromosAdmin(portalPromoRepo);
