@@ -1042,6 +1042,25 @@ import { SetAdminWifiBand } from '@application/use-cases/wifi/SetAdminWifiBand';
 import { EnableOnuTr069 } from '@application/use-cases/wifi/EnableOnuTr069';
 import { createWifiRouter } from './routes/wifi.routes';
 
+// store-backend — tienda del ISP (catálogo admin `/api/store` + pedidos del
+// portal `/api/portal/store`). Imagen reusa `taskPhotoStorage` (MinIO
+// compartido — mismo bucket que task-photos/ticket-messages/news, ver arriba).
+import { PrismaStoreProductRepository } from '../adapters/prisma/PrismaStoreProductRepository';
+import { PrismaStoreOrderRepository } from '../adapters/prisma/PrismaStoreOrderRepository';
+import { ListStoreProductsAdmin } from '@application/use-cases/store/ListStoreProductsAdmin';
+import { GetStoreProductAdmin } from '@application/use-cases/store/GetStoreProductAdmin';
+import { CreateStoreProduct } from '@application/use-cases/store/CreateStoreProduct';
+import { UpdateStoreProduct } from '@application/use-cases/store/UpdateStoreProduct';
+import { UploadStoreProductImage } from '@application/use-cases/store/UploadStoreProductImage';
+import { DeleteStoreProductImage } from '@application/use-cases/store/DeleteStoreProductImage';
+import { GetStoreProductImage } from '@application/use-cases/store/GetStoreProductImage';
+import { ListStoreOrdersAdmin } from '@application/use-cases/store/ListStoreOrdersAdmin';
+import { createStoreRouter } from './routes/store.routes';
+import { ListPortalStoreProducts } from '@application/use-cases/portal/store/ListPortalStoreProducts';
+import { GetPortalStoreProduct } from '@application/use-cases/portal/store/GetPortalStoreProduct';
+import { GetPortalStoreProductImage } from '@application/use-cases/portal/store/GetPortalStoreProductImage';
+import { PlaceStorePortalOrder } from '@application/use-cases/portal/store/PlaceStorePortalOrder';
+
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
  *
@@ -3837,6 +3856,35 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     ticketAdapter,
   );
 
+  // store-backend — tienda del ISP. Reusa ticketAdapter/ticketAreaRepo/
+  // customerAdapter (mismos singletons que promos/tickets del portal) y
+  // taskPhotoStorage (MinIO compartido, ver task-photos/newsMedia arriba)
+  // para la imagen del producto.
+  const storeProductRepo = new PrismaStoreProductRepository();
+  const storeOrderRepo = new PrismaStoreOrderRepository();
+
+  const listStoreProductsAdmin = new ListStoreProductsAdmin(storeProductRepo);
+  const getStoreProductAdmin = new GetStoreProductAdmin(storeProductRepo);
+  const createStoreProduct = new CreateStoreProduct(storeProductRepo);
+  const updateStoreProduct = new UpdateStoreProduct(storeProductRepo);
+  const uploadStoreProductImage = new UploadStoreProductImage(storeProductRepo, taskPhotoStorage);
+  const deleteStoreProductImage = new DeleteStoreProductImage(storeProductRepo, taskPhotoStorage);
+  const getStoreProductImage = new GetStoreProductImage(storeProductRepo, taskPhotoStorage);
+  const listStoreOrdersAdmin = new ListStoreOrdersAdmin(storeOrderRepo, storeProductRepo, customerAdapter, ticketAdapter);
+
+  const listPortalStoreProducts = new ListPortalStoreProducts(storeProductRepo);
+  const getPortalStoreProduct = new GetPortalStoreProduct(storeProductRepo);
+  const getPortalStoreProductImage = new GetPortalStoreProductImage(storeProductRepo, taskPhotoStorage);
+  const placeStorePortalOrder = new PlaceStorePortalOrder(
+    storeProductRepo,
+    storeOrderRepo,
+    ticketAdapter,
+    ticketCommentRepo,
+    ticketAreaRepo,
+    customerAdapter,
+    config.portal.ticketAreaName,
+  );
+
   // portal-push-notifications — registro de dispositivos + preferencias
   // (client-facing). `portalPushTokenRepo`/`portalPushPreferenceRepo` ya se
   // declararon arriba (junto a `logoutPortal`, que los necesita antes).
@@ -3924,6 +3972,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getPortalWifiStatus,
     updatePortalWifiBand,
     listPortalWifiDevices,
+    listPortalStoreProducts,
+    getPortalStoreProduct,
+    getPortalStoreProductImage,
+    placeStorePortalOrder,
   }));
 
   // wifi-self-service (F0) — admin `/api/wifi` (wifi.read/wifi.manage). Por
@@ -3940,6 +3992,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getAdminOnuWifiStatus,
     setAdminWifiBand,
     enableOnuTr069,
+  ));
+
+  // store-backend — admin `/api/store` (store.read/store.manage).
+  app.use('/api/store', createStoreRouter(
+    authAdapter,
+    sessionRepo,
+    requirePerm,
+    listStoreProductsAdmin,
+    getStoreProductAdmin,
+    createStoreProduct,
+    updateStoreProduct,
+    uploadStoreProductImage,
+    deleteStoreProductImage,
+    listStoreOrdersAdmin,
+    getStoreProductImage,
   ));
 
   // portal-promos — admin CRUD (`promos.read`/`promos.manage`).

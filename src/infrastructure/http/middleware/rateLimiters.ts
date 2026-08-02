@@ -365,6 +365,41 @@ export function createPortalTicketMessageSendRateLimiter(opts: PortalTicketMessa
 }
 
 /**
+ * store-backend — rate limit PROPIO de `POST
+ * /api/portal/store/products/:id/order` (spec "Rate limit propio (5/hora) —
+ * anti spam de pedidos"). Mismo valor y keying que
+ * `createPortalTicketCreateRateLimiter` (abrir un pedido, como abrir un
+ * reclamo, es un evento raro — un cliente legítimo no hace 6 pedidos en una
+ * hora), pero PROPIO en vez de reusar aquel limiter tal cual: un abuso
+ * sostenido de pedidos no debe compartir cupo con la creación de reclamos
+ * comunes (y viceversa) — dos superficies de escritura distintas, dos
+ * presupuestos independientes.
+ */
+export interface PortalStoreOrderRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_PORTAL_STORE_ORDER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_PORTAL_STORE_ORDER_LIMIT = 5;
+
+export function createPortalStoreOrderRateLimiter(opts: PortalStoreOrderRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_PORTAL_STORE_ORDER_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_PORTAL_STORE_ORDER_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: keyByPortalAccountOrIp,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Demasiados pedidos creados en poco tiempo. Probá de nuevo más tarde.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}
+
+/**
  * wifi-self-service (F0) — rate limit PROPIO de `PUT /api/portal/wifi/:contractId`.
  * Cada escritura reinicia la radio del cliente (proposal.md F0: "un cambio de
  * WiFi reinicia la radio — no puede ser spammeable" + design.md §6 "Rate

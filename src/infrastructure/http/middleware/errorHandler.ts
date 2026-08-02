@@ -307,6 +307,12 @@ const statusMap: Record<string, number> = {
   // semantically a 404, same criterion as CLIENT_NOT_FOUND/TICKET_NOT_FOUND above.
   FINANCE_TECHNOLOGY_NOT_FOUND: 404,
   FINANCE_PLAN_NOT_FOUND: 404,
+  // store-backend — tienda del ISP (catálogo admin + pedidos del portal).
+  // VALIDATION_ERROR ya está mapeado arriba (reusado por StoreProductValidationError).
+  STORE_PRODUCT_NOT_FOUND: 404,
+  STORE_ORDER_INSTALLMENTS_INVALID: 400,
+  UNSUPPORTED_STORE_PRODUCT_IMAGE_TYPE: 415,
+  STORE_PRODUCT_IMAGE_TOO_LARGE: 413,
 };
 
 /** Express global error-handling middleware. */

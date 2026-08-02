@@ -39,14 +39,21 @@ describe('RBAC_MODULES constant', () => {
   // portal-promos (2026-08-02): agrega el módulo `promos` sobre esa base de 38 -> 39.
   // portal-push-notifications: agrega el módulo `push` sobre esa base de 39 -> 40.
   // wifi-self-service (F0): agrega el módulo `wifi` sobre esa base de 40 -> 41.
-  it('contains exactly 41 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians + 1 promos + 1 push + 1 wifi)', () => {
-    expect(RBAC_MODULES).toHaveLength(41);
+  // store-backend: agrega el módulo `store` sobre esa base de 41 -> 42.
+  it('contains exactly 42 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians + 1 promos + 1 push + 1 wifi + 1 store)', () => {
+    expect(RBAC_MODULES).toHaveLength(42);
   });
 
   it('includes the wifi module (wifi-self-service)', () => {
     // Módulo PROPIO: wifi.manage cambia la contraseña del WiFi del cliente y
     // dispara TR-069 — riesgo/alcance propio, separado de `network`/`iclass`.
     expect(RBAC_MODULES).toContain('wifi');
+  });
+
+  it('includes the store module (store-backend — tienda del ISP en la app de clientes)', () => {
+    // Módulo PROPIO: cargar productos que el cliente compra con cuotas en la
+    // factura es de alto impacto financiero/legal, separado de `portal`.
+    expect(RBAC_MODULES).toContain('store');
   });
 
   it('includes the assistant module (ai-assistant-multiagent)', () => {
