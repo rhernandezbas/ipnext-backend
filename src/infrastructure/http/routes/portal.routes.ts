@@ -26,6 +26,11 @@ import { UnregisterPortalPushToken } from '@application/use-cases/portal/Unregis
 import { GetPortalPushPreferences } from '@application/use-cases/portal/GetPortalPushPreferences';
 import { UpdatePortalPushPreferences } from '@application/use-cases/portal/UpdatePortalPushPreferences';
 import { RegisterPortalPushTokenSchema, UnregisterPortalPushTokenSchema, UpdatePortalPushPreferencesSchema } from '@application/dto/portal/portalPush.dto';
+import { ListPortalNotifications } from '@application/use-cases/portal/ListPortalNotifications';
+import { GetPortalNotificationsUnreadCount } from '@application/use-cases/portal/GetPortalNotificationsUnreadCount';
+import { MarkPortalNotificationsRead } from '@application/use-cases/portal/MarkPortalNotificationsRead';
+import { MarkAllPortalNotificationsRead } from '@application/use-cases/portal/MarkAllPortalNotificationsRead';
+import { MarkPortalNotificationsReadSchema } from '@application/dto/portal/portalNotification.dto';
 import {
   InvalidPortalCredentialsError,
   InvalidPortalRefreshTokenError,
@@ -117,6 +122,12 @@ export interface PortalRouterDeps {
   unregisterPortalPushToken?: UnregisterPortalPushToken;
   getPortalPushPreferences?: GetPortalPushPreferences;
   updatePortalPushPreferences?: UpdatePortalPushPreferences;
+
+  // ── portal-notification-inbox — buzón de avisos (respaldo del push) ────────
+  listPortalNotifications?: ListPortalNotifications;
+  getPortalNotificationsUnreadCount?: GetPortalNotificationsUnreadCount;
+  markPortalNotificationsRead?: MarkPortalNotificationsRead;
+  markAllPortalNotificationsRead?: MarkAllPortalNotificationsRead;
 
   // ── wifi-self-service (F0) — "Mi WiFi": elegibilidad + cambio de SSID/pass ──
   getPortalWifiStatus?: GetPortalWifiStatus;
@@ -908,6 +919,110 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         try {
           const result = await updatePortalPushPreferences.execute(accountId, parsed.data, appVersion);
           res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── portal-notification-inbox — buzón de avisos ─────────────────────────────
+  // Feedback probando el push real: "se mandó la notificación pero no
+  // persiste en ningún lado de la app, por lo cual la persona puede abrirla
+  // sin leerla" — este bloque expone el buzón que `SendPushServiceAlert`
+  // llena por cuenta (con o sin token). Estáticas, sin colisión con ningún
+  // `:param` de este router (no hay `/notifications/:id`).
+
+  if (deps.listPortalNotifications) {
+    const listPortalNotifications = deps.listPortalNotifications;
+    router.get(
+      '/notifications',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        try {
+          // M2 — parseo estricto compartido (entero >=1, cap 100): basura => default.
+          const { page, limit } = parsePagination(req.query);
+          const result = await listPortalNotifications.execute(accountId, { page, limit });
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.getPortalNotificationsUnreadCount) {
+    const getPortalNotificationsUnreadCount = deps.getPortalNotificationsUnreadCount;
+    router.get(
+      '/notifications/unread-count',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        try {
+          const result = await getPortalNotificationsUnreadCount.execute(accountId);
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.markPortalNotificationsRead) {
+    const markPortalNotificationsRead = deps.markPortalNotificationsRead;
+    router.post(
+      '/notifications/read',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        const parsed = MarkPortalNotificationsReadSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          // Anti-IDOR: `markRead` filtra por `accountId` — un id ajeno en el
+          // array se ignora en silencio (ver el docblock del port).
+          await markPortalNotificationsRead.execute(accountId, parsed.data.ids);
+          res.status(204).send();
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.markAllPortalNotificationsRead) {
+    const markAllPortalNotificationsRead = deps.markAllPortalNotificationsRead;
+    router.post(
+      '/notifications/read-all',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const accountId = req.portalAccountId;
+        if (!accountId) {
+          res.status(401).json({ error: 'Authentication required', code: 'UNAUTHORIZED' });
+          return;
+        }
+        try {
+          await markAllPortalNotificationsRead.execute(accountId);
+          res.status(204).send();
         } catch (err) {
           next(err);
         }

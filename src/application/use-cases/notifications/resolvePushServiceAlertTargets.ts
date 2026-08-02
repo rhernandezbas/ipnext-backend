@@ -23,11 +23,24 @@ export async function resolvePushServiceAlertTargets(
   tokens: Pick<PortalPushTokenRepository, 'listServiceAlertTargets'>,
   networkSiteId?: string | null,
 ): Promise<PushServiceAlertTarget[]> {
-  let clientIds: string[] | undefined;
-  if (networkSiteId) {
-    const segment: CampaignSegmentFilter = { statuses: [], networkSiteId };
-    const candidates = await segments.listSegmentRecipients(segment);
-    clientIds = candidates.map((c) => c.clientId);
-  }
+  const clientIds = await resolveServiceAlertClientIds(segments, networkSiteId);
   return tokens.listServiceAlertTargets(clientIds);
+}
+
+/**
+ * resolveServiceAlertClientIds — extraído de `resolvePushServiceAlertTargets`
+ * (portal-notification-inbox) para que `SendPushServiceAlert` pueda resolver
+ * el MISMO filtro de nodo una sola vez y reusarlo tanto para
+ * `listServiceAlertTargets` (push real) como para `listServiceAlertAccounts`
+ * (buzón) — anti-divergencia, un solo camino de segmentación para las dos
+ * consultas del mismo envío.
+ */
+export async function resolveServiceAlertClientIds(
+  segments: Pick<CampaignSegmentSource, 'listSegmentRecipients'>,
+  networkSiteId?: string | null,
+): Promise<string[] | undefined> {
+  if (!networkSiteId) return undefined;
+  const segment: CampaignSegmentFilter = { statuses: [], networkSiteId };
+  const candidates = await segments.listSegmentRecipients(segment);
+  return candidates.map((c) => c.clientId);
 }

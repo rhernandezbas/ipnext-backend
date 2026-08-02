@@ -1022,6 +1022,15 @@ import { FcmPushSender } from '../adapters/fcm/FcmPushSender';
 import { NoopPushSender } from '../adapters/fcm/NoopPushSender';
 import type { PushSender } from '@domain/ports/PushSender';
 
+// portal-notification-inbox — buzón del portal (respaldo del push, con o sin
+// token). `SendPushServiceAlert` lo necesita para escribir 1 fila por cuenta
+// destinataria; el portal expone GET/unread-count/read/read-all sobre lo mismo.
+import { PrismaPortalNotificationRepository } from '../adapters/prisma/PrismaPortalNotificationRepository';
+import { ListPortalNotifications } from '@application/use-cases/portal/ListPortalNotifications';
+import { GetPortalNotificationsUnreadCount } from '@application/use-cases/portal/GetPortalNotificationsUnreadCount';
+import { MarkPortalNotificationsRead } from '@application/use-cases/portal/MarkPortalNotificationsRead';
+import { MarkAllPortalNotificationsRead } from '@application/use-cases/portal/MarkAllPortalNotificationsRead';
+
 // wifi-self-service (F0) — "Mi WiFi" (portal, ResolveWifiEligibility +
 // GET/PUT/devices) y `/api/wifi` (admin, wifi.read/wifi.manage).
 import { ResolveWifiEligibility } from '@application/use-cases/wifi/ResolveWifiEligibility';
@@ -2400,7 +2409,18 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // `portalPushTokenRepo` de la Fase 7 más abajo) — evita reordenar el wiring
   // del portal solo para compartir un repo sin config/estado que compartir.
   const pushServiceAlertTokenRepo = new PrismaPortalPushTokenRepository();
-  const sendPushServiceAlert = new SendPushServiceAlert(pushServiceAlertTokenRepo, pushSender, customerAdapter);
+  // portal-notification-inbox — instancias propias (stateless, mismo `prisma`
+  // singleton que `portalNotificationRepo`/`portalAccountRepo` del wiring del
+  // portal más abajo) — evita reordenar el wiring solo para compartirlas.
+  const portalNotificationRepo = new PrismaPortalNotificationRepository();
+  const pushServiceAlertAccountRepo = new PrismaPortalAccountRepository();
+  const sendPushServiceAlert = new SendPushServiceAlert(
+    pushServiceAlertTokenRepo,
+    pushSender,
+    customerAdapter,
+    portalNotificationRepo,
+    pushServiceAlertAccountRepo,
+  );
   const previewPushServiceAlert = new PreviewPushServiceAlert(pushServiceAlertTokenRepo, customerAdapter);
 
   app.use('/api/notifications', createNotificationsRouter(
@@ -3825,6 +3845,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const getPortalPushPreferences = new GetPortalPushPreferences(portalPushPreferenceRepo);
   const updatePortalPushPreferences = new UpdatePortalPushPreferences(portalPushPreferenceRepo);
 
+  // portal-notification-inbox — el buzón, `portalNotificationRepo` ya se
+  // declaró arriba (junto a `sendPushServiceAlert`, que lo necesita antes).
+  const listPortalNotifications = new ListPortalNotifications(portalNotificationRepo);
+  const getPortalNotificationsUnreadCount = new GetPortalNotificationsUnreadCount(portalNotificationRepo);
+  const markPortalNotificationsRead = new MarkPortalNotificationsRead(portalNotificationRepo);
+  const markAllPortalNotificationsRead = new MarkAllPortalNotificationsRead(portalNotificationRepo);
+
   const portalAuthMw = createPortalAuthMiddleware(portalTokenService, portalAccountRepo);
   const portalKillSwitchMw = createPortalKillSwitchMiddleware(settingsRepo);
   // W6: se instancian los 4 rate limiters EXPLICITAMENTE (aunque el router los
@@ -3890,6 +3917,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     unregisterPortalPushToken,
     getPortalPushPreferences,
     updatePortalPushPreferences,
+    listPortalNotifications,
+    getPortalNotificationsUnreadCount,
+    markPortalNotificationsRead,
+    markAllPortalNotificationsRead,
     getPortalWifiStatus,
     updatePortalWifiBand,
     listPortalWifiDevices,

@@ -4,6 +4,7 @@ import type {
   PortalAccountRepository,
   CreatePortalAccountInput,
   UpdatePortalAccountInput,
+  PortalAccountClientRef,
 } from '@domain/ports/PortalAccountRepository';
 import type { PaginatedResult, PaginatedQuery } from '@application/dto/pagination';
 import { PortalAccountNotFoundError } from '@domain/errors/portal.errors';
@@ -75,5 +76,14 @@ export class InMemoryPortalAccountRepository implements PortalAccountRepository 
     if (clientIds.length === 0) return 0;
     const set = new Set(clientIds);
     return this.store.filter((a) => set.has(a.clientId)).length;
+  }
+
+  /** portal-notification-inbox — ver el port (SIN mirar preferencias de push). */
+  async listByClientIds(clientIds?: string[]): Promise<PortalAccountClientRef[]> {
+    if (clientIds && clientIds.length === 0) return [];
+    const set = clientIds ? new Set(clientIds) : null;
+    return this.store
+      .filter((a) => !set || set.has(a.clientId))
+      .map((a) => ({ accountId: a.id, clientId: a.clientId }));
   }
 }

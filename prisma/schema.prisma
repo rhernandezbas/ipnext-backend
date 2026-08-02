@@ -524,6 +524,8 @@ model PortalAccount {
   // portal-push-notifications — dispositivos registrados + preferencia de push.
   pushTokens         PortalPushToken[]
   pushPreference     PortalPushPreference?
+  // portal-notification-inbox — buzón: rastro persistente de cada aviso enviado.
+  notifications      PortalNotification[]
 }
 
 // Refresh tokens rotativos del portal. tokenHash = sha256 del refresh opaco (32 bytes
@@ -3127,6 +3129,27 @@ model PortalPushPreference {
   promosOptInAt          DateTime?
   promosOptInAppVersion  String?
   updatedAt              DateTime      @updatedAt
+}
+
+// portal-notification-inbox — el buzón del portal. Feedback probando el push
+// real: "se mandó la notificación pero no persiste en ningún lado de la app,
+// por lo cual la persona puede abrirla sin leerla" — `SendPushServiceAlert`
+// escribe UNA fila por cuenta destinataria (tenga o no token de push vivo) al
+// momento del envío, sea el push exitoso o no. `channel` reusa el mismo eje
+// que `PortalPushPreference` ('service' | 'promo'); `data` es el mismo
+// payload `data` del push (deep link). `readAt` null = no leída.
+model PortalNotification {
+  id        String        @id @default(uuid())
+  accountId String
+  account   PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  channel   String // 'service' | 'promo'
+  title     String
+  body      String
+  data      Json?
+  sentAt    DateTime      @default(now())
+  readAt    DateTime?
+
+  @@index([accountId, sentAt])
 }
 
 // =============================================
