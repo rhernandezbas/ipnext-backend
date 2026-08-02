@@ -96,4 +96,10 @@ export class PrismaPortalAccountRepository implements PortalAccountRepository {
     ]);
     return { data: rows.map(mapRow), total, page, limit };
   }
+
+  /** portal-promos (`audience-preview`) — UNA query agregada, ver el port. */
+  async countByClientIds(clientIds: string[]): Promise<number> {
+    if (clientIds.length === 0) return 0;
+    return (this.db as any).portalAccount.count({ where: { clientId: { in: clientIds } } }) as Promise<number>;
+  }
 }

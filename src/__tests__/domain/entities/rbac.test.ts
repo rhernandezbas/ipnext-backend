@@ -35,8 +35,10 @@ describe('RBAC_MODULES constant', () => {
   // Unidos los tres módulos (assistant + finance + technicians) sobre esa base, el
   // conteo REAL es 38 — verificado contando las entradas del array, no sumando.
   // Se conservan las TRES aserciones `toContain`: cada módulo mantiene su propio pin.
-  it('contains exactly 38 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians)', () => {
-    expect(RBAC_MODULES).toHaveLength(38);
+  //
+  // portal-promos (2026-08-02): agrega el módulo `promos` sobre esa base de 38 -> 39.
+  it('contains exactly 39 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians + 1 promos)', () => {
+    expect(RBAC_MODULES).toHaveLength(39);
   });
 
   it('includes the assistant module (ai-assistant-multiagent)', () => {
@@ -47,6 +49,10 @@ describe('RBAC_MODULES constant', () => {
 
   it('includes technicians (iclass-gps-audit — ubicación y auditoría de presencia de cuadrillas)', () => {
     expect(RBAC_MODULES).toContain('technicians');
+  });
+
+  it('includes the promos module (portal-promos — promociones publicadas en la app de clientes)', () => {
+    expect(RBAC_MODULES).toContain('promos');
   });
 
   it('includes all 14 original module codes', () => {

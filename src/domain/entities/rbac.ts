@@ -180,6 +180,10 @@ export const RBAC_MODULES = [
   // sobre cobranza real GR). DELIBERADAMENTE separado de `billing` (cementerio
   // Splynx) — ver design.md Decision 6.
   'finance',
+  // portal-promos — promociones publicadas por el operador para la app de
+  // clientes. Usa las base actions read/manage sin agregar action codes nuevos
+  // (mismo criterio que 'news'/'uisp').
+  'promos',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

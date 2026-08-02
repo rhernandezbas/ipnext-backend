@@ -992,6 +992,20 @@ import { SetPortalAccountStatus } from '@application/use-cases/portal-admin/SetP
 import { DeletePortalAccountAdmin } from '@application/use-cases/portal-admin/DeletePortalAccountAdmin';
 import { ListPortalAccounts } from '@application/use-cases/portal-admin/ListPortalAccounts';
 
+// portal-promos — promociones en la app de clientes (client-facing + admin CRUD).
+import { PrismaPortalPromoRepository } from '../adapters/prisma/PrismaPortalPromoRepository';
+import { PrismaPortalPromoResponseRepository } from '../adapters/prisma/PrismaPortalPromoResponseRepository';
+import { ListPortalPromos } from '@application/use-cases/portal/ListPortalPromos';
+import { GetPortalPromo } from '@application/use-cases/portal/GetPortalPromo';
+import { InterestInPortalPromo } from '@application/use-cases/portal/InterestInPortalPromo';
+import { DismissPortalPromo } from '@application/use-cases/portal/DismissPortalPromo';
+import { createPromosRouter } from './routes/promos.routes';
+import { ListPortalPromosAdmin } from '@application/use-cases/promos/ListPortalPromosAdmin';
+import { GetPortalPromoAdmin } from '@application/use-cases/promos/GetPortalPromoAdmin';
+import { CreatePortalPromo } from '@application/use-cases/promos/CreatePortalPromo';
+import { UpdatePortalPromo } from '@application/use-cases/promos/UpdatePortalPromo';
+import { PreviewPromoAudience } from '@application/use-cases/promos/PreviewPromoAudience';
+
 /**
  * Minimal FK lookup for scheduling use-case FK validation.
  *
@@ -3716,6 +3730,24 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const sendPortalTicketMessage = new SendPortalTicketMessage(ticketAdapter, ticketCommentRepo, taskPhotoStorage);
   const getPortalTicketMessageAttachmentFile = new GetPortalTicketMessageAttachmentFile(ticketAdapter, ticketCommentRepo, taskPhotoStorage);
 
+  // portal-promos — reusa customerAdapter (implementa `SegmentMembershipChecker`
+  // vía `clientMatchesSegment`, ver PrismaCustomerRepository), ticketAdapter y
+  // ticketAreaRepo (mismos singletons que el resto del portal, arriba).
+  const portalPromoRepo = new PrismaPortalPromoRepository();
+  const portalPromoResponseRepo = new PrismaPortalPromoResponseRepository();
+  const listPortalPromos = new ListPortalPromos(portalPromoRepo, portalPromoResponseRepo, customerAdapter);
+  const getPortalPromo = new GetPortalPromo(portalPromoRepo, portalPromoResponseRepo, customerAdapter);
+  const interestInPortalPromo = new InterestInPortalPromo(
+    portalPromoRepo,
+    portalPromoResponseRepo,
+    customerAdapter,
+    ticketAdapter,
+    ticketAreaRepo,
+    customerAdapter,
+    config.portal.ticketAreaName,
+  );
+  const dismissPortalPromo = new DismissPortalPromo(portalPromoRepo, portalPromoResponseRepo, customerAdapter);
+
   const portalAuthMw = createPortalAuthMiddleware(portalTokenService, portalAccountRepo);
   const portalKillSwitchMw = createPortalKillSwitchMiddleware(settingsRepo);
   // W6: se instancian los 4 rate limiters EXPLICITAMENTE (aunque el router los
@@ -3753,7 +3785,28 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     sendPortalTicketMessage,
     getPortalTicketMessageAttachmentFile,
     ticketMessageSendRateLimiter: portalTicketMessageSendRateLimiter,
+    listPortalPromos,
+    getPortalPromo,
+    interestInPortalPromo,
+    dismissPortalPromo,
   }));
+
+  // portal-promos — admin CRUD (`promos.read`/`promos.manage`).
+  const listPortalPromosAdmin = new ListPortalPromosAdmin(portalPromoRepo);
+  const getPortalPromoAdmin = new GetPortalPromoAdmin(portalPromoRepo);
+  const createPortalPromo = new CreatePortalPromo(portalPromoRepo);
+  const updatePortalPromo = new UpdatePortalPromo(portalPromoRepo);
+  const previewPromoAudience = new PreviewPromoAudience(customerAdapter, portalAccountRepo);
+  app.use('/api/promos', createPromosRouter(
+    authAdapter,
+    sessionRepo,
+    requirePerm,
+    listPortalPromosAdmin,
+    getPortalPromoAdmin,
+    createPortalPromo,
+    updatePortalPromo,
+    previewPromoAudience,
+  ));
 
   // CRUD admin de cuentas del portal — staff auth (rechaza aud=portal) +
   // portal.manage (guard granular, spec "TODAS las rutas del CRUD DEBEN exigir

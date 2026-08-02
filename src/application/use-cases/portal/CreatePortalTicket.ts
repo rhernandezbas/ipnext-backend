@@ -2,12 +2,8 @@ import type { TicketRepository } from '@domain/ports/TicketRepository';
 import type { TicketAreaCatalogRepository } from '@domain/ports/TicketAreaCatalogRepository';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { PortalTicketDetailDto } from '@application/dto/portal/portalTicket.dto';
-import {
-  PortalTicketValidationError,
-  PortalContractRequiredError,
-  PortalContractNotFoundError,
-  PortalTicketTopicNotFoundError,
-} from '@domain/errors/portal.errors';
+import { PortalTicketValidationError, PortalTicketTopicNotFoundError } from '@domain/errors/portal.errors';
+import { resolvePortalTicketContract } from './resolvePortalTicketContract';
 
 /** portal-self-service spec "Payload inválido" — mismos topes que la API externa
  * de tickets (externalV1.routes.ts MAX_SUBJECT_LEN/MAX_DESCRIPTION_LEN). */
@@ -104,26 +100,10 @@ export class CreatePortalTicket {
     }
 
     const requestedContractId = input.contractId?.trim() || null;
-    const contracts = await this.customers.listContracts(clientId);
-
-    let contract: { id: string; plan: string } | null = null;
-    if (contracts.length > 0) {
-      // Cliente CON contratos: contractId es REQUERIDO.
-      if (!requestedContractId) {
-        throw new PortalContractRequiredError();
-      }
-      const found = contracts.find((c) => c.id === requestedContractId) ?? null;
-      if (!found) {
-        // Ajeno o inexistente — mismo error para los dos (anti-enumeración).
-        throw new PortalContractNotFoundError();
-      }
-      contract = found;
-    } else if (requestedContractId) {
-      // Cliente SIN contratos pero mandó un contractId igual: no puede ser
-      // suyo (no tiene ninguno) — nunca se ignora en silencio.
-      throw new PortalContractNotFoundError();
-    }
-    // else: sin contratos y sin contractId -> OK, contract queda null.
+    // v2.A — regla de contrato EXTRAÍDA a `resolvePortalTicketContract`
+    // (portal-promos la reusa 1:1 para `InterestInPortalPromo`, misma regla
+    // de negocio, un solo lugar que la implementa).
+    const contract = await resolvePortalTicketContract(this.customers, clientId, requestedContractId);
 
     // portal-ticket-topic — '' / '   ' se tratan como ausente, mismo criterio
     // que `requestedContractId` arriba.

@@ -278,3 +278,31 @@ export interface OptOutRegistry {
    */
   registerOptOut(clientId: string): Promise<void>;
 }
+
+/**
+ * portal-promos — port narrow (ISP, mismo criterio que `CampaignSegmentSource`/
+ * `CampaignRecipientLookup`) para la pregunta INVERSA de `listSegmentRecipients`:
+ * "dame los clientes del segmento" (recall-over-pagination, pensado para
+ * resolver una campaña ENTERA) NO sirve para gatear la app de un cliente en
+ * cada apertura — evaluarla ahí listando el universo completo del segmento
+ * (potencialmente miles de clientes) por cada promo activa es inviable.
+ * `clientMatchesSegment` responde "¿ESTE cliente entra en este segmento?" con
+ * UNA query dirigida (`WHERE ... AND id = clientId`).
+ *
+ * RIESGO CRÍTICO (design portal-promos): si el WHERE de este método y el de
+ * `listSegmentRecipients` se arman por separado, el preview del operador
+ * (`audience-preview`, vía `listSegmentRecipients`) y lo que el cliente
+ * REALMENTE ve (`GET /promos`, vía este método) pueden divergir EN SILENCIO —
+ * el operador ve "llega a 87" y le llega a otra gente. Por eso
+ * `PrismaCustomerRepository.clientMatchesSegment` NO reimplementa el WHERE:
+ * reusa `buildSegmentWhere` (la MISMA función pura que ya arma el WHERE de
+ * `listSegmentRecipients`) vía `buildClientMatchesSegmentWhere`, que solo le
+ * agrega `id: clientId` al objeto que devuelve `buildSegmentWhere`. Los dos
+ * caminos son estructuralmente el mismo WHERE — no pueden divergir salvo que
+ * alguien deje de llamar a la función compartida (ver
+ * `PrismaCustomerRepository.clientMatchesSegment.test.ts`, paridad probada
+ * sobre el mismo fixture multi-eje: estado + nodo + deuda).
+ */
+export interface SegmentMembershipChecker {
+  clientMatchesSegment(clientId: string, segment: CampaignSegmentFilter): Promise<boolean>;
+}

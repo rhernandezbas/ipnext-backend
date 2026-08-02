@@ -221,6 +221,9 @@ model Client {
   // customer-portal-api (Fase 1) — 1 cuenta de portal <-> 1 cliente (v1). Nullable: la
   // mayoria de los clientes NO tiene cuenta (provisioning manual, beta inicial acotada).
   portalAccount      PortalAccount?
+  // portal-promos — back-relation de las respuestas ("Me interesa"/"no me
+  // interesa") de este cliente a promos publicadas.
+  portalPromoResponses PortalPromoResponse[]
 
   @@index([status])
   @@index([email])
@@ -2896,6 +2899,9 @@ model TicketAreaCatalog {
   // clasificar). onDelete: SetNull del otro lado: borrar el área deja el ruteo sin default
   // (las conversaciones sin área dejan de atenderse) en vez de romper la config.
   assistantRoutingDefault AssistantRoutingConfig[]
+  // portal-promos — back-relation de las promos cuyo interés ("Me interesa")
+  // abre un reclamo en ESTA área.
+  portalPromos PortalPromo[]
 
   @@map("TicketAreaCatalog")
 }
@@ -2987,6 +2993,10 @@ model Ticket {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // portal-promos — back-relation: la respuesta ("Me interesa") que generó ESTE
+  // ticket, si lo creó una promo (1:1 — ver PortalPromoResponse.ticketId @unique).
+  promoResponse PortalPromoResponse?
+
   @@index([customerId])
   @@index([contractId])
   @@index([statusId])
@@ -2994,6 +3004,78 @@ model Ticket {
   @@index([reporterId])
   @@index([areaId])
   @@index([archivedAt])
+}
+
+// =============================================
+// PORTAL PROMOS DOMAIN
+// =============================================
+
+// portal-promos — el operador publica una promo eligiendo A QUIÉN le llega
+// (`segment`, MISMO shape que `CampaignSegmentFilter` — ver
+// `buildSegmentWhere`/`buildClientMatchesSegmentWhere` en
+// PrismaCustomerRepository, la garantía anti-divergencia del preview vs. lo
+// que el cliente realmente ve). El cliente la ve en Inicio (`publishedAt` no
+// null, `archivedAt` null, dentro de [startsAt, endsAt], su cliente matchea
+// el segmento) y puede tocar el CTA, lo que abre un `Ticket` (ver
+// PortalPromoResponse).
+model PortalPromo {
+  id    String @id @default(uuid())
+  title String
+  // Texto corto de la tarjeta en Inicio.
+  summary String
+  // Texto largo del detalle.
+  body String
+  // MinIO — mismo patrón que los adjuntos de mensajería (storageKey, no URL
+  // pública). Opcional: una promo puede no tener imagen.
+  imageStorageKey String?
+  ctaLabel        String  @default("Me interesa")
+  // Área del reclamo que genera el interés. Null = área default del portal
+  // (config.portal.ticketAreaName, mismo fallback que CreatePortalTicket).
+  ticketAreaId String?
+  ticketArea   TicketAreaCatalog? @relation(fields: [ticketAreaId], references: [id], onDelete: SetNull)
+  // CampaignSegmentFilter — statuses/balanceMin/balanceMax/networkSiteId/accessPointId.
+  segment Json
+  startsAt DateTime
+  endsAt   DateTime
+  // null = borrador, NO visible para clientes.
+  publishedAt DateTime?
+  archivedAt  DateTime?
+  authorId    String?
+  author      RbacUser? @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  // Snapshot — sobrevive al borrado del usuario (mismo criterio que NewsPost.authorName).
+  authorName String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  responses  PortalPromoResponse[]
+
+  @@index([publishedAt])
+  @@index([archivedAt])
+  @@index([ticketAreaId])
+}
+
+// portal-promos — UNA respuesta por (promo, cliente): "Me interesa" (kind =
+// interested, con el ticket que abrió) o "no me interesa" (kind = dismissed,
+// sin ticket). El `@@unique` es la red de idempotencia real — el use case
+// (InterestInPortalPromo) hace un chequeo previo por UX, pero es esta
+// constraint la que garantiza que NUNCA se crean dos tickets si dos requests
+// concurrentes llegan al mismo tiempo.
+model PortalPromoResponse {
+  id      String      @id @default(uuid())
+  promoId String
+  promo   PortalPromo @relation(fields: [promoId], references: [id], onDelete: Cascade)
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // 'interested' | 'dismissed'
+  kind String
+  // Solo presente cuando kind='interested'. @unique: 1 respuesta <-> a lo sumo
+  // 1 ticket. SetNull (no Cascade): si el ticket se borra, la respuesta
+  // (evidencia de que el cliente expresó interés) sobrevive con ticketId=null.
+  ticketId String? @unique
+  ticket   Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@unique([promoId, clientId])
+  @@index([clientId])
 }
 
 // =============================================
@@ -3096,6 +3178,8 @@ model RbacUser {
   // el autor preserva la mención, sólo desasocia quién la escribió).
   mentionsReceived        ConversationMention[]  @relation("ConversationMentionUser")
   mentionsMade            ConversationMention[]  @relation("ConversationMentionByUser")
+  // portal-promos — back-relation de las promos publicadas por este usuario.
+  portalPromosAuthored    PortalPromo[]
 
   @@index([login])
   @@index([iclassTeamLogin])

@@ -69,4 +69,11 @@ export class InMemoryPortalAccountRepository implements PortalAccountRepository 
     const data = sorted.slice(start, start + limit).map((a) => ({ ...a }));
     return { data, total: this.store.length, page, limit };
   }
+
+  /** portal-promos (`audience-preview`) — ver el port. */
+  async countByClientIds(clientIds: string[]): Promise<number> {
+    if (clientIds.length === 0) return 0;
+    const set = new Set(clientIds);
+    return this.store.filter((a) => set.has(a.clientId)).length;
+  }
 }
