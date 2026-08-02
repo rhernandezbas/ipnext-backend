@@ -122,6 +122,8 @@ jobs:
             -e MINIO_SECRET_KEY="${{ secrets.MINIO_SECRET_KEY }}" \
             -e MINIO_BUCKET="${{ secrets.MINIO_BUCKET }}" \
             -e FIREBASE_SERVICE_ACCOUNT_JSON \
+            -e SMARTOLT_BASE_URL="${{ secrets.SMARTOLT_BASE_URL }}" \
+            -e SMARTOLT_API_TOKEN="${{ secrets.SMARTOLT_API_TOKEN }}" \
             -e CHATWOOT_BASE_URL="${{ secrets.CHATWOOT_BASE_URL }}" \
             -e CHATWOOT_ACCOUNT_ID="${{ secrets.CHATWOOT_ACCOUNT_ID }}" \
             -e CHATWOOT_API_TOKEN="${{ secrets.CHATWOOT_API_TOKEN }}" \
