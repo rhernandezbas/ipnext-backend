@@ -36,4 +36,8 @@ export class InMemoryPortalPromoResponseRepository implements PortalPromoRespons
   async listRespondedPromoIds(clientId: string): Promise<string[]> {
     return this.store.filter((r) => r.clientId === clientId).map((r) => r.promoId);
   }
+
+  async listByClient(clientId: string): Promise<PortalPromoResponse[]> {
+    return this.store.filter((r) => r.clientId === clientId).map((r) => ({ ...r }));
+  }
 }

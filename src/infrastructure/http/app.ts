@@ -999,6 +999,8 @@ import { ListPortalPromos } from '@application/use-cases/portal/ListPortalPromos
 import { GetPortalPromo } from '@application/use-cases/portal/GetPortalPromo';
 import { InterestInPortalPromo } from '@application/use-cases/portal/InterestInPortalPromo';
 import { DismissPortalPromo } from '@application/use-cases/portal/DismissPortalPromo';
+// portal-benefits — pestaña Catálogo (Disponibles/Activados).
+import { ListPortalBenefits } from '@application/use-cases/portal/ListPortalBenefits';
 import { createPromosRouter } from './routes/promos.routes';
 import { ListPortalPromosAdmin } from '@application/use-cases/promos/ListPortalPromosAdmin';
 import { GetPortalPromoAdmin } from '@application/use-cases/promos/GetPortalPromoAdmin';
@@ -3748,6 +3750,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   );
   const dismissPortalPromo = new DismissPortalPromo(portalPromoRepo, portalPromoResponseRepo, customerAdapter);
 
+  // portal-benefits — reusa los mismos singletons de arriba (portalPromoRepo,
+  // portalPromoResponseRepo, customerAdapter como SegmentMembershipChecker Y
+  // como CustomerRepository, ticketAdapter) — cero instancias Prisma paralelas.
+  const listPortalBenefits = new ListPortalBenefits(
+    portalPromoRepo,
+    portalPromoResponseRepo,
+    customerAdapter,
+    customerAdapter,
+    ticketAdapter,
+  );
+
   const portalAuthMw = createPortalAuthMiddleware(portalTokenService, portalAccountRepo);
   const portalKillSwitchMw = createPortalKillSwitchMiddleware(settingsRepo);
   // W6: se instancian los 4 rate limiters EXPLICITAMENTE (aunque el router los
@@ -3789,6 +3802,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     getPortalPromo,
     interestInPortalPromo,
     dismissPortalPromo,
+    listPortalBenefits,
   }));
 
   // portal-promos — admin CRUD (`promos.read`/`promos.manage`).

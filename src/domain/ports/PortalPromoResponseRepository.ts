@@ -27,4 +27,15 @@ export interface PortalPromoResponseRepository {
    * por cada promo del listado).
    */
   listRespondedPromoIds(clientId: string): Promise<string[]>;
+  /**
+   * portal-benefits — TODAS las respuestas de este cliente (interested Y
+   * dismissed), UNA query. Distinto de `listRespondedPromoIds` (que solo da
+   * el promoId para EXCLUIR de `GET /promos`): `ListPortalBenefits` necesita
+   * además el `kind` — para separar las aceptadas (pasan a `active`, ver esa
+   * clase) de las descartadas (siguen elegibles en `available`, EL punto del
+   * change) — y el `ticketId` de cada aceptada, para resolver el número de
+   * reclamo. Nunca N+1: TODAS las respuestas del cliente en una sola llamada,
+   * sin importar cuántas promos activas haya.
+   */
+  listByClient(clientId: string): Promise<PortalPromoResponse[]>;
 }

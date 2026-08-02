@@ -20,6 +20,7 @@ import { ListPortalPromos } from '@application/use-cases/portal/ListPortalPromos
 import { GetPortalPromo } from '@application/use-cases/portal/GetPortalPromo';
 import { InterestInPortalPromo } from '@application/use-cases/portal/InterestInPortalPromo';
 import { DismissPortalPromo } from '@application/use-cases/portal/DismissPortalPromo';
+import { ListPortalBenefits } from '@application/use-cases/portal/ListPortalBenefits';
 import {
   InvalidPortalCredentialsError,
   InvalidPortalRefreshTokenError,
@@ -96,6 +97,9 @@ export interface PortalRouterDeps {
   getPortalPromo?: GetPortalPromo;
   interestInPortalPromo?: InterestInPortalPromo;
   dismissPortalPromo?: DismissPortalPromo;
+
+  // ── portal-benefits — pestaña Catálogo (Disponibles/Activados) ─────────────
+  listPortalBenefits?: ListPortalBenefits;
 }
 
 /**
@@ -742,6 +746,29 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
             return;
           }
           res.status(204).send();
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── portal-benefits — pestaña Catálogo (Disponibles/Activados) ─────────────
+  // Ruta estática (`/benefits`), sin colisión con `/promos*`. Devuelve el
+  // objeto compuesto TAL CUAL (sin envelope `{data}`) — no es una colección,
+  // es un recurso con dos colecciones adentro, mismo criterio que `GET /me`.
+  if (deps.listPortalBenefits) {
+    const listPortalBenefits = deps.listPortalBenefits;
+    router.get(
+      '/benefits',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await listPortalBenefits.execute(clientId);
+          res.status(200).json(result);
         } catch (err) {
           next(err);
         }
