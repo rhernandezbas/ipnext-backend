@@ -23,8 +23,11 @@ ONU a mano. Reduce el motivo de contacto más frecuente después de "no tengo in
   el usuario (declaraba 4 puertos siendo dual-band). Bridges (~1.830) = 0 puertos ⇒ no aplica.
 - **Lectura**: tras escribir vía TR-069 el SSID se lee en `get_onu_details` — la app puede MOSTRAR
   el nombre actual una vez que lo gestionamos nosotros.
-- **Hosts conectados: NO hay endpoint** (barridos los 115; las MACs del full-status son del propio
-  ONT — NAT esconde la LAN). Ver §Fuera de alcance.
+- **Hosts conectados: SÍ hay endpoint** — `GET /api/onu/get_onu_router_hosts/{sn}` devuelve la
+  tabla completa (HostName, IP, MAC, interfaz 802.11/cable, `Active`, vendor). Verificado en vivo
+  contra la ONU de prueba. ⚠️ Un primer barrido por keywords lo dio por inexistente porque busco
+  `connected|device` y el endpoint se llama `router_hosts` — quedo la lista completa de 115
+  impresa como método: ante un "no existe", imprimir TODO, no confiar en el filtro.
 
 ## Reglas (aprobadas por el usuario)
 
@@ -59,9 +62,9 @@ ONU a mano. Reduce el motivo de contacto más frecuente después de "no tengo in
 
 ## Fuera de alcance (decidido)
 
-- **Dispositivos conectados (hosts)**: el dato vive en el ACS de SmartOLT y no está expuesto por
-  API. Camino barato: pedir el endpoint a soporte. Camino caro: ACS propio (GenieACS) — **TRAMPA
-  DOCUMENTADA**: un ONT habla con UN solo ACS ⇒ migrar rompe el set_wifi de SmartOLT; es una
-  bifurcación total, no un agregado. Se decide sólo si soporte dice no y los hosts pesan.
+- ~~Dispositivos conectados~~ → **ENTRÓ AL SCOPE**: `get_onu_router_hosts` lo resuelve por
+  SmartOLT (ver §Evidencia). La bifurcación GenieACS queda descartada: no hace falta ACS propio
+  para nada de este epic. En la app: "N dispositivos conectados" (`Active=true`) + lista con
+  nombre/tipo; en Prominense staff: la tabla completa con IP/MAC.
 - Equipos no-Huawei / no-fibra (Vsol/"670" con 2 puertos: investigar aparte).
 - Descuentos/débito (viven en GR; otro dominio).
