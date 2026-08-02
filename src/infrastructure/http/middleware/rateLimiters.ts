@@ -397,3 +397,40 @@ export function createPortalWifiUpdateRateLimiter(opts: PortalWifiUpdateRateLimi
     },
   });
 }
+
+/**
+ * portal-equipment-reboot — rate limit DURO y PROPIO de
+ * `POST /api/portal/equipment/:contractId/reboot`. Un reinicio de la ONU
+ * corta el servicio del cliente ~2 minutos (OMCI reset) — MUCHO más caro que
+ * un cambio de WiFi (que no corta nada). Sin este techo, un loop de la app (bug
+ * de UI, botón que reintenta solo) o un cliente frustrado tocando "reiniciar"
+ * a repetición es un DoS AUTOINFLIGIDO: cada intento vuelve a tirar la
+ * conexión justo cuando el reinicio anterior todavía no terminó de levantar.
+ * 2/hora por cuenta — deliberadamente MÁS estricto que `createPortalWifiUpdateRateLimiter`
+ * (5/hora): dos intentos alcanzan de sobra para el flujo real ("reinicio,
+ * esperá 2 minutos, si sigue caído abrí un reclamo") sin abrir la puerta al
+ * loop. Mismo keying (cuenta autenticada, IP como fallback defensivo).
+ */
+export interface PortalEquipmentRebootRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_PORTAL_EQUIPMENT_REBOOT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_PORTAL_EQUIPMENT_REBOOT_LIMIT = 2;
+
+export function createPortalEquipmentRebootRateLimiter(opts: PortalEquipmentRebootRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_PORTAL_EQUIPMENT_REBOOT_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_PORTAL_EQUIPMENT_REBOOT_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: keyByPortalAccountOrIp,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Demasiados reinicios de equipo en poco tiempo. Probá de nuevo más tarde.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}

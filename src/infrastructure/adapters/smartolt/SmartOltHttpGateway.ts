@@ -313,6 +313,14 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
     await this.postSetWifiPort(sn, input.port, input.ssid, input.password);
   }
 
+  /**
+   * portal-equipment-reboot — POST onu/reboot/<sn> (skill smartolt-ipnext).
+   * Sin params extra, mismo patrón que `allowRemoteWanAccess`.
+   */
+  async reboot(sn: string): Promise<void> {
+    await this.post(`onu/reboot/${encodeURIComponent(sn)}`, new URLSearchParams());
+  }
+
   /** POST onu/set_wifi_port_lan/<sn> — SIEMPRE WPA2, compartido por `setWifi` y `setWifiBand`. */
   private async postSetWifiPort(sn: string, port: string, ssid: string, password: string): Promise<void> {
     const form = new URLSearchParams();
