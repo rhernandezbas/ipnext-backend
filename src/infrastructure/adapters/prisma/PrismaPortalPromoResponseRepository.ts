@@ -65,4 +65,9 @@ export class PrismaPortalPromoResponseRepository implements PortalPromoResponseR
     });
     return rows.map((r) => r.promoId);
   }
+
+  async listByClient(clientId: string): Promise<PortalPromoResponse[]> {
+    const rows = await prisma.portalPromoResponse.findMany({ where: { clientId } });
+    return rows.map(toEntity);
+  }
 }
