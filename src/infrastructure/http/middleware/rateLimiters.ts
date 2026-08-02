@@ -363,3 +363,37 @@ export function createPortalTicketMessageSendRateLimiter(opts: PortalTicketMessa
     },
   });
 }
+
+/**
+ * wifi-self-service (F0) — rate limit PROPIO de `PUT /api/portal/wifi/:contractId`.
+ * Cada escritura reinicia la radio del cliente (proposal.md F0: "un cambio de
+ * WiFi reinicia la radio — no puede ser spammeable" + design.md §6 "Rate
+ * limit de creación (ej. 5/hora por cuenta)" del molde de tickets). 5/hora por
+ * cuenta — igual de estricto que `createPortalTicketCreateRateLimiter` (abrir
+ * un reclamo también es un evento raro); un cliente legítimo no cambia su
+ * WiFi más de un puñado de veces por hora. Mismo keying (cuenta autenticada,
+ * IP como fallback defensivo).
+ */
+export interface PortalWifiUpdateRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_PORTAL_WIFI_UPDATE_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_PORTAL_WIFI_UPDATE_LIMIT = 5;
+
+export function createPortalWifiUpdateRateLimiter(opts: PortalWifiUpdateRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_PORTAL_WIFI_UPDATE_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_PORTAL_WIFI_UPDATE_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: keyByPortalAccountOrIp,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Demasiados cambios de WiFi en poco tiempo. Probá de nuevo más tarde.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}
