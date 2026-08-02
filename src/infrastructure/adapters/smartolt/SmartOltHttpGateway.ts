@@ -41,14 +41,17 @@ function defaultSleep(ms: number): Promise<void> {
 /**
  * wifi-self-service (F0) — shape crudo de GET onu/get_onu_details/<sn>.
  *
- * ⚠ NO RE-VERIFICADO EN VIVO en esta sesión — sigue la especificación de
- * CAMPOS de dominio del proposal (found/onuType/online/tr069Enabled/bands).
- * Aislado en esta función para que ajustar nombres de campo tras un dry-run
- * real sea un cambio de una función — mismo patrón que `toUnconfiguredOnu`.
+ * ✅ VERIFICADO CONTRA EL PAYLOAD REAL del experimento 2026-08-02 (ONU
+ * HWTC189C07AA): el wrapper es `onu_details` (NO `response` como los otros
+ * endpoints de este gateway), cada puerto trae `admin_state:
+ * 'Enabled'|'Disabled'` (NO `enable`), y `status: 'Online'`. El primer draft
+ * de esta función usaba `response`/`enable` — con eso la elegibilidad daba
+ * `found:false` SIEMPRE en prod, con todos los tests verdes (fixtures
+ * inventados). Los fixtures del test ahora son el payload real.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toOnuWifiStatus(raw: any): OnuWifiStatus {
-  const r = raw?.response as Record<string, unknown> | null | undefined;
+  const r = raw?.onu_details as Record<string, unknown> | null | undefined;
   if (r == null || typeof r !== 'object') {
     return { found: false, onuType: null, online: false, tr069Enabled: false, bands: [] };
   }
@@ -68,7 +71,11 @@ function toOnuWifiStatus(raw: any): OnuWifiStatus {
     .map((p) => ({
       port: String(p['port'] ?? ''),
       ssid: p['ssid'] != null && p['ssid'] !== '' ? String(p['ssid']) : null,
-      enabled: typeof p['enable'] === 'string' ? p['enable'].toLowerCase() === 'enabled' : Boolean(p['enable']),
+      // Payload real: `admin_state: 'Enabled'|'Disabled'` — no existe `enable`.
+      enabled:
+        typeof p['admin_state'] === 'string'
+          ? p['admin_state'].toLowerCase() === 'enabled'
+          : false,
     }))
     .filter((p) => p.port !== '');
 
@@ -85,11 +92,10 @@ function toOnuWifiStatus(raw: any): OnuWifiStatus {
  * wifi-self-service (F0) — shape crudo de una fila de
  * GET onu/get_onu_router_hosts/<sn>.
  *
- * `InterfaceType === '802.11' -> wifi` es LITERAL del proposal (verificado en
- * vivo). HostName/IPAddress/MACAddress/Active/Vendor siguen la convención
- * TR-069 (Device.Hosts.Host.{i}.*) que SmartOLT expone tal cual sobre este
- * endpoint — NO re-verificado en esta sesión, mismo criterio "ajustar en una
- * función" que `toOnuWifiStatus`.
+ * ✅ VERIFICADO CONTRA EL PAYLOAD REAL (experimento 2026-08-02): las claves
+ * son `HostName`/`IPAddress`/`MACAddress`/`InterfaceType`/`Active` y el
+ * vendor viene como **`VendorClassID`** (ej. "android-dhcp-14") — no existe
+ * ninguna clave `Vendor`. `InterfaceType === '802.11' -> wifi`.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function toRouterHost(raw: any): RouterHost {
@@ -100,7 +106,7 @@ function toRouterHost(raw: any): RouterHost {
   const hostNameRaw = raw?.HostName ?? raw?.hostname;
   const ipRaw = raw?.IPAddress ?? raw?.ip;
   const macRaw = raw?.MACAddress ?? raw?.mac;
-  const vendorRaw = raw?.Vendor ?? raw?.vendor;
+  const vendorRaw = raw?.VendorClassID ?? raw?.vendor;
   return {
     hostName: hostNameRaw != null && hostNameRaw !== '' ? String(hostNameRaw) : null,
     ip: ipRaw != null && ipRaw !== '' ? String(ipRaw) : null,
@@ -363,13 +369,22 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
     this.wifiStatusCache.delete(sn);
   }
 
-  /** GET onu/get_onu_router_hosts/<sn>. NO cacheado — a diferencia del status, no se llama seguido. */
+  /**
+   * GET onu/get_onu_router_hosts/<sn>. NO cacheado — a diferencia del status,
+   * no se llama seguido.
+   *
+   * Payload REAL (experimento 2026-08-02): `{ response: { hostlist: { "1":
+   * {...}, "2": {...} } } }` — un OBJETO indexado por string, NO un array. El
+   * primer draft esperaba `response` como array y devolvía `[]` siempre.
+   */
   async getRouterHosts(sn: string): Promise<RouterHost[]> {
     const data = await this.call<unknown>(() =>
       this.http.get(`onu/get_onu_router_hosts/${encodeURIComponent(sn)}`, { headers: this.headers() }),
     );
-    const rows = (data as { response?: unknown } | null)?.response;
-    return (Array.isArray(rows) ? rows : [])
+    const response = (data as { response?: unknown } | null)?.response;
+    const hostlist = (response as { hostlist?: unknown } | null)?.hostlist;
+    const rows = hostlist != null && typeof hostlist === 'object' ? Object.values(hostlist) : [];
+    return rows
       .filter((r: unknown): r is Record<string, unknown> => typeof r === 'object' && r !== null)
       .map(toRouterHost);
   }

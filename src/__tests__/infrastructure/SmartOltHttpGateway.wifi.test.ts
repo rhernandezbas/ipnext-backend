@@ -4,14 +4,15 @@
  * transport fake que `SmartOltHttpGateway.test.ts` — REGLA DURA: jamás se toca
  * ipnext.smartolt.com.
  *
- * ⚠ SHAPE NO RE-VERIFICADO EN VIVO en esta sesión (F0 es un cambio de código,
- * sin acceso a la API real). Sigue LITERALMENTE la especificación de CAMPOS
- * de dominio del proposal (found/onuType/online/tr069Enabled/bands con
- * port/ssid/enabled; hosts con InterfaceType==='802.11' -> wifi, tal cual
- * dicta el proposal). El mapeo crudo->dominio vive en funciones AISLADAS
- * (toOnuWifiStatus/toRouterHost) para poder ajustar nombres de campo tras un
- * dry-run real con un cambio de una función — mismo patrón que "PARAMS SIN
- * VERIFICAR" ya usado acá para authorizeOnu.
+ * SHAPES VERIFICADOS CONTRA LOS PAYLOADS REALES del experimento
+ * 2026-08-02 (ONU HWTC189C07AA): wrapper `onu_details` (no `response`),
+ * puertos con `admin_state` (no `enable`), hosts como `response.hostlist`
+ * (objeto indexado por string, no array) y vendor en `VendorClassID`.
+ *
+ * El draft original uso fixtures inventados y certificaba un mapper que en
+ * prod devolvia found:false y hosts [] SIEMPRE — la clase exacta de bug
+ * "tests verdes, feature inerte". Si SmartOLT cambia el shape, estos
+ * fixtures son la referencia de QUE devolvia el 2026-08-02.
  */
 import { SmartOltHttpGateway } from '@infrastructure/adapters/smartolt/SmartOltHttpGateway';
 import { OltProvisioningError } from '@domain/errors/smartolt';
@@ -80,22 +81,29 @@ function buildGateway(opts?: {
   };
 }
 
+// PAYLOAD REAL del experimento 2026-08-02 contra la ONU de prueba (recortado a
+// los campos que el mapper consume + los hermanos que confunden). Claves
+// verificadas EN VIVO: wrapper `onu_details` (no `response`), `status:
+// 'Online'`, puertos con `admin_state` (no `enable`) y `auth_mode`/`mode` de
+// ruido alrededor. El fixture anterior era inventado y certificaba un mapper
+// que en prod devolvía found:false SIEMPRE.
 const RAW_DETAILS_8_PORTS = {
   status: true,
-  response: {
+  response_code: 'success',
+  onu_details: {
     sn: 'HWTC189C07AA',
-    onu_type: 'HG8145V5',
-    state: 'Online',
+    onu_type_name: 'HG8145V5',
+    status: 'Online',
     tr069: 'Enabled',
     wifi_ports: [
-      { port: 'wifi_0/1', ssid: 'Familia_Perez', enable: 'Enabled' },
-      { port: 'wifi_0/2', ssid: null, enable: 'Disabled' },
-      { port: 'wifi_0/3', ssid: null, enable: 'Disabled' },
-      { port: 'wifi_0/4', ssid: null, enable: 'Disabled' },
-      { port: 'wifi_0/5', ssid: 'Familia_Perez_5G', enable: 'Enabled' },
-      { port: 'wifi_0/6', ssid: null, enable: 'Disabled' },
-      { port: 'wifi_0/7', ssid: null, enable: 'Disabled' },
-      { port: 'wifi_0/8', ssid: null, enable: 'Disabled' },
+      { port: 'wifi_0/1', admin_state: 'Enabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: 'Familia_Perez', password: null },
+      { port: 'wifi_0/2', admin_state: 'Disabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: null, password: null },
+      { port: 'wifi_0/3', admin_state: 'Disabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: null, password: null },
+      { port: 'wifi_0/4', admin_state: 'Disabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: null, password: null },
+      { port: 'wifi_0/5', admin_state: 'Enabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: 'Familia_Perez_5G', password: null },
+      { port: 'wifi_0/6', admin_state: 'Disabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: null, password: null },
+      { port: 'wifi_0/7', admin_state: 'Disabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: null, password: null },
+      { port: 'wifi_0/8', admin_state: 'Disabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: null, password: null },
     ],
   },
 };
@@ -128,7 +136,7 @@ describe('SmartOltHttpGateway — getOnuWifiStatus', () => {
     const { gateway, transport } = buildGateway();
     transport.responses.set('onu/get_onu_details/HWTC1', {
       status: true,
-      response: { ...RAW_DETAILS_8_PORTS.response, tr069: 'Disabled' },
+      onu_details: { ...RAW_DETAILS_8_PORTS.onu_details, tr069: 'Disabled' },
     });
     const status = await gateway.getOnuWifiStatus('HWTC1');
     expect(status.tr069Enabled).toBe(false);
@@ -138,7 +146,7 @@ describe('SmartOltHttpGateway — getOnuWifiStatus', () => {
     const { gateway, transport } = buildGateway();
     transport.responses.set('onu/get_onu_details/HWTC2', {
       status: true,
-      response: { ...RAW_DETAILS_8_PORTS.response, wifi_ports: [] },
+      onu_details: { ...RAW_DETAILS_8_PORTS.onu_details, wifi_ports: [] },
     });
     const status = await gateway.getOnuWifiStatus('HWTC2');
     expect(status.bands).toEqual([]);
@@ -237,19 +245,38 @@ describe('SmartOltHttpGateway — getRouterHosts', () => {
   it('GET onu/get_onu_router_hosts/<sn>; mapea InterfaceType 802.11 -> wifi, resto -> ethernet', async () => {
     const { gateway, transport } = buildGateway();
     transport.responses.set('onu/get_onu_router_hosts/HWTC189C07AA', {
+      // PAYLOAD REAL del experimento 2026-08-02: `response.hostlist` es un
+      // OBJETO indexado por string (no un array), y el vendor viene como
+      // `VendorClassID`. El fixture anterior (array + `Vendor`) era inventado
+      // y certificaba un parser que en prod devolvía [] SIEMPRE.
       status: true,
-      response: [
-        { HostName: 'iPhone-de-Juan', IPAddress: '192.168.1.5', MACAddress: 'AA:BB:CC:00:11:22', InterfaceType: '802.11', Active: true, Vendor: 'Apple' },
-        { HostName: 'PC-Escritorio', IPAddress: '192.168.1.10', MACAddress: 'AA:BB:CC:00:11:33', InterfaceType: 'Ethernet', Active: false, Vendor: null },
-      ],
+      response_code: 'success',
+      response: {
+        hostlist: {
+          '1': {
+            Active: false, AddressSource: 'DHCP', ClientID: '', HostName: 'A13-de-Blanca',
+            IPAddress: '10.22.22.9', InterfaceType: '802.11',
+            Layer2Interface: 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1',
+            LeaseTimeRemaining: 2007, MACAddress: '9e:c3:9d:2f:f6:b6',
+            UserClassID: '', VendorClassID: 'android-dhcp-14', X_HW_Stats: null,
+          },
+          '2': {
+            Active: true, AddressSource: 'DHCP', ClientID: '', HostName: 'PC-Escritorio',
+            IPAddress: '10.22.22.77', InterfaceType: 'Ethernet',
+            Layer2Interface: 'InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1',
+            LeaseTimeRemaining: 57955, MACAddress: '8e:4e:b9:63:64:4a',
+            UserClassID: '', VendorClassID: '', X_HW_Stats: null,
+          },
+        },
+      },
     });
 
     const hosts = await gateway.getRouterHosts('HWTC189C07AA');
 
     expect(transport.calls[0]).toMatchObject({ method: 'get', url: 'onu/get_onu_router_hosts/HWTC189C07AA' });
     expect(hosts).toEqual([
-      { hostName: 'iPhone-de-Juan', ip: '192.168.1.5', mac: 'AA:BB:CC:00:11:22', interfaceType: 'wifi', active: true, vendor: 'Apple' },
-      { hostName: 'PC-Escritorio', ip: '192.168.1.10', mac: 'AA:BB:CC:00:11:33', interfaceType: 'ethernet', active: false, vendor: null },
+      { hostName: 'A13-de-Blanca', ip: '10.22.22.9', mac: '9e:c3:9d:2f:f6:b6', interfaceType: 'wifi', active: false, vendor: 'android-dhcp-14' },
+      { hostName: 'PC-Escritorio', ip: '10.22.22.77', mac: '8e:4e:b9:63:64:4a', interfaceType: 'ethernet', active: true, vendor: null },
     ]);
   });
 
