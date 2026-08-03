@@ -46,6 +46,12 @@ export class GetPortalWifiStatus {
       eligible: true,
       bands: result.bands.map((b) => ({ band: b.band, ssid: b.ssid, password: passwordByPort.get(b.port) ?? null })),
       connectedCount,
+      // EPIC v3 (wifi de visitas) — ADITIVO: siempre las DOS bandas, sin el
+      // puerto crudo (la app no conoce puertos SmartOLT, mismo criterio que
+      // ocultar la sn). Solo presente cuando eligible.
+      guest: {
+        bands: result.guest.map((g) => ({ band: g.band, available: g.available, ssid: g.ssid, enabled: g.enabled })),
+      },
     };
   }
 }

@@ -129,7 +129,37 @@ describe('SmartOltHttpGateway — getOnuWifiStatus', () => {
         { band: '2.4', port: 'wifi_0/1', ssid: 'Familia_Perez', enabled: true },
         { band: '5', port: 'wifi_0/5', ssid: 'Familia_Perez_5G', enabled: true },
       ],
+      // EPIC v3 (wifi de visitas) — guest derivado de los MISMOS puertos del
+      // template (visita 2.4 = wifi_0/2, visita 5 = wifi_0/6). ADITIVO: bands
+      // arriba no cambió de shape.
+      guest: [
+        { band: '2.4', port: 'wifi_0/2', available: true, ssid: null, enabled: false },
+        { band: '5', port: 'wifi_0/6', available: true, ssid: null, enabled: false },
+      ],
     });
+  });
+
+  it('EPIC v3 — template SIN puertos 5GHz (evidencia HWTCA92F96B1 2026-08-03) -> guest 5 available:false', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_details/HWTCA92F96B1', {
+      status: true,
+      response_code: 'success',
+      onu_details: {
+        ...RAW_DETAILS_8_PORTS.onu_details,
+        sn: 'HWTCA92F96B1',
+        // Payload real 2026-08-03: el ONU type expone SOLO los puertos registrados.
+        wifi_ports: [
+          { port: 'wifi_0/1', admin_state: 'Enabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: 'Luis', password: null },
+          { port: 'wifi_0/2', admin_state: 'Disabled', mode: 'LAN', dhcp: 'No control', auth_mode: 'wpa2', ssid: null, password: null },
+        ],
+      },
+    });
+
+    const status = await gateway.getOnuWifiStatus('HWTCA92F96B1');
+    expect(status.guest).toEqual([
+      { band: '2.4', port: 'wifi_0/2', available: true, ssid: null, enabled: false },
+      { band: '5', port: 'wifi_0/6', available: false, ssid: null, enabled: false },
+    ]);
   });
 
   it('tr069 Disabled -> tr069Enabled: false', async () => {
@@ -159,7 +189,18 @@ describe('SmartOltHttpGateway — getOnuWifiStatus', () => {
       error: 'ONU not found',
     });
     const status = await gateway.getOnuWifiStatus('DESCONOCIDO');
-    expect(status).toEqual({ found: false, onuType: null, online: false, tr069Enabled: false, bands: [] });
+    expect(status).toEqual({
+      found: false,
+      onuType: null,
+      online: false,
+      tr069Enabled: false,
+      bands: [],
+      // EPIC v3 — guest SIEMPRE presente en el adapter real; ONU desconocida = ambas no disponibles.
+      guest: [
+        { band: '2.4', port: 'wifi_0/2', available: false, ssid: null, enabled: false },
+        { band: '5', port: 'wifi_0/6', available: false, ssid: null, enabled: false },
+      ],
+    });
   });
 
   it('envs ausentes -> OltProvisioningError not_configured (SÍ propaga, no lo traga found:false)', async () => {
@@ -241,6 +282,78 @@ describe('SmartOltHttpGateway — setWifiBand', () => {
   });
 });
 
+/**
+ * EPIC v3 (wifi de visitas) — `shutdownWifiPort`: POST onu/shutdown_wifi_port/<sn>
+ * con form `wifi_port` (único param — verificado contra la colección Postman
+ * oficial de SmartOLT, 2026-08-03). Invalida la cache de `getOnuWifiStatus`
+ * de ESA sn: el próximo GET tiene que ver `enabled:false`, no el snapshot stale.
+ */
+describe('SmartOltHttpGateway — shutdownWifiPort', () => {
+  it('POST onu/shutdown_wifi_port/<sn> con wifi_port como ÚNICO param del form', async () => {
+    const { gateway, transport } = buildGateway();
+
+    await gateway.shutdownWifiPort('HWTC189C07AA', 'wifi_0/2');
+
+    const call = transport.calls[0]!;
+    expect(call).toMatchObject({ method: 'post', url: 'onu/shutdown_wifi_port/HWTC189C07AA', headers: { 'X-Token': 'tok-123' } });
+    const form = call.body as URLSearchParams;
+    expect(form.get('wifi_port')).toBe('wifi_0/2');
+    expect([...form.keys()]).toEqual(['wifi_port']);
+  });
+
+  it('invalida la cache de getOnuWifiStatus de ESA sn (el próximo GET va a la red)', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_details/HWTC189C07AA', RAW_DETAILS_8_PORTS);
+
+    await gateway.getOnuWifiStatus('HWTC189C07AA'); // 1 GET, cachea
+    await gateway.shutdownWifiPort('HWTC189C07AA', 'wifi_0/2');
+    await gateway.getOnuWifiStatus('HWTC189C07AA'); // cache invalidada -> 2do GET
+
+    const getCalls = transport.calls.filter((c) => c.method === 'get');
+    expect(getCalls).toHaveLength(2);
+  });
+
+  it('NO invalida la cache de OTRA sn', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_details/SN_A', RAW_DETAILS_8_PORTS);
+
+    await gateway.getOnuWifiStatus('SN_A');
+    await gateway.shutdownWifiPort('SN_B', 'wifi_0/2');
+    await gateway.getOnuWifiStatus('SN_A'); // sigue cacheado
+
+    const getCalls = transport.calls.filter((c) => c.method === 'get');
+    expect(getCalls).toHaveLength(1);
+  });
+
+  it('SmartOLT rechaza (status false) -> OltProvisioningError rejected', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/shutdown_wifi_port/HWTC1', { status: false, error: 'Invalid parameters' });
+    await expect(gateway.shutdownWifiPort('HWTC1', 'wifi_0/6')).rejects.toMatchObject({ reason: 'rejected' });
+  });
+
+  /**
+   * Fix wave S3 — apagar una red saca de la ONU a los devices asociados a ese
+   * SSID: la lista de hosts cacheada quedaba sirviendo el snapshot pre-shutdown
+   * hasta 60s (misma disciplina que `reboot`, que ya invalidaba hosts).
+   */
+  it('S3: invalida TAMBIÉN la cache de getRouterHosts de ESA sn (y no la de otra)', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_router_hosts/SN_A', { status: true, response: { hostlist: {} } });
+    transport.responses.set('onu/get_onu_router_hosts/SN_B', { status: true, response: { hostlist: {} } });
+
+    await gateway.getRouterHosts('SN_A'); // cachea SN_A
+    await gateway.getRouterHosts('SN_B'); // cachea SN_B
+    await gateway.shutdownWifiPort('SN_A', 'wifi_0/2');
+    await gateway.getRouterHosts('SN_A'); // cache invalidada -> pega la red
+    await gateway.getRouterHosts('SN_B'); // sigue cacheado -> NO pega la red
+
+    const hostCalls = transport.calls.filter(
+      (c) => c.method === 'get' && c.url.startsWith('onu/get_onu_router_hosts'),
+    );
+    expect(hostCalls).toHaveLength(3); // SN_A, SN_B, SN_A de nuevo
+  });
+});
+
 describe('SmartOltHttpGateway — getRouterHosts', () => {
   it('GET onu/get_onu_router_hosts/<sn>; mapea InterfaceType 802.11 -> wifi, resto -> ethernet', async () => {
     const { gateway, transport } = buildGateway();
@@ -275,9 +388,34 @@ describe('SmartOltHttpGateway — getRouterHosts', () => {
 
     expect(transport.calls[0]).toMatchObject({ method: 'get', url: 'onu/get_onu_router_hosts/HWTC189C07AA' });
     expect(hosts).toEqual([
-      { hostName: 'A13-de-Blanca', ip: '10.22.22.9', mac: '9e:c3:9d:2f:f6:b6', interfaceType: 'wifi', active: false, vendor: 'android-dhcp-14' },
-      { hostName: 'PC-Escritorio', ip: '10.22.22.77', mac: '8e:4e:b9:63:64:4a', interfaceType: 'ethernet', active: true, vendor: null },
+      // EPIC v3 (red por dispositivo) — `wlanIndex` parseado de Layer2Interface
+      // (`...WLANConfiguration.1` -> 1). Ethernet apunta a LANEthernetInterfaceConfig -> null.
+      { hostName: 'A13-de-Blanca', ip: '10.22.22.9', mac: '9e:c3:9d:2f:f6:b6', interfaceType: 'wifi', active: false, vendor: 'android-dhcp-14', wlanIndex: 1 },
+      { hostName: 'PC-Escritorio', ip: '10.22.22.77', mac: '8e:4e:b9:63:64:4a', interfaceType: 'ethernet', active: true, vendor: null, wlanIndex: null },
     ]);
+  });
+
+  it('EPIC v3 — wlanIndex: WLANConfiguration.5 -> 5 (banda 5GHz principal); Layer2Interface ausente -> null', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_router_hosts/HWTC2', {
+      status: true,
+      response: {
+        hostlist: {
+          '1': {
+            Active: true, HostName: 'TV-Living', IPAddress: '10.22.22.10', InterfaceType: '802.11',
+            Layer2Interface: 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.5',
+            MACAddress: 'aa:bb:cc:dd:ee:ff', VendorClassID: '',
+          },
+          '2': {
+            Active: true, HostName: 'Sin-L2', IPAddress: '10.22.22.11', InterfaceType: '802.11',
+            MACAddress: '11:22:33:44:55:66', VendorClassID: '',
+          },
+        },
+      },
+    });
+
+    const hosts = await gateway.getRouterHosts('HWTC2');
+    expect(hosts.map((h) => h.wlanIndex)).toEqual([5, null]);
   });
 
   it('response ausente/no-array -> lista vacía (defensivo)', async () => {

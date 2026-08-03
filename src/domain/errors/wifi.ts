@@ -36,6 +36,20 @@ export class WifiNotEligibleError extends DomainError {
   }
 }
 
+/**
+ * EPIC v3 (wifi de visitas) — la banda pedida NO tiene puerto de visita en el
+ * template "ONU type" de SmartOLT (evidencia 2026-08-03: HWTCA92F96B1 expone
+ * SOLO wifi_0/1..2 — sin 5GHz). 409, MISMO criterio que `WifiNotEligibleError`
+ * (request bien formado, el ESTADO actual no lo permite): la ruta lo mapea
+ * inline y el gateway JAMÁS se toca cuando esto se lanza.
+ */
+export class GuestBandUnavailableError extends DomainError {
+  constructor(public readonly band: '2.4' | '5') {
+    super(`El WiFi de visitas no está disponible en la banda ${band} para este equipo`, 'GUEST_BAND_UNAVAILABLE');
+    this.name = 'GuestBandUnavailableError';
+  }
+}
+
 /** ssid/password fuera de los límites de forma (largo, chars de control, puerto inválido). */
 export class WifiValidationError extends DomainError {
   constructor(message: string) {

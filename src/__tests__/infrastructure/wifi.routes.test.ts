@@ -87,6 +87,11 @@ class FakeAdminWifi implements WifiManagementPort {
     this.guard();
     return this.hostsBySn.get(sn) ?? [];
   }
+
+  // EPIC v3 (wifi de visitas) — requerido por WifiManagementPort; el admin no lo usa.
+  async shutdownWifiPort(): Promise<void> {
+    this.guard();
+  }
 }
 
 class FakeProvisioning implements Pick<OltProvisioningGateway, 'setMgmtIp' | 'enableTr069'> {
@@ -184,7 +189,7 @@ describe('GET /api/wifi/onu/:serial — admin, wifi.read', () => {
     const fx = await buildApp();
     fx.wifi.statusBySn.set('HWTC189C07AA', ONLINE_STATUS);
     fx.wifi.hostsBySn.set('HWTC189C07AA', [
-      { hostName: 'iPhone', ip: '192.168.1.5', mac: 'AA:BB:CC', interfaceType: 'wifi', active: true, vendor: 'Apple' },
+      { hostName: 'iPhone', ip: '192.168.1.5', mac: 'AA:BB:CC', interfaceType: 'wifi', active: true, vendor: 'Apple', wlanIndex: 1 },
     ]);
 
     const res = await asUser(request(fx.app).get('/api/wifi/onu/HWTC189C07AA'), fx.manageUserId);

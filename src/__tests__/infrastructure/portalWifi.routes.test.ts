@@ -117,6 +117,10 @@ class FakeWifiManagementPort implements WifiManagementPort {
     if (this.hostsShouldFailForSn.has(sn)) throw new Error('SmartOLT hosts timeout');
     return this.hostsBySn.get(sn) ?? [];
   }
+
+  // EPIC v3 (wifi de visitas) — requerido por WifiManagementPort; este suite no lo ejercita
+  // (los endpoints guest se cubren en portalWifiGuest.routes.test.ts con el fake con estado).
+  async shutdownWifiPort(): Promise<void> {}
 }
 
 function buildStack(opts?: {
@@ -301,10 +305,10 @@ describe('wifi-self-service (F0) — portal /api/portal/wifi', () => {
     await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
     wifi.statusBySn.set('HWTC189C07AA', ELIGIBLE_STATUS);
     wifi.hostsBySn.set('HWTC189C07AA', [
-      { hostName: 'A', ip: '1.1.1.1', mac: 'AA', interfaceType: 'wifi', active: true, vendor: null },
-      { hostName: 'B', ip: '1.1.1.2', mac: 'BB', interfaceType: 'wifi', active: false, vendor: null },
-      { hostName: 'C', ip: '1.1.1.3', mac: 'CC', interfaceType: 'ethernet', active: true, vendor: null },
-      { hostName: 'D', ip: '1.1.1.4', mac: 'DD', interfaceType: 'wifi', active: false, vendor: null },
+      { hostName: 'A', ip: '1.1.1.1', mac: 'AA', interfaceType: 'wifi', active: true, vendor: null, wlanIndex: 1 },
+      { hostName: 'B', ip: '1.1.1.2', mac: 'BB', interfaceType: 'wifi', active: false, vendor: null, wlanIndex: 1 },
+      { hostName: 'C', ip: '1.1.1.3', mac: 'CC', interfaceType: 'ethernet', active: true, vendor: null, wlanIndex: null },
+      { hostName: 'D', ip: '1.1.1.4', mac: 'DD', interfaceType: 'wifi', active: false, vendor: null, wlanIndex: 5 },
     ]);
 
     const res = await request(app).get('/api/portal/wifi/c1').set('Authorization', `Bearer ${token}`);
@@ -333,12 +337,13 @@ describe('wifi-self-service (F0) — portal /api/portal/wifi', () => {
     await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
     wifi.statusBySn.set('HWTC189C07AA', ELIGIBLE_STATUS);
     wifi.hostsBySn.set('HWTC189C07AA', [
-      { hostName: 'iPhone', ip: '192.168.1.5', mac: 'AA:BB:CC', interfaceType: 'wifi', active: true, vendor: 'Apple' },
+      { hostName: 'iPhone', ip: '192.168.1.5', mac: 'AA:BB:CC', interfaceType: 'wifi', active: true, vendor: 'Apple', wlanIndex: 1 },
     ]);
 
     const res = await request(app).get('/api/portal/wifi/c1/devices').set('Authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body.devices).toEqual([{ name: 'iPhone', interface: 'wifi', active: true }]);
+    // EPIC v3 — `wlanIndex` es ADITIVO; ip/mac SIGUEN afuera del portal.
+    expect(res.body.devices).toEqual([{ name: 'iPhone', interface: 'wifi', active: true, wlanIndex: 1 }]);
     expect(res.body.devices[0]).not.toHaveProperty('ip');
     expect(res.body.devices[0]).not.toHaveProperty('mac');
   });

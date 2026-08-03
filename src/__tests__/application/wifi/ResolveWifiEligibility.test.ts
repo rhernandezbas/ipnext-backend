@@ -89,7 +89,18 @@ describe('ResolveWifiEligibility', () => {
     const uc = new ResolveWifiEligibility(customers, inventory, wifi);
     const result = await uc.execute('client1', 'c1');
 
-    expect(result).toEqual({ eligible: true, sn: 'HWTC189C07AA', bands: ELIGIBLE_STATUS.bands });
+    expect(result).toEqual({
+      eligible: true,
+      sn: 'HWTC189C07AA',
+      bands: ELIGIBLE_STATUS.bands,
+      // EPIC v3 (wifi de visitas) — campo ADITIVO: el status del fake no trae
+      // `guest`, y la ausencia de dato cae al lado SEGURO (ambas bandas no
+      // disponibles) — jamás habilita una escritura por falta de información.
+      guest: [
+        { band: '2.4', port: 'wifi_0/2', available: false, ssid: null, enabled: false },
+        { band: '5', port: 'wifi_0/6', available: false, ssid: null, enabled: false },
+      ],
+    });
   });
 
   it('reason no_onu: sin ContractInstalledItem ONU activo (un ROUTER activo NO cuenta)', async () => {

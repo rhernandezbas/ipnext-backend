@@ -3,7 +3,9 @@
  * dominio. proposal.md §Evidencia "Puertos": wifi_0/1..4 = 2.4GHz, wifi_0/5..8
  * = 5GHz — la lista de puertos sale de la plantilla "ONU type" de SmartOLT, NO
  * del hardware. La banda "principal" de cada rango es el primer puerto
- * Enabled, o el primero del rango (`/1`, `/5`) si ninguno está enabled.
+ * Enabled ENTRE los candidatos a principal ({1,3,4} / {5,7,8} — los puertos de
+ * visita 2 y 6 quedan EXCLUIDOS, ver W1 abajo), o el primero del rango (`/1`,
+ * `/5`) si ninguno está enabled.
  *
  * Función PURA — nada de I/O acá. El adapter SmartOLT mapea el shape crudo de
  * la API a `RawWifiPort[]` antes de llamar esta función (separación adapter
@@ -34,6 +36,43 @@ function portNumber(port: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * EPIC v3 (wifi de visitas) — estado del puerto de VISITA de cada banda.
+ * Convención (skill smartolt-ipnext): visita 2.4 = wifi_0/2, visita 5 = wifi_0/6.
+ * `available` = el puerto de visita FIGURA en la lista de puertos del template
+ * "ONU type" — evidencia EN VIVO 2026-08-03 (ONU HWTCA92F96B1): el template
+ * puede exponer SOLO wifi_0/1..2, o sea que la disponibilidad se deriva
+ * DINÁMICAMENTE, nunca se asume. SIEMPRE devuelve las DOS bandas (la app lista
+ * ambas; `available:false` cuando el template no tiene el puerto).
+ *
+ * Extensión ADITIVA — `mapWifiPortsToBands` (arriba) NO cambia de shape: lo
+ * consume la elegibilidad y el contrato público del portal.
+ */
+export interface GuestWifiBandStatus {
+  band: '2.4' | '5';
+  /** Puerto de visita convencional de la banda ('wifi_0/2' | 'wifi_0/6') — aún cuando no está disponible. */
+  port: string;
+  available: boolean;
+  ssid: string | null;
+  enabled: boolean;
+}
+
+const GUEST_PORT_NUMBER: Record<'2.4' | '5', number> = { '2.4': 2, '5': 6 };
+
+/** W1 — los mismos puertos de visita, como lista para excluirlos del MAIN. */
+const GUEST_PORT_NUMBERS: readonly number[] = Object.values(GUEST_PORT_NUMBER);
+
+export function mapWifiPortsToGuest(rawPorts: RawWifiPort[]): GuestWifiBandStatus[] {
+  return (['2.4', '5'] as const).map((band) => {
+    const n = GUEST_PORT_NUMBER[band];
+    const port = `wifi_0/${n}`;
+    const found = rawPorts.find((p) => portNumber(p.port) === n);
+    return found
+      ? { band, port, available: true, ssid: found.ssid, enabled: found.enabled }
+      : { band, port, available: false, ssid: null, enabled: false };
+  });
+}
+
 export function mapWifiPortsToBands(rawPorts: RawWifiPort[]): WifiBandStatus[] {
   const bands: WifiBandStatus[] = [];
 
@@ -44,11 +83,25 @@ export function mapWifiPortsToBands(rawPorts: RawWifiPort[]): WifiBandStatus[] {
     });
     if (inRange.length === 0) continue;
 
+    // EPIC v3 fix wave W1 — los puertos de VISITA (wifi_0/2 y wifi_0/6) JAMÁS
+    // pueden ser la banda "principal". Antes nunca estaban enabled y el bug era
+    // latente; ahora el portal los enciende: con /1 apagado, el primer-enabled
+    // elegía /2 y el GET mostraba el SSID de visitas como "Mi WiFi", el PUT
+    // principal ESCRIBÍA sobre la red de visitas y el disable de visitas
+    // apagaba "la principal". El main se elige SOLO entre {1,3,4} / {5,7,8}.
+    const mainCandidates = inRange.filter((p) => {
+      const n = portNumber(p.port);
+      return n !== null && !GUEST_PORT_NUMBERS.includes(n);
+    });
+    // Template degenerado con SOLO el puerto de visita en el rango: no hay red
+    // principal posible — no se inventa una banda con el puerto de visitas.
+    if (mainCandidates.length === 0) continue;
+
     const firstPortNumber = range.ports[0];
     const main =
-      inRange.find((p) => p.enabled) ??
-      inRange.find((p) => portNumber(p.port) === firstPortNumber) ??
-      inRange[0];
+      mainCandidates.find((p) => p.enabled) ??
+      mainCandidates.find((p) => portNumber(p.port) === firstPortNumber) ??
+      mainCandidates[0];
 
     bands.push({ band: range.band, port: main.port, ssid: main.ssid, enabled: main.enabled });
   }

@@ -434,6 +434,40 @@ export function createPortalWifiUpdateRateLimiter(opts: PortalWifiUpdateRateLimi
 }
 
 /**
+ * EPIC v3 (clave de TV del portal) — rate limit PROPIO de
+ * `PUT /api/portal/tv/:contractId/password`, molde
+ * `createPortalWifiUpdateRateLimiter` (5/hora por cuenta). PROPIO y no
+ * compartido con el de WiFi a propósito: cada cambio acá pega en la plataforma
+ * TV de un TERCERO (PATCH al CUA de Gigared), una superficie de escritura
+ * distinta con presupuesto independiente — mismo razonamiento que separó
+ * `createPortalStoreOrderRateLimiter` del de tickets. Mismo keying (cuenta
+ * autenticada, IP como fallback defensivo).
+ */
+export interface PortalTvPasswordRateLimitOptions {
+  windowMs?: number;
+  limit?: number;
+}
+
+const DEFAULT_PORTAL_TV_PASSWORD_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_PORTAL_TV_PASSWORD_LIMIT = 5;
+
+export function createPortalTvPasswordRateLimiter(opts: PortalTvPasswordRateLimitOptions = {}): RequestHandler {
+  return rateLimit({
+    windowMs: opts.windowMs ?? DEFAULT_PORTAL_TV_PASSWORD_WINDOW_MS,
+    limit: opts.limit ?? DEFAULT_PORTAL_TV_PASSWORD_LIMIT,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: keyByPortalAccountOrIp,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({
+        error: 'Demasiados cambios de clave de TV en poco tiempo. Probá de nuevo más tarde.',
+        code: 'RATE_LIMITED',
+      });
+    },
+  });
+}
+
+/**
  * portal-equipment-reboot — rate limit DURO y PROPIO de
  * `POST /api/portal/equipment/:contractId/reboot`. Un reinicio de la ONU
  * corta el servicio del cliente ~2 minutos (OMCI reset) — MUCHO más caro que

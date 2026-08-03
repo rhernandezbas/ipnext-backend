@@ -7,7 +7,7 @@ import {
 } from '@domain/ports/OltProvisioningGateway';
 import { WifiManagementPort, OnuWifiStatus, SetWifiBandInput, RouterHost } from '@domain/ports/WifiManagementPort';
 import { OltProvisioningError } from '@domain/errors/smartolt';
-import { mapWifiPortsToBands, RawWifiPort } from '@domain/services/mapWifiPortsToBands';
+import { mapWifiPortsToBands, mapWifiPortsToGuest, RawWifiPort } from '@domain/services/mapWifiPortsToBands';
 
 export interface SmartOltHttpGatewayOptions {
   /** Base de la API, ej. https://ipnext.smartolt.com/api. Vacío = feature apagada. */
@@ -63,7 +63,7 @@ function defaultSleep(ms: number): Promise<void> {
 function toOnuWifiStatus(raw: any): OnuWifiStatus {
   const r = raw?.onu_details as Record<string, unknown> | null | undefined;
   if (r == null || typeof r !== 'object') {
-    return { found: false, onuType: null, online: false, tr069Enabled: false, bands: [] };
+    return { found: false, onuType: null, online: false, tr069Enabled: false, bands: [], guest: mapWifiPortsToGuest([]) };
   }
 
   const tr069Raw = r['tr069'];
@@ -95,6 +95,10 @@ function toOnuWifiStatus(raw: any): OnuWifiStatus {
     online,
     tr069Enabled,
     bands: mapWifiPortsToBands(ports),
+    // EPIC v3 (wifi de visitas) — guest derivado de los MISMOS puertos crudos
+    // (disponibilidad DINÁMICA: el template puede no traer 5GHz, evidencia
+    // HWTCA92F96B1 2026-08-03). ADITIVO — `bands` no cambió de shape.
+    guest: mapWifiPortsToGuest(ports),
   };
 }
 
@@ -117,6 +121,13 @@ function toRouterHost(raw: any): RouterHost {
   const ipRaw = raw?.IPAddress ?? raw?.ip;
   const macRaw = raw?.MACAddress ?? raw?.mac;
   const vendorRaw = raw?.VendorClassID ?? raw?.vendor;
+  // EPIC v3 (red por dispositivo) — el payload real trae `Layer2Interface:
+  // 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.<n>'` (fixture del
+  // experimento 2026-08-02, antes DESCARTADO): <n> = índice SSID = número de
+  // puerto wifi. Ethernet apunta a LANEthernetInterfaceConfig (u omite la
+  // clave) -> null.
+  const layer2Raw = raw?.Layer2Interface ?? raw?.layer2_interface;
+  const wlanMatch = typeof layer2Raw === 'string' ? /WLANConfiguration\.(\d+)$/.exec(layer2Raw) : null;
   return {
     hostName: hostNameRaw != null && hostNameRaw !== '' ? String(hostNameRaw) : null,
     ip: ipRaw != null && ipRaw !== '' ? String(ipRaw) : null,
@@ -124,6 +135,7 @@ function toRouterHost(raw: any): RouterHost {
     interfaceType,
     active,
     vendor: vendorRaw != null && vendorRaw !== '' ? String(vendorRaw) : null,
+    wlanIndex: wlanMatch ? Number(wlanMatch[1]) : null,
   };
 }
 
@@ -402,7 +414,7 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
       status = toOnuWifiStatus(data);
     } catch (err) {
       if (err instanceof OltProvisioningError && err.reason === 'rejected') {
-        status = { found: false, onuType: null, online: false, tr069Enabled: false, bands: [] };
+        status = { found: false, onuType: null, online: false, tr069Enabled: false, bands: [], guest: mapWifiPortsToGuest([]) };
       } else {
         throw err;
       }
@@ -421,6 +433,24 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
   async setWifiBand(sn: string, input: SetWifiBandInput): Promise<void> {
     await this.postSetWifiPort(sn, input.port, input.ssid, input.password);
     this.wifiStatusCache.delete(sn);
+  }
+
+  /**
+   * EPIC v3 (wifi de visitas) — POST onu/shutdown_wifi_port/<sn> con form
+   * `wifi_port` (ÚNICO param — verificado contra la colección Postman oficial
+   * de SmartOLT, 2026-08-03). Invalida la cache de `getOnuWifiStatus` de ESA
+   * sn: el próximo GET debe ver el puerto `enabled:false`, no el snapshot
+   * stale (misma disciplina que `setWifiBand`). Fix wave S3: invalida TAMBIÉN
+   * la cache de `getRouterHosts` — apagar la red desasocia a sus devices y la
+   * lista cacheada los seguía mostrando hasta 60s (misma disciplina que
+   * `reboot`).
+   */
+  async shutdownWifiPort(sn: string, port: string): Promise<void> {
+    const form = new URLSearchParams();
+    form.set('wifi_port', port);
+    await this.post(`onu/shutdown_wifi_port/${encodeURIComponent(sn)}`, form);
+    this.wifiStatusCache.delete(sn);
+    this.routerHostsCache.delete(sn);
   }
 
   /**

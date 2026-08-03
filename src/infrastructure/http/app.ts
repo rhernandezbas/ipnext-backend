@@ -11,6 +11,7 @@ import {
   createPortalGeneralRateLimiter,
   createPortalTicketCreateRateLimiter,
   createPortalTicketMessageSendRateLimiter,
+  createPortalTvPasswordRateLimiter,
 } from './middleware/rateLimiters';
 import { SplynxClient } from '../adapters/splynx/SplynxClient';
 import { PrismaCustomerRepository } from '../adapters/prisma/PrismaCustomerRepository';
@@ -1039,7 +1040,11 @@ import { MarkAllPortalNotificationsRead } from '@application/use-cases/portal/Ma
 import { ResolveWifiEligibility } from '@application/use-cases/wifi/ResolveWifiEligibility';
 import { GetPortalWifiStatus } from '@application/use-cases/wifi/GetPortalWifiStatus';
 import { UpdatePortalWifiBand } from '@application/use-cases/wifi/UpdatePortalWifiBand';
+import { UpdatePortalWifiGuest } from '@application/use-cases/wifi/UpdatePortalWifiGuest';
+import { DisablePortalWifiGuest } from '@application/use-cases/wifi/DisablePortalWifiGuest';
 import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWifiDevices';
+import { GetPortalTvStatus } from '@application/use-cases/portal/GetPortalTvStatus';
+import { ChangePortalTvPassword } from '@application/use-cases/portal/ChangePortalTvPassword';
 import { GetAdminOnuWifiStatus } from '@application/use-cases/wifi/GetAdminOnuWifiStatus';
 import { SetAdminWifiBand } from '@application/use-cases/wifi/SetAdminWifiBand';
 import { EnableOnuTr069 } from '@application/use-cases/wifi/EnableOnuTr069';
@@ -3944,6 +3949,23 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
   const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
   const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, smartoltWifiGateway);
+  // EPIC v3 (wifi de visitas) — mismos resolver/gateway/snapshot que "Mi WiFi";
+  // el rate limiter se comparte a nivel router (instancia única por router).
+  const updatePortalWifiGuest = new UpdatePortalWifiGuest(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
+  const disablePortalWifiGuest = new DisablePortalWifiGuest(resolveWifiEligibility, smartoltWifiGateway);
+
+  // EPIC v3 (clave de TV del portal) — GET 100% local (catálogo + slot TV del
+  // contrato); el PUT usa el wrapper `ChangePortalTvPassword` (fix wave W2:
+  // exige el slot TV activo del CONTRATO del param via el MISMO resolver del
+  // GET antes de tocar Gigared) que delega en `ChangeTvPassword` (#65, guard
+  // order pineado + anti-IDOR H1) con las MISMAS deps Gigared del router staff
+  // (~2843) — otra instancia, mismos colaboradores singleton.
+  const getPortalTvStatus = new GetPortalTvStatus(gigaredContractLookup, serviceCatalogRepo, contractServiceRepo);
+  const portalChangeTvPassword = new ChangePortalTvPassword(
+    getPortalTvStatus,
+    new ChangeTvPassword(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
+  );
+  const portalTvPasswordRateLimiter = createPortalTvPasswordRateLimiter();
 
   // portal-equipment-reboot — reusa la MISMA `smartoltWifiGateway` (mismo cache
   // 60s de `getOnuWifiStatus` que "Mi WiFi") para el resolver de elegibilidad,
@@ -3998,7 +4020,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     markAllPortalNotificationsRead,
     getPortalWifiStatus,
     updatePortalWifiBand,
+    updatePortalWifiGuest,
+    disablePortalWifiGuest,
     listPortalWifiDevices,
+    getPortalTvStatus,
+    changePortalTvPassword: portalChangeTvPassword,
+    tvPasswordRateLimiter: portalTvPasswordRateLimiter,
     getPortalEquipmentStatus,
     rebootPortalEquipment,
     listPortalStoreProducts,

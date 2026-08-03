@@ -381,7 +381,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // rechazando), y sin esta línea cada reporte de un cliente es adivinanza.
     // Los 4xx quedan sin loguear a propósito: son errores del REQUEST
     // (validación, not-found, conflictos) y loguearlos sería puro ruido.
-    if (status >= 500) {
+    // EXCEPCIÓN (cazada en vivo 2026-08-03): los *_REJECTED son el UPSTREAM
+    // diciendo "no" (SMARTOLT_REJECTED 422 durante un resync de ONU dejó el
+    // log mudo con el cliente viendo error) — evento de infraestructura
+    // aunque el status sea 4xx, se loguea igual.
+    if (status >= 500 || err.code.endsWith('_REJECTED')) {
       console.error(`[upstream-error] ${err.code} -> ${status}:`, err.message);
     }
     res.status(status).json(body);
