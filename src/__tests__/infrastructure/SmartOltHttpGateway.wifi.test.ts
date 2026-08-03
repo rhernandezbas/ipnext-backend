@@ -330,6 +330,28 @@ describe('SmartOltHttpGateway — shutdownWifiPort', () => {
     transport.responses.set('onu/shutdown_wifi_port/HWTC1', { status: false, error: 'Invalid parameters' });
     await expect(gateway.shutdownWifiPort('HWTC1', 'wifi_0/6')).rejects.toMatchObject({ reason: 'rejected' });
   });
+
+  /**
+   * Fix wave S3 — apagar una red saca de la ONU a los devices asociados a ese
+   * SSID: la lista de hosts cacheada quedaba sirviendo el snapshot pre-shutdown
+   * hasta 60s (misma disciplina que `reboot`, que ya invalidaba hosts).
+   */
+  it('S3: invalida TAMBIÉN la cache de getRouterHosts de ESA sn (y no la de otra)', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_router_hosts/SN_A', { status: true, response: { hostlist: {} } });
+    transport.responses.set('onu/get_onu_router_hosts/SN_B', { status: true, response: { hostlist: {} } });
+
+    await gateway.getRouterHosts('SN_A'); // cachea SN_A
+    await gateway.getRouterHosts('SN_B'); // cachea SN_B
+    await gateway.shutdownWifiPort('SN_A', 'wifi_0/2');
+    await gateway.getRouterHosts('SN_A'); // cache invalidada -> pega la red
+    await gateway.getRouterHosts('SN_B'); // sigue cacheado -> NO pega la red
+
+    const hostCalls = transport.calls.filter(
+      (c) => c.method === 'get' && c.url.startsWith('onu/get_onu_router_hosts'),
+    );
+    expect(hostCalls).toHaveLength(3); // SN_A, SN_B, SN_A de nuevo
+  });
 });
 
 describe('SmartOltHttpGateway — getRouterHosts', () => {

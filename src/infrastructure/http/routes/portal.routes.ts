@@ -74,7 +74,8 @@ import { DisablePortalWifiGuest } from '@application/use-cases/wifi/DisablePorta
 import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWifiDevices';
 import { UpdatePortalWifiBandSchema, UpdatePortalWifiGuestSchema, DisablePortalWifiGuestSchema } from '@application/dto/wifi.dto';
 import { GetPortalTvStatus } from '@application/use-cases/portal/GetPortalTvStatus';
-import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
+import { ChangePortalTvPassword } from '@application/use-cases/portal/ChangePortalTvPassword';
+import { ChangePortalTvPasswordSchema } from '@application/dto/portal/portalTv.dto';
 import { GetPortalEquipmentStatus } from '@application/use-cases/equipment/GetPortalEquipmentStatus';
 import { RebootPortalEquipment } from '@application/use-cases/equipment/RebootPortalEquipment';
 import { ListPortalStoreProducts } from '@application/use-cases/portal/store/ListPortalStoreProducts';
@@ -169,9 +170,11 @@ export interface PortalRouterDeps {
 
   // ── EPIC v3 — clave de TV del portal ───────────────────────────────────────
   getPortalTvStatus?: GetPortalTvStatus;
-  /** REUSA el use case de staff #65 tal cual (guard order pineado + anti-IDOR
-   * H1); el `clientId` viene SIEMPRE del token, jamás del request. */
-  changeTvPassword?: ChangeTvPassword;
+  /** Fix wave W2 — wrapper PORTAL: exige el slot TV activo del CONTRATO del
+   * param (mismo resolver del GET) ANTES de delegar en el use case de staff
+   * #65 (guard order pineado + anti-IDOR H1); el `clientId` viene SIEMPRE del
+   * token, jamás del request. */
+  changePortalTvPassword?: ChangePortalTvPassword;
   /** Defaults to `createPortalTvPasswordRateLimiter()` when omitted (5/hora
    * por cuenta) — cada cambio pega en la plataforma TV de un tercero. */
   tvPasswordRateLimiter?: RequestHandler;
@@ -1510,16 +1513,16 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
     );
   }
 
-  // PUT del password: llama `ChangeTvPassword` (staff, #65) DIRECTO con el
-  // clientId del token — sin use case wrapper. A diferencia de las rutas de
-  // equipment (cuyos use cases dedicados existen porque agregan lógica portal:
-  // mapeo a DTO público, elegibilidad propia), acá un wrapper sería delegación
-  // pura: `ChangeTvPassword.execute(clientId, {contractId, password})` YA tiene
-  // la firma exacta del portal, el guard order pineado y el anti-IDOR H1 (el
-  // cic se resuelve del propio customer, jamás del request). Duplicar eso en
-  // otro caso de uso es el bug de "concepto implementado dos veces".
-  if (deps.changeTvPassword) {
-    const changeTvPassword = deps.changeTvPassword;
+  // PUT del password: `ChangePortalTvPassword` (fix wave W2) — wrapper portal
+  // que exige el slot TV ACTIVO del CONTRATO del param (el MISMO resolver que
+  // el GET de arriba) ANTES de tocar Gigared, y recién ahí delega en
+  // `ChangeTvPassword` (staff, #65: guard order pineado + anti-IDOR H1, el cic
+  // se resuelve del propio customer, jamás del request). El wrapper existe
+  // porque ahora HAY lógica portal propia — sin ella era delegación pura y la
+  // ruta llamaba al use case de staff directo, dejando pasar contratos propios
+  // SIN TV (la cuenta Gigared es per-customer).
+  if (deps.changePortalTvPassword) {
+    const changePortalTvPassword = deps.changePortalTvPassword;
     router.put(
       '/tv/:contractId/password',
       deps.portalAuthMiddleware,
@@ -1528,16 +1531,17 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
       async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         const clientId = requireClientId(req, res);
         if (!clientId) return;
-        const { password } = (req.body ?? {}) as { password?: unknown };
-        if (typeof password !== 'string' || !password) {
-          res.status(400).json({ error: 'password es requerida', code: 'VALIDATION_ERROR' });
+        // Fix wave S1 — zod `.strict()` como los hermanos: campo extra -> 400.
+        const parsed = ChangePortalTvPasswordSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
           return;
         }
         try {
-          // El resultado del use case ({password, persisted}) NO viaja al
-          // cliente: la app solo necesita saber que se aplicó — jamás ecoar
-          // la password ni el detalle de persistencia local (superficie staff).
-          await changeTvPassword.execute(clientId, { contractId: req.params['contractId'] as string, password });
+          // El wrapper no devuelve nada a propósito: la app solo necesita
+          // saber que se aplicó — jamás ecoar la password ni el detalle de
+          // persistencia local (superficie staff).
+          await changePortalTvPassword.execute(clientId, { contractId: req.params['contractId'] as string, password: parsed.data.password });
           res.status(200).json({ applied: true });
         } catch (err) {
           if (err instanceof GigaredInvalidPasswordError) {

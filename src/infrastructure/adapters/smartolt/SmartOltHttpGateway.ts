@@ -440,13 +440,17 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
    * `wifi_port` (ÚNICO param — verificado contra la colección Postman oficial
    * de SmartOLT, 2026-08-03). Invalida la cache de `getOnuWifiStatus` de ESA
    * sn: el próximo GET debe ver el puerto `enabled:false`, no el snapshot
-   * stale (misma disciplina que `setWifiBand`).
+   * stale (misma disciplina que `setWifiBand`). Fix wave S3: invalida TAMBIÉN
+   * la cache de `getRouterHosts` — apagar la red desasocia a sus devices y la
+   * lista cacheada los seguía mostrando hasta 60s (misma disciplina que
+   * `reboot`).
    */
   async shutdownWifiPort(sn: string, port: string): Promise<void> {
     const form = new URLSearchParams();
     form.set('wifi_port', port);
     await this.post(`onu/shutdown_wifi_port/${encodeURIComponent(sn)}`, form);
     this.wifiStatusCache.delete(sn);
+    this.routerHostsCache.delete(sn);
   }
 
   /**

@@ -1044,6 +1044,7 @@ import { UpdatePortalWifiGuest } from '@application/use-cases/wifi/UpdatePortalW
 import { DisablePortalWifiGuest } from '@application/use-cases/wifi/DisablePortalWifiGuest';
 import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWifiDevices';
 import { GetPortalTvStatus } from '@application/use-cases/portal/GetPortalTvStatus';
+import { ChangePortalTvPassword } from '@application/use-cases/portal/ChangePortalTvPassword';
 import { GetAdminOnuWifiStatus } from '@application/use-cases/wifi/GetAdminOnuWifiStatus';
 import { SetAdminWifiBand } from '@application/use-cases/wifi/SetAdminWifiBand';
 import { EnableOnuTr069 } from '@application/use-cases/wifi/EnableOnuTr069';
@@ -3954,11 +3955,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const disablePortalWifiGuest = new DisablePortalWifiGuest(resolveWifiEligibility, smartoltWifiGateway);
 
   // EPIC v3 (clave de TV del portal) — GET 100% local (catálogo + slot TV del
-  // contrato); el PUT REUSA `ChangeTvPassword` (#65, guard order pineado +
-  // anti-IDOR H1) con las MISMAS deps Gigared del router staff (~2843) — otra
-  // instancia, mismos colaboradores singleton.
+  // contrato); el PUT usa el wrapper `ChangePortalTvPassword` (fix wave W2:
+  // exige el slot TV activo del CONTRATO del param via el MISMO resolver del
+  // GET antes de tocar Gigared) que delega en `ChangeTvPassword` (#65, guard
+  // order pineado + anti-IDOR H1) con las MISMAS deps Gigared del router staff
+  // (~2843) — otra instancia, mismos colaboradores singleton.
   const getPortalTvStatus = new GetPortalTvStatus(gigaredContractLookup, serviceCatalogRepo, contractServiceRepo);
-  const portalChangeTvPassword = new ChangeTvPassword(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo);
+  const portalChangeTvPassword = new ChangePortalTvPassword(
+    getPortalTvStatus,
+    new ChangeTvPassword(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo),
+  );
   const portalTvPasswordRateLimiter = createPortalTvPasswordRateLimiter();
 
   // portal-equipment-reboot — reusa la MISMA `smartoltWifiGateway` (mismo cache
@@ -4018,7 +4024,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     disablePortalWifiGuest,
     listPortalWifiDevices,
     getPortalTvStatus,
-    changeTvPassword: portalChangeTvPassword,
+    changePortalTvPassword: portalChangeTvPassword,
     tvPasswordRateLimiter: portalTvPasswordRateLimiter,
     getPortalEquipmentStatus,
     rebootPortalEquipment,
