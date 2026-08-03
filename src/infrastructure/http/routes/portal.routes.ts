@@ -1338,7 +1338,13 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
         try {
           // REGLA DURA (docblock de `RebootPortalEquipment`): re-verifica la
           // elegibilidad ENTERA antes de disparar el reinicio — nunca confía
-          // en un estado leído en un GET anterior.
+          // en un estado leído en un GET anterior. Esa parte es SÍNCRONA: es la
+          // que decide 404/409 acá abajo.
+          //
+          // El disparo del reboot en sí NO lo es: `execute` vuelve apenas la
+          // elegibilidad da OK y el `gateway.reboot` queda en vuelo. Por eso el
+          // 202 significa ACEPTADO, no completado — un fallo de SmartOLT ya no
+          // llega como 500 a la app, se loguea con `[portal-equipment-reboot]`.
           await rebootPortalEquipment.execute(clientId, req.params['contractId'] as string);
           res.status(202).json({ accepted: true });
         } catch (err) {
