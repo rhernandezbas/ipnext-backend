@@ -70,3 +70,34 @@ describe('errorHandler — visibilidad de fallas upstream (5xx)', () => {
     expect(String(errorSpy.mock.calls[0][0])).toContain('[UNHANDLED ERROR]');
   });
 });
+
+describe('errorHandler — rechazos upstream 4xx (cazado en vivo 2026-08-03)', () => {
+  let errorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  // "Dispositivos conectados" falló en el teléfono del cliente DESPUÉS de
+  // agregar el log de 5xx, y el log siguió MUDO: SmartOLT respondió y RECHAZÓ
+  // (resync de la ONU tras un cambio de template) → SMARTOLT_REJECTED mapea a
+  // 422 y el corte `status >= 500` lo dejaba invisible. Un *_REJECTED es un
+  // evento del UPSTREAM (SmartOLT/IClass/Twilio dijeron "no"), no un error del
+  // request del cliente — se loguea aunque sea 4xx.
+  it('un DomainError *_REJECTED se loguea AUNQUE mapee a 4xx', () => {
+    const res = mockRes();
+    const err = new OltProvisioningError('rejected', 'Data refresh in progress');
+
+    errorHandler(err, {} as Request, res, jest.fn());
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const line = errorSpy.mock.calls[0].map(String).join(' ');
+    expect(line).toContain('SMARTOLT_REJECTED');
+    expect(line).toContain('Data refresh in progress');
+  });
+});
