@@ -373,6 +373,17 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     if (mapped?.forbidden !== undefined) {
       body['forbidden'] = mapped.forbidden;
     }
+    // Cazado en vivo (2026-08-03, "Dispositivos conectados" falló en el
+    // teléfono del cliente con los logs de prod MUDOS): este branch respondía
+    // el status y retornaba sin loguear JAMÁS — el console.error de abajo solo
+    // corre para errores no tipados. Un DomainError que mapea a 5xx es una
+    // falla de INFRAESTRUCTURA (SmartOLT/Splynx/UISP/orchestrator caídos o
+    // rechazando), y sin esta línea cada reporte de un cliente es adivinanza.
+    // Los 4xx quedan sin loguear a propósito: son errores del REQUEST
+    // (validación, not-found, conflictos) y loguearlos sería puro ruido.
+    if (status >= 500) {
+      console.error(`[upstream-error] ${err.code} -> ${status}:`, err.message);
+    }
     res.status(status).json(body);
     return;
   }
