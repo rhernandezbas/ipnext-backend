@@ -50,6 +50,15 @@ jobs:
         # el JSON contiene comillas dobles que ROMPEN el quoting del `docker run`
         # — exactamente el motivo del comentario del step bootstrap-rbac de arriba,
         # y la causa del outage del 2026-08-02 (2 deploys en failure, prod 502).
+        #
+        # SMARTOLT_TIMEOUT_MS=40000 (default 15s): SmartOLT en frio tarda 8.3s
+        # medidos y a veces pasa los 15 — el "a veces sale error, luego funciona"
+        # de Dispositivos conectados reportado en vivo (2026-08-03). Debe quedar
+        # MENOR que los 45s del cliente (SMARTOLT_TIMEOUT_MS de la app): asi el
+        # que expira es el BE con contexto, no el celular con un corte mudo.
+        # OJO: jamas meter comentarios ENTRE las lineas del `docker run` — el `#`
+        # se traga la `\` final y corta el comando a la mitad (la clase de bug
+        # del outage de arriba).
         # `-e VAR` sin valor reenvia la env del runner al container, sin shell
         # en el medio.
         env:
@@ -124,6 +133,7 @@ jobs:
             -e FIREBASE_SERVICE_ACCOUNT_JSON \
             -e SMARTOLT_BASE_URL="${{ secrets.SMARTOLT_BASE_URL }}" \
             -e SMARTOLT_API_TOKEN="${{ secrets.SMARTOLT_API_TOKEN }}" \
+            -e SMARTOLT_TIMEOUT_MS="40000" \
             -e CHATWOOT_BASE_URL="${{ secrets.CHATWOOT_BASE_URL }}" \
             -e CHATWOOT_ACCOUNT_ID="${{ secrets.CHATWOOT_ACCOUNT_ID }}" \
             -e CHATWOOT_API_TOKEN="${{ secrets.CHATWOOT_API_TOKEN }}" \
