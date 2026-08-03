@@ -10,7 +10,7 @@
 
 ## 📋 Pendientes
 
-### 📱 [EPIC v3] App de clientes — batch aprobado con maquetas: Destacados + Mis servicios v2 + clave TV + WiFi visitas + dispositivos por red — **EN PROGRESO** *(2026-08-03, 4 maquetas aprobadas por el usuario: "me gustó !!!! dale nomás")*
+### 📱 [EPIC v3] App de clientes — batch aprobado con maquetas: Destacados + Mis servicios v2 + clave TV + WiFi visitas + dispositivos por red — **✅ EN PROD** *(2026-08-03; BE `3aaaf0fb` deploy verde + E2E en vivo con token de portal firmado en el contenedor [tv/guest/wlanIndex/anti-IDOR/policy OK]; app `72ac965` CI verde, APK run 30845621438 publicado; review adversarial: 0 CRITICAL, 2 WARN BE + 5 WARN app, todos arreglados con TDD y re-verificados; pendiente: prueba en el teléfono del usuario)*
 > 4 features coordinadas BE+app (contratos aditivos `/api/portal/*`):
 > **(1) Destacados** (app-only): carrusel horizontal estilo Personal en Inicio sobre las promos existentes de Prominense — reemplaza la card "PARA VOS". Cero BE.
 > **(2) Mis servicios v2 + clave de TV**: tarjeta unificada (plan + filas Internet/TV con estado + acciones WiFi/TV/Reiniciar). BE: ruta portal `PUT /tv/:contractId/password` REUSANDO `ChangeTvPassword` (#65) con anti-IDOR de portal (contractId verificado contra el token) + `GET /tv/:contractId` (login TV + hasTv). App: modal bottom-sheet con política CUA (`[a-z0-9]`) validada client-side.
