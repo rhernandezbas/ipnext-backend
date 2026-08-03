@@ -106,10 +106,41 @@ class FakeWifiManagementPort implements Pick<WifiManagementPort, 'getOnuWifiStat
 
 class FakeOltProvisioningGateway implements Pick<OltProvisioningGateway, 'reboot'> {
   rebootCalls: string[] = [];
+  /** Simula "SmartOLT falló" — el caso que en prod devolvía 500 mudo (caso 7). */
+  failWith: Error | null = null;
+  /**
+   * Resuelve cuando el reboot DESACOPLADO terminó (ok o error). Deja esperar el
+   * evento exacto sin sleeps y SIN depender del log — así el probe del 202 y el
+   * probe del logueo fallan por motivos distintos.
+   */
+  readonly rebootSettled: Promise<void>;
+  private readonly settle: () => void;
+
+  constructor() {
+    let settle!: () => void;
+    this.rebootSettled = new Promise<void>((resolve) => { settle = resolve; });
+    this.settle = settle;
+  }
 
   async reboot(sn: string): Promise<void> {
     this.rebootCalls.push(sn);
+    try {
+      if (this.failWith) throw this.failWith;
+    } finally {
+      this.settle();
+    }
   }
+}
+
+/**
+ * Logger espía cuyo `error` RESUELVE `logged`: el test espera el evento EXACTO
+ * que assertea (el log del fallo desacoplado) — sin sleeps ni conteos de ticks.
+ */
+function spyLogger() {
+  let seen!: () => void;
+  const logged = new Promise<void>((resolve) => { seen = resolve; });
+  const error = jest.fn((..._args: unknown[]) => { seen(); });
+  return { logger: { error } as { error: jest.Mock }, logged };
 }
 
 function buildStack(opts?: {
@@ -138,7 +169,8 @@ function buildStack(opts?: {
 
   const resolveEquipmentRebootEligibility = new ResolveEquipmentRebootEligibility(customers, inventory, wifi);
   const getPortalEquipmentStatus = new GetPortalEquipmentStatus(resolveEquipmentRebootEligibility);
-  const rebootPortalEquipment = new RebootPortalEquipment(resolveEquipmentRebootEligibility, gateway);
+  const { logger, logged } = spyLogger();
+  const rebootPortalEquipment = new RebootPortalEquipment(resolveEquipmentRebootEligibility, gateway, logger);
 
   const app = express();
   app.use(express.json());
@@ -158,7 +190,7 @@ function buildStack(opts?: {
     }),
   );
 
-  return { app, accounts, hasher, inventory, wifi, gateway };
+  return { app, accounts, hasher, inventory, wifi, gateway, logger, logged };
 }
 
 async function loginAs(app: express.Express, accounts: InMemoryPortalAccountRepository, hasher: InMemoryPasswordHasher, clientId: string): Promise<string> {
@@ -277,5 +309,66 @@ describe('portal-equipment-reboot — portal /api/portal/equipment', () => {
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ accepted: true });
     expect(gateway.rebootCalls).toEqual(['HWTC189C07AA']);
+  });
+
+  // ── reboot ASÍNCRONO (bug reportado en vivo: "Ocurrió un error" en el 1er
+  //    intento, ok en el 2do, y CERO líneas en los logs de prod) ────────────────
+
+  it('caso 7 — 202 AUNQUE SmartOLT rechace el reboot: el disparo es desacoplado (antes era 500)', async () => {
+    const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
+    const { app, accounts, hasher, inventory, wifi, gateway } = buildStack({ customers });
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', BRIDGE_STATUS);
+    gateway.failWith = new OltProvisioningError('unreachable', 'timeout of 15000ms exceeded');
+
+    const res = await request(app).post('/api/portal/equipment/c1/reboot').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ accepted: true });
+    await gateway.rebootSettled; // el disparo desacoplado ya rechazó — nada quedó colgado
+  });
+
+  it('caso 7 — el fallo del reboot desacoplado SE LOGUEA con contractId, sn y el error (sin esto, el próximo reporte vuelve a ser adivinanza)', async () => {
+    const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
+    const { app, accounts, hasher, inventory, wifi, gateway, logger, logged } = buildStack({ customers });
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', BRIDGE_STATUS);
+    gateway.failWith = new OltProvisioningError('unreachable', 'timeout of 15000ms exceeded');
+
+    await request(app).post('/api/portal/equipment/c1/reboot').set('Authorization', `Bearer ${token}`);
+    await logged;
+
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const [message, meta] = logger.error.mock.calls[0] as [string, Record<string, unknown>];
+    expect(message).toContain('[portal-equipment-reboot]');
+    expect(meta).toMatchObject({
+      contractId: 'c1',
+      sn: 'HWTC189C07AA',
+      reason: 'unreachable',
+      error: 'timeout of 15000ms exceeded',
+    });
+  });
+
+  it('caso 7 — un rechazo del gateway NO deja una unhandled rejection (en Node puede voltear el proceso)', async () => {
+    const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
+    const { app, accounts, hasher, inventory, wifi, gateway } = buildStack({ customers });
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    await inventory.create(makeItem({ contractId: 'c1', type: 'ONU', serialNumber: '48575443189C07AA' }));
+    wifi.statusBySn.set('HWTC189C07AA', BRIDGE_STATUS);
+    gateway.failWith = new OltProvisioningError('unreachable', 'timeout of 15000ms exceeded');
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await request(app).post('/api/portal/equipment/c1/reboot').set('Authorization', `Bearer ${token}`);
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });
