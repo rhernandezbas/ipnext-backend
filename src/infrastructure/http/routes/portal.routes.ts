@@ -48,8 +48,12 @@ import {
   PortalContractNotFoundError,
   PortalTicketTopicNotFoundError,
 } from '@domain/errors/portal.errors';
-import { WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError } from '@domain/errors/wifi';
+import { WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError, GuestBandUnavailableError } from '@domain/errors/wifi';
 import { EquipmentContractNotFoundError, EquipmentNotEligibleError } from '@domain/errors/equipment';
+// EPIC v3 (clave de TV del portal) — errores del guard order de ChangeTvPassword (#65).
+import { ClientNotFoundError } from '@domain/errors';
+import { ContractNotFoundError } from '@domain/errors/contractServices';
+import { GigaredInvalidPasswordError, TvNotLinkedError } from '@domain/errors/gigared';
 import {
   createPortalLoginRateLimiter,
   createPortalLoginIpRateLimiter,
@@ -59,13 +63,18 @@ import {
   createPortalWifiUpdateRateLimiter,
   createPortalEquipmentRebootRateLimiter,
   createPortalStoreOrderRateLimiter,
+  createPortalTvPasswordRateLimiter,
 } from '../middleware/rateLimiters';
 import { parsePagination } from '../parsePagination';
 import { createTicketMessageUploadMiddleware } from './ticketMessageUpload';
 import { GetPortalWifiStatus } from '@application/use-cases/wifi/GetPortalWifiStatus';
 import { UpdatePortalWifiBand } from '@application/use-cases/wifi/UpdatePortalWifiBand';
+import { UpdatePortalWifiGuest } from '@application/use-cases/wifi/UpdatePortalWifiGuest';
+import { DisablePortalWifiGuest } from '@application/use-cases/wifi/DisablePortalWifiGuest';
 import { ListPortalWifiDevices } from '@application/use-cases/wifi/ListPortalWifiDevices';
-import { UpdatePortalWifiBandSchema } from '@application/dto/wifi.dto';
+import { UpdatePortalWifiBandSchema, UpdatePortalWifiGuestSchema, DisablePortalWifiGuestSchema } from '@application/dto/wifi.dto';
+import { GetPortalTvStatus } from '@application/use-cases/portal/GetPortalTvStatus';
+import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPassword';
 import { GetPortalEquipmentStatus } from '@application/use-cases/equipment/GetPortalEquipmentStatus';
 import { RebootPortalEquipment } from '@application/use-cases/equipment/RebootPortalEquipment';
 import { ListPortalStoreProducts } from '@application/use-cases/portal/store/ListPortalStoreProducts';
@@ -150,8 +159,22 @@ export interface PortalRouterDeps {
   updatePortalWifiBand?: UpdatePortalWifiBand;
   listPortalWifiDevices?: ListPortalWifiDevices;
   /** Defaults to `createPortalWifiUpdateRateLimiter()` when omitted. Applied
-   * ONLY to `PUT /wifi/:contractId` — cada escritura reinicia la radio. */
+   * to `PUT /wifi/:contractId` Y a los dos endpoints guest (EPIC v3) — un
+   * SOLO presupuesto para todas las escrituras que tocan la radio. */
   wifiUpdateRateLimiter?: RequestHandler;
+
+  // ── EPIC v3 — WiFi de visitas (extiende wifi-self-service) ─────────────────
+  updatePortalWifiGuest?: UpdatePortalWifiGuest;
+  disablePortalWifiGuest?: DisablePortalWifiGuest;
+
+  // ── EPIC v3 — clave de TV del portal ───────────────────────────────────────
+  getPortalTvStatus?: GetPortalTvStatus;
+  /** REUSA el use case de staff #65 tal cual (guard order pineado + anti-IDOR
+   * H1); el `clientId` viene SIEMPRE del token, jamás del request. */
+  changeTvPassword?: ChangeTvPassword;
+  /** Defaults to `createPortalTvPasswordRateLimiter()` when omitted (5/hora
+   * por cuenta) — cada cambio pega en la plataforma TV de un tercero. */
+  tvPasswordRateLimiter?: RequestHandler;
 
   // ── portal-equipment-reboot — "Reiniciar mi equipo" (extiende wifi-self-service) ──
   getPortalEquipmentStatus?: GetPortalEquipmentStatus;
@@ -313,6 +336,7 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
   const uploadTicketMessageFiles = createTicketMessageUploadMiddleware();
   const wifiUpdateRateLimiter = deps.wifiUpdateRateLimiter ?? createPortalWifiUpdateRateLimiter();
   const equipmentRebootRateLimiter = deps.equipmentRebootRateLimiter ?? createPortalEquipmentRebootRateLimiter();
+  const tvPasswordRateLimiter = deps.tvPasswordRateLimiter ?? createPortalTvPasswordRateLimiter();
 
   /**
    * F7 (fix wave, v2.B) — `ListPortalTickets.toDto` hace UN `countUnread` por
@@ -1269,6 +1293,96 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
     );
   }
 
+  // ── EPIC v3 — WiFi de visitas ───────────────────────────────────────────────
+  // Sub-paths de `/wifi/:contractId` (`/guest`, `/guest/disable`) — sin colisión
+  // con el PUT principal (2 segmentos) ni con `/devices`. Comparten el MISMO
+  // `wifiUpdateRateLimiter` (instancia única de este router): cada
+  // `set_wifi_port_lan` / `shutdown_wifi_port` toca la radio del cliente igual
+  // que el update principal — un solo presupuesto (5/hora por cuenta) acota el
+  // TOTAL de escrituras que reinician la radio, en vez de triplicarlo con tres
+  // limiters paralelos. Anti-IDOR + re-verificación ENTERA server-side en cada
+  // escritura: dentro de los use cases (regla dura, molde UpdatePortalWifiBand).
+
+  if (deps.updatePortalWifiGuest) {
+    const updatePortalWifiGuest = deps.updatePortalWifiGuest;
+    router.put(
+      '/wifi/:contractId/guest',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      wifiUpdateRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const parsed = UpdatePortalWifiGuestSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          await updatePortalWifiGuest.execute(clientId, req.params['contractId'] as string, parsed.data);
+          res.status(200).json({ applied: true });
+        } catch (err) {
+          if (err instanceof WifiContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof WifiValidationError) {
+            res.status(400).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof GuestBandUnavailableError) {
+            // La banda pedida no tiene puerto de visita en el template — 409:
+            // request bien formado, el ESTADO del equipo no lo permite.
+            res.status(409).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof WifiNotEligibleError) {
+            res.status(409).json({ error: err.message, code: err.code, reason: err.reason });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.disablePortalWifiGuest) {
+    const disablePortalWifiGuest = deps.disablePortalWifiGuest;
+    router.post(
+      '/wifi/:contractId/guest/disable',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      wifiUpdateRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const parsed = DisablePortalWifiGuestSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+          return;
+        }
+        try {
+          await disablePortalWifiGuest.execute(clientId, req.params['contractId'] as string, parsed.data.band);
+          res.status(200).json({ applied: true });
+        } catch (err) {
+          if (err instanceof WifiContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof GuestBandUnavailableError) {
+            res.status(409).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof WifiNotEligibleError) {
+            res.status(409).json({ error: err.message, code: err.code, reason: err.reason });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
   if (deps.listPortalWifiDevices) {
     const listPortalWifiDevices = deps.listPortalWifiDevices;
     router.get(
@@ -1358,6 +1472,86 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
             res.status(409).json({ error: err.message, code: err.code, reason: err.reason });
             return;
           }
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── EPIC v3 — clave de TV del portal ────────────────────────────────────────
+  // Misma estructura que el bloque `/equipment/:contractId`: portalAuthMiddleware
+  // → generalRateLimiter → handler. Anti-IDOR estructural: el `contractId` del
+  // param se verifica SIEMPRE contra el cliente del token (dentro de
+  // `GetPortalTvStatus` / `ChangeTvPassword`, ambos tiran el MISMO
+  // `ContractNotFoundError` para "no existe" y "es de otro" — 404
+  // indistinguible). Sin TV -> `{hasTv:false, login:null}` (200, estado normal
+  // — mismo criterio que la elegibilidad WiFi).
+
+  if (deps.getPortalTvStatus) {
+    const getPortalTvStatus = deps.getPortalTvStatus;
+    router.get(
+      '/tv/:contractId',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await getPortalTvStatus.execute(clientId, req.params['contractId'] as string);
+          res.status(200).json(result);
+        } catch (err) {
+          if (err instanceof ContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
+  // PUT del password: llama `ChangeTvPassword` (staff, #65) DIRECTO con el
+  // clientId del token — sin use case wrapper. A diferencia de las rutas de
+  // equipment (cuyos use cases dedicados existen porque agregan lógica portal:
+  // mapeo a DTO público, elegibilidad propia), acá un wrapper sería delegación
+  // pura: `ChangeTvPassword.execute(clientId, {contractId, password})` YA tiene
+  // la firma exacta del portal, el guard order pineado y el anti-IDOR H1 (el
+  // cic se resuelve del propio customer, jamás del request). Duplicar eso en
+  // otro caso de uso es el bug de "concepto implementado dos veces".
+  if (deps.changeTvPassword) {
+    const changeTvPassword = deps.changeTvPassword;
+    router.put(
+      '/tv/:contractId/password',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      tvPasswordRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        const { password } = (req.body ?? {}) as { password?: unknown };
+        if (typeof password !== 'string' || !password) {
+          res.status(400).json({ error: 'password es requerida', code: 'VALIDATION_ERROR' });
+          return;
+        }
+        try {
+          // El resultado del use case ({password, persisted}) NO viaja al
+          // cliente: la app solo necesita saber que se aplicó — jamás ecoar
+          // la password ni el detalle de persistencia local (superficie staff).
+          await changeTvPassword.execute(clientId, { contractId: req.params['contractId'] as string, password });
+          res.status(200).json({ applied: true });
+        } catch (err) {
+          if (err instanceof GigaredInvalidPasswordError) {
+            // Política CUA ([a-z0-9] 8..64) — code PROPIO del portal para que
+            // la app distinga "tu clave no cumple la política" de un 400 genérico.
+            res.status(400).json({ error: err.message, code: 'TV_PASSWORD_POLICY' });
+            return;
+          }
+          if (err instanceof TvNotLinkedError || err instanceof ContractNotFoundError || err instanceof ClientNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          // El resto (Gigared caído/rechazo upstream/etc.) va al handler global
+          // — loguea los 5xx (fix f07896ad), la app ve un error genérico.
           next(err);
         }
       },

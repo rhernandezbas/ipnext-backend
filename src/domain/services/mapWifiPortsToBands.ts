@@ -34,6 +34,40 @@ function portNumber(port: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * EPIC v3 (wifi de visitas) — estado del puerto de VISITA de cada banda.
+ * Convención (skill smartolt-ipnext): visita 2.4 = wifi_0/2, visita 5 = wifi_0/6.
+ * `available` = el puerto de visita FIGURA en la lista de puertos del template
+ * "ONU type" — evidencia EN VIVO 2026-08-03 (ONU HWTCA92F96B1): el template
+ * puede exponer SOLO wifi_0/1..2, o sea que la disponibilidad se deriva
+ * DINÁMICAMENTE, nunca se asume. SIEMPRE devuelve las DOS bandas (la app lista
+ * ambas; `available:false` cuando el template no tiene el puerto).
+ *
+ * Extensión ADITIVA — `mapWifiPortsToBands` (arriba) NO cambia de shape: lo
+ * consume la elegibilidad y el contrato público del portal.
+ */
+export interface GuestWifiBandStatus {
+  band: '2.4' | '5';
+  /** Puerto de visita convencional de la banda ('wifi_0/2' | 'wifi_0/6') — aún cuando no está disponible. */
+  port: string;
+  available: boolean;
+  ssid: string | null;
+  enabled: boolean;
+}
+
+const GUEST_PORT_NUMBER: Record<'2.4' | '5', number> = { '2.4': 2, '5': 6 };
+
+export function mapWifiPortsToGuest(rawPorts: RawWifiPort[]): GuestWifiBandStatus[] {
+  return (['2.4', '5'] as const).map((band) => {
+    const n = GUEST_PORT_NUMBER[band];
+    const port = `wifi_0/${n}`;
+    const found = rawPorts.find((p) => portNumber(p.port) === n);
+    return found
+      ? { band, port, available: true, ssid: found.ssid, enabled: found.enabled }
+      : { band, port, available: false, ssid: null, enabled: false };
+  });
+}
+
 export function mapWifiPortsToBands(rawPorts: RawWifiPort[]): WifiBandStatus[] {
   const bands: WifiBandStatus[] = [];
 

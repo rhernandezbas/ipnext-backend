@@ -4,7 +4,14 @@ import {
   AuthorizeOnuInput,
   SetWifiInput,
 } from '@domain/ports/OltProvisioningGateway';
+import {
+  WifiManagementPort,
+  OnuWifiStatus,
+  SetWifiBandInput,
+  RouterHost,
+} from '@domain/ports/WifiManagementPort';
 import { OltProvisioningError } from '@domain/errors/smartolt';
+import { mapWifiPortsToBands, mapWifiPortsToGuest, RawWifiPort } from '@domain/services/mapWifiPortsToBands';
 
 /** Una llamada registrada por el fake — los tests asserten sobre esto. */
 export type RecordedGatewayCall =
@@ -14,9 +21,25 @@ export type RecordedGatewayCall =
   | { method: 'enableTr069'; sn: string; profile: string }
   | { method: 'allowRemoteWanAccess'; sn: string }
   | { method: 'setWifi'; sn: string; input: SetWifiInput }
-  | { method: 'reboot'; sn: string };
+  | { method: 'reboot'; sn: string }
+  // EPIC v3 (wifi de visitas) — escrituras del lado WifiManagementPort.
+  | { method: 'setWifiBand'; sn: string; input: SetWifiBandInput }
+  | { method: 'shutdownWifiPort'; sn: string; port: string };
 
-type WriteMethod = 'authorizeOnu' | 'setMgmtIp' | 'enableTr069' | 'allowRemoteWanAccess' | 'reboot';
+type WriteMethod = 'authorizeOnu' | 'setMgmtIp' | 'enableTr069' | 'allowRemoteWanAccess' | 'reboot' | 'shutdownWifiPort';
+
+/**
+ * EPIC v3 (wifi de visitas) — estado de UNA ONU del lado WifiManagementPort.
+ * `ports` es el template crudo (mismo shape que consume el adapter real);
+ * bands/guest se derivan con las MISMAS funciones de dominio que
+ * `SmartOltHttpGateway.toOnuWifiStatus` — el fake nunca reimplementa la regla.
+ */
+export interface InMemoryWifiOnuState {
+  onuType?: string | null;
+  online?: boolean;
+  tr069Enabled?: boolean;
+  ports: RawWifiPort[];
+}
 
 /**
  * smartolt-provision (K2) — fake COMPLETO del gateway SmartOLT para tests
@@ -32,12 +55,16 @@ type WriteMethod = 'authorizeOnu' | 'setMgmtIp' | 'enableTr069' | 'allowRemoteWa
  * que viole el orden falla acá igual que fallaría en la instancia real — un
  * "tr069 falló pero el wifi salió ok" es IMPOSIBLE por construcción.
  */
-export class InMemoryOltProvisioningGateway implements OltProvisioningGateway {
+export class InMemoryOltProvisioningGateway implements OltProvisioningGateway, WifiManagementPort {
   readonly calls: RecordedGatewayCall[] = [];
   unconfigured: UnconfiguredOnu[] = [];
-  failWifiPorts: Array<SetWifiInput['port']> = [];
+  failWifiPorts: string[] = [];
   failMethods: WriteMethod[] = [];
   unreachable = false;
+  /** EPIC v3 — estado WiFi por sn (lado WifiManagementPort). Sin entrada = found:false. */
+  readonly wifiOnus = new Map<string, InMemoryWifiOnuState>();
+  /** EPIC v3 — hosts del router por sn (getRouterHosts). */
+  readonly routerHostsBySn = new Map<string, RouterHost[]>();
   /** ONUs con mgmt IP ya seteada (prerrequisito de tr069). */
   private readonly mgmtDone = new Set<string>();
   /** ONUs con TR-069 habilitado (prerrequisito de wifi). */
@@ -122,5 +149,53 @@ export class InMemoryOltProvisioningGateway implements OltProvisioningGateway {
     this.guardUnreachable();
     this.guardMethod('reboot');
     this.calls.push({ method: 'reboot', sn });
+  }
+
+  // ── WifiManagementPort (EPIC v3 — wifi de visitas) ─────────────────────────
+  // El estado vive en `wifiOnus` como puertos CRUDOS; bands/guest se derivan
+  // con las mismas funciones de dominio que el adapter real — un test que
+  // escribe por `setWifiBand`/`shutdownWifiPort` ve el cambio reflejado en el
+  // próximo `getOnuWifiStatus`, igual que en prod tras la invalidación de cache.
+
+  async getOnuWifiStatus(sn: string): Promise<OnuWifiStatus> {
+    this.guardUnreachable();
+    const onu = this.wifiOnus.get(sn);
+    if (!onu) {
+      return { found: false, onuType: null, online: false, tr069Enabled: false, bands: [], guest: mapWifiPortsToGuest([]) };
+    }
+    return {
+      found: true,
+      onuType: onu.onuType ?? null,
+      online: onu.online ?? true,
+      tr069Enabled: onu.tr069Enabled ?? true,
+      bands: mapWifiPortsToBands(onu.ports),
+      guest: mapWifiPortsToGuest(onu.ports),
+    };
+  }
+
+  async setWifiBand(sn: string, input: SetWifiBandInput): Promise<void> {
+    this.guardUnreachable();
+    if (this.failWifiPorts.includes(input.port)) {
+      throw new OltProvisioningError('rejected', 'Invalid parameters');
+    }
+    this.calls.push({ method: 'setWifiBand', sn, input: { ...input } });
+    const port = this.wifiOnus.get(sn)?.ports.find((p) => p.port === input.port);
+    if (port) {
+      port.ssid = input.ssid;
+      port.enabled = true;
+    }
+  }
+
+  async shutdownWifiPort(sn: string, port: string): Promise<void> {
+    this.guardUnreachable();
+    this.guardMethod('shutdownWifiPort');
+    this.calls.push({ method: 'shutdownWifiPort', sn, port });
+    const target = this.wifiOnus.get(sn)?.ports.find((p) => p.port === port);
+    if (target) target.enabled = false;
+  }
+
+  async getRouterHosts(sn: string): Promise<RouterHost[]> {
+    this.guardUnreachable();
+    return (this.routerHostsBySn.get(sn) ?? []).map((h) => ({ ...h }));
   }
 }

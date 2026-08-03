@@ -5,6 +5,19 @@ import type { WifiEligibilityReason } from '@domain/errors/wifi';
 
 // ── Portal ────────────────────────────────────────────────────────────────
 
+/**
+ * EPIC v3 (wifi de visitas) — banda de visita en el wire del portal. SIN el
+ * puerto crudo (la app no conoce puertos SmartOLT, mismo criterio que ocultar
+ * la sn). `available:false` = el template "ONU type" no tiene el puerto de
+ * visita de esa banda (evidencia HWTCA92F96B1 2026-08-03).
+ */
+export interface PortalGuestWifiBandDto {
+  band: '2.4' | '5';
+  available: boolean;
+  ssid: string | null;
+  enabled: boolean;
+}
+
 export type PortalWifiStatusDto =
   | { eligible: false; reason: WifiEligibilityReason }
   | {
@@ -18,6 +31,8 @@ export type PortalWifiStatusDto =
       bands: Array<{ band: '2.4' | '5'; ssid: string | null; password: string | null }>;
       /** Hosts con `active=true`. `null` si el fetch de hosts falló — nunca rompe la pantalla por el contador. */
       connectedCount: number | null;
+      /** EPIC v3 — ADITIVO: SIEMPRE las dos bandas listadas. Solo presente cuando eligible. */
+      guest: { bands: PortalGuestWifiBandDto[] };
     };
 
 /** `PUT /api/portal/wifi/:contractId` — validación de FORMA (ssid/password los revisa `validateWifiCredentials`, ver use case). */
@@ -31,15 +46,46 @@ export const UpdatePortalWifiBandSchema = z
 
 export type UpdatePortalWifiBandBody = z.infer<typeof UpdatePortalWifiBandSchema>;
 
+/**
+ * EPIC v3 (wifi de visitas) — `PUT /api/portal/wifi/:contractId/guest`.
+ * Validación de FORMA solamente; las MISMAS reglas de fondo de ssid/password
+ * que el update principal corren en `validateWifiCredentials` (use case).
+ */
+export const UpdatePortalWifiGuestSchema = z
+  .object({
+    band: z.enum(['2.4', '5']),
+    ssid: z.string(),
+    password: z.string(),
+  })
+  .strict();
+
+export type UpdatePortalWifiGuestBody = z.infer<typeof UpdatePortalWifiGuestSchema>;
+
+/** EPIC v3 — `POST /api/portal/wifi/:contractId/guest/disable`. */
+export const DisablePortalWifiGuestSchema = z
+  .object({
+    band: z.enum(['2.4', '5']),
+  })
+  .strict();
+
+export type DisablePortalWifiGuestBody = z.infer<typeof DisablePortalWifiGuestSchema>;
+
 export interface PortalWifiDeviceDto {
   name: string | null;
   interface: 'wifi' | 'ethernet';
   active: boolean;
+  /**
+   * EPIC v3 (red por dispositivo) — ADITIVO: índice WLANConfiguration del host
+   * (1=principal 2.4, 5=principal 5, 2=visita 2.4, 6=visita 5); ethernet o no
+   * parseable -> null. La app agrupa client-side combinándolo con el GET de
+   * wifi (ssids por banda + guest).
+   */
+  wlanIndex: number | null;
 }
 
 /** portal — SIN ip/mac (menos superficie para la app del cliente). */
 export function toPortalWifiDeviceDto(host: RouterHost): PortalWifiDeviceDto {
-  return { name: host.hostName, interface: host.interfaceType, active: host.active };
+  return { name: host.hostName, interface: host.interfaceType, active: host.active, wlanIndex: host.wlanIndex };
 }
 
 // ── Admin ─────────────────────────────────────────────────────────────────

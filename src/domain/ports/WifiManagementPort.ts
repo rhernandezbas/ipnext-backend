@@ -1,4 +1,4 @@
-import { WifiBandStatus } from '@domain/services/mapWifiPortsToBands';
+import { WifiBandStatus, GuestWifiBandStatus } from '@domain/services/mapWifiPortsToBands';
 
 /**
  * wifi-self-service (F0) — port NARROW (ISP) para la lectura/escritura de
@@ -26,6 +26,15 @@ export interface OnuWifiStatus {
   tr069Enabled: boolean;
   /** [] = sin puertos WiFi (bridge) o ONU no encontrada. */
   bands: WifiBandStatus[];
+  /**
+   * EPIC v3 (wifi de visitas) — estado del puerto de visita por banda, derivado
+   * de los MISMOS puertos crudos que `bands` (`mapWifiPortsToGuest`). OPCIONAL
+   * a propósito (aditivo): los fakes/fixtures viejos que no lo setean siguen
+   * compilando; los consumers tratan `undefined` como "ambas bandas no
+   * disponibles" (el lado SEGURO — nunca habilita una escritura por ausencia
+   * de dato).
+   */
+  guest?: GuestWifiBandStatus[];
 }
 
 export interface SetWifiBandInput {
@@ -42,6 +51,15 @@ export interface RouterHost {
   interfaceType: 'wifi' | 'ethernet';
   active: boolean;
   vendor: string | null;
+  /**
+   * EPIC v3 (red por dispositivo) — índice de `Layer2Interface`
+   * (`...WLANConfiguration.<n>` del payload real de get_onu_router_hosts,
+   * experimento 2026-08-02). El índice = número de puerto wifi (1=principal
+   * 2.4, 5=principal 5, 2=visita 2.4, 6=visita 5). Ethernet apunta a otra
+   * interfaz (o falta) -> null. La app agrupa client-side combinándolo con el
+   * GET de wifi — el BE no joinea nombres.
+   */
+  wlanIndex: number | null;
 }
 
 export interface WifiManagementPort {
@@ -54,4 +72,11 @@ export interface WifiManagementPort {
   setWifiBand(sn: string, input: SetWifiBandInput): Promise<void>;
   /** GET onu/get_onu_router_hosts/<sn>. NO cacheado. */
   getRouterHosts(sn: string): Promise<RouterHost[]>;
+  /**
+   * EPIC v3 (wifi de visitas) — POST onu/shutdown_wifi_port/<sn> con form
+   * `wifi_port` (único param — colección Postman oficial, 2026-08-03). Apaga
+   * ESE puerto WiFi. Invalida la entrada de cache de `getOnuWifiStatus` de
+   * esta sn: el próximo GET debe ver `enabled:false`, no el snapshot stale.
+   */
+  shutdownWifiPort(sn: string, port: string): Promise<void>;
 }

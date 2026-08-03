@@ -1,14 +1,27 @@
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { ContractInventoryRepository } from '@domain/ports/ContractInventoryRepository';
 import type { WifiManagementPort } from '@domain/ports/WifiManagementPort';
-import type { WifiBandStatus } from '@domain/services/mapWifiPortsToBands';
+import type { WifiBandStatus, GuestWifiBandStatus } from '@domain/services/mapWifiPortsToBands';
+import { mapWifiPortsToGuest } from '@domain/services/mapWifiPortsToBands';
 import { normalizeOnuSerial } from '@domain/services/normalizeOnuSerial';
 import { WifiContractNotFoundError, WifiEligibilityReason } from '@domain/errors/wifi';
 import { OltProvisioningError } from '@domain/errors/smartolt';
 
 export type WifiEligibilityResult =
   | { eligible: false; reason: WifiEligibilityReason }
-  | { eligible: true; sn: string; bands: WifiBandStatus[] };
+  | {
+      eligible: true;
+      sn: string;
+      bands: WifiBandStatus[];
+      /**
+       * EPIC v3 (wifi de visitas) — estado del puerto de visita por banda,
+       * SIEMPRE las dos bandas. Cuando el port no lo informa (fake viejo /
+       * status cacheado pre-upgrade), cae al lado SEGURO: ambas no disponibles
+       * (`mapWifiPortsToGuest([])`) — la ausencia de dato jamás habilita una
+       * escritura.
+       */
+      guest: GuestWifiBandStatus[];
+    };
 
 /**
  * wifi-self-service (F0) — ResolveWifiEligibility: LA autoridad única de la
@@ -75,6 +88,6 @@ export class ResolveWifiEligibility {
       return { eligible: false, reason: 'no_wifi_ports' };
     }
 
-    return { eligible: true, sn, bands: status.bands };
+    return { eligible: true, sn, bands: status.bands, guest: status.guest ?? mapWifiPortsToGuest([]) };
   }
 }
