@@ -413,24 +413,77 @@ export function parseContractsDeltaResponse(data: unknown): FetchContractsDeltaR
  * The real payload structure (captured in Phase 0):
  *   { error:"0", clientes: [ { idcustomer, cuentas: { debt, invoices_qty, payments_url_saldos } } ] }
  *
- * Defensive: returns amount=0 on any missing/malformed data so callers never break.
- * Handles both point-decimal ("65722.07") and AR-locale ("1.234,56") formats.
+ * ⚠️ FIX-1 (CRITICAL, 2026-08-04) — **NO devuelve más un "zero defensivo"**.
+ *
+ * Esta función devolvía `{ amount: 0, invoices: [] }` ante CUALQUIER payload que
+ * no reconociera, y ese objeto significa **"el cliente no debe nada"**, no "no
+ * tengo datos". Río abajo, ese valor viaja a `upsertInvoices`, que es
+ * **replace-all** ⇒ **borraba todas las facturas del cliente**. Cadena verificada
+ * en vivo contra prod:
+ *
+ *   1. GR responde **HTTP 200 con sobre de error** — reproducido mandando el
+ *      password diario de ayer (el incidente del MD5 vs. contenedor en UTC):
+ *      `{"error":"90","descripcion":"No tiene Acceso"}`, sin nodo `clientes`.
+ *      Un cliente inexistente da `{"error":"2","status":"No se encontraron clientes"}`.
+ *   2. El parser lo degradaba a `zero` SIN tirar ⇒ ningún `catch` lo atajaba.
+ *   3. El guard `invoices.length > 0 || amount <= 0` lo dejaba pasar por `0 <= 0`.
+ *   4. `deleteMany({ NOT: { grInvoiceId: { in: [] } } })` matchea TODO (medido con
+ *      el Prisma real de prod: 6 facturas → 6 matcheadas).
+ *   ⇒ un blip de GR vaciaba el espejo con `SyncState.lastResult = 'ok'`.
+ *
+ * Ahora **TIRA** ante un payload no autoritativo, alineándose con su hermano
+ * `parseReceiptsResponse` (que ya lo hacía). Los dos callers —`RefreshDebtorBalances`
+ * y `RefreshClientBalanceIfStale`— ya capturan y sirven lo guardado: el fallo va
+ * hacia **"no toco nada"** en vez de hacia "borro todo".
+ *
+ * Lo que SÍ sigue devolviendo `amount: 0` es la deuda cero LEGÍTIMA (`error: "0"`
+ * + `cuentas.debt = 0`), porque ese borrado es el correcto: es el cliente que pagó.
+ * Medido: de 32 clientes reales muestreados, 32 traen `cuentas` y 12 tienen deuda 0.
+ *
+ * Maneja formato punto-decimal ("65722.07") y AR-locale ("1.234,56").
+ *
+ * @throws Error si el payload no es una respuesta autoritativa sobre este cliente.
  */
 export function parseClientBalanceResponse(grClienteId: string, data: unknown): GrClientBalance {
   const zero: GrClientBalance = { grClienteId, amount: 0, currency: null, invoicesQty: 0, paymentUrls: {}, invoices: [], raw: {} };
 
-  try {
-    const root = (data ?? {}) as Record<string, unknown>;
-    const clientes = Array.isArray(root.clientes) ? root.clientes as Record<string, unknown>[] : [];
-    if (clientes.length === 0) return zero;
+  if (data === null || data === undefined || typeof data !== 'object') {
+    throw new Error(`GR cliente ${grClienteId}: respuesta no interpretable (${typeof data})`);
+  }
 
-    const cliente = clientes[0];
-    const raw = cliente as Record<string, unknown>;
-    const cuentas = cliente.cuentas as Record<string, unknown> | undefined;
-    if (!cuentas) return { ...zero, raw };
+  const root = data as Record<string, unknown>;
 
-    const debtRaw = str(cuentas.debt);
-    const amount = parseArNumber(debtRaw);
+  // Sobre de error. Mismo criterio que `parseReceiptsResponse`.
+  const errorCode = root.error;
+  if (errorCode !== undefined && errorCode !== null && String(errorCode) !== '0') {
+    const detalle = str(root.descripcion) ?? str(root.status) ?? '(sin descripcion)';
+    throw new Error(`GR cliente ${grClienteId}: error ${errorCode}: ${detalle}`);
+  }
+
+  const clientes = Array.isArray(root.clientes) ? (root.clientes as Record<string, unknown>[]) : [];
+  // Preguntamos por UN cliente concreto: que no vuelva ninguno no es "no debe
+  // nada", es "no hay respuesta sobre él".
+  if (clientes.length === 0) {
+    throw new Error(`GR cliente ${grClienteId}: la respuesta no trae el cliente`);
+  }
+
+  const cliente = clientes[0];
+  const raw = cliente as Record<string, unknown>;
+  const cuentasRaw = (cliente as Record<string, unknown>).cuentas;
+  // `cuentas` es donde vive la deuda: sin ese nodo no sabemos NADA de su saldo,
+  // así que no podemos afirmar cero. Medido en vivo: 36/36 clientes reales lo traen.
+  //
+  // Chequeo de TIPO, no de truthiness: `if (!cuentas)` dejaba pasar cualquier valor
+  // truthy no-objeto (`cuentas: "sin datos"`), y ahí `cuentas.debt` es `undefined`
+  // ⇒ amount 0 ⇒ borrado masivo. Mismo patrón que el guard del root, dos líneas arriba.
+  if (!cuentasRaw || typeof cuentasRaw !== 'object') {
+    throw new Error(`GR cliente ${grClienteId}: la respuesta no trae el nodo cuentas`);
+  }
+  const cuentas = cuentasRaw as Record<string, unknown>;
+
+  {
+    // ⚠️ FIX-1b — el hermano que FIX-1 dejó vivo: guardaba el CONTENEDOR, no el VALOR.
+    const amount = parseGrDebtStrict(cuentas.debt, grClienteId);
     const invoicesQty = parseInt(String(cuentas.invoices_qty ?? '0'), 10) || 0;
 
     // Extract payment URLs from payments_url_saldos
@@ -451,9 +504,11 @@ export function parseClientBalanceResponse(grClienteId: string, data: unknown): 
       invoices: parseGrInvoices(cuentas.invoices),
       raw,
     };
-  } catch {
-    return zero;
   }
+  // Sin `catch` a propósito: cualquier throw inesperado significa que NO
+  // entendimos la respuesta, y en ese caso hay que fallar hacia "no toco nada".
+  // El `catch { return zero }` que había acá se tragaba el fallo y lo convertía
+  // en la afirmación "no debe nada", que río abajo BORRA las facturas.
 }
 
 /**
@@ -520,6 +575,83 @@ function grMercadoPagoUrl(paymentsUrl: unknown): string | null {
   if (!paymentsUrl || typeof paymentsUrl !== 'object') return null;
   return str((paymentsUrl as Record<string, unknown>).MercadoPago);
 }
+
+/**
+ * Parsea `cuentas.debt` de forma ESTRICTA: sin dato o dato ilegible ⇒ **tira**.
+ *
+ * `parseArNumber` (abajo) devuelve `0` ante `null`, `''` y cualquier basura no
+ * numérica. Para casi todos los campos eso está bien; para **`debt` es letal**,
+ * porque `0` no significa "no sé": significa **"no debe nada"**, y río abajo el
+ * guard `amount <= 0` habilita un `upsertInvoices` replace-all que **borra todas
+ * las facturas del cliente**.
+ *
+ * Que `debt` siempre venga numérico es una premisa NO verificable: medido contra
+ * GR en vivo sobre 36 clientes reales, `debt` vino string en 36/36 — pero sus
+ * hermanos de plata del MISMO nodo `cuentas` vinieron `debt_uss: null` en 36/36,
+ * `duedebt: ''` en 36/36 y `noduedebt: ''` en 36/36. O sea que GR emite `null` y
+ * `''` en campos de plata de ese nodo de forma universal.
+ *
+ * Falla hacia "no toco nada" en vez de hacia "borro todo".
+ */
+function parseGrDebtStrict(rawDebt: unknown, grClienteId: string): number {
+  if (typeof rawDebt === 'number') {
+    if (!isFinite(rawDebt)) {
+      throw new Error(`GR cliente ${grClienteId}: cuentas.debt no es finito (${rawDebt})`);
+    }
+    return rawDebt;
+  }
+
+  const s = str(rawDebt);
+  if (s === null) {
+    // null, undefined, ausente o cadena vacía. NO es cero: es sin dato.
+    throw new Error(`GR cliente ${grClienteId}: cuentas.debt ausente o vacio — sin dato, no es deuda cero`);
+  }
+
+  // El formato se valida SIEMPRE, no solo cuando el número da 0.
+  //
+  // La versión anterior sólo validaba con `n === 0`, pero el gatillo destructivo
+  // río abajo es `amount <= 0` — **no `=== 0`**. Cualquier basura que `parseFloat`
+  // leyera con prefijo negativo se salteaba la validación entera y caía justo en
+  // el replace-all: `"-500 nota de credito"` → `-500` → `amount <= 0` → borra
+  // todas las facturas. La MISMA basura con un 0 adelante (`"0abc"`) sí tiraba.
+  // Otra vez la instancia en lugar de la clase.
+  if (!FORMATO_MONEDA_GR.test(s)) {
+    throw new Error(`GR cliente ${grClienteId}: cuentas.debt no numerico (${JSON.stringify(s)})`);
+  }
+  // Miles AR sin coma decimal (`"1.234"`) es AMBIGUO: puede ser 1,234 o 1234, y
+  // `parseArNumber` lo lee como 1,234 — un error de MIL VECES sobre plata. Ante
+  // ambigüedad de plata no se adivina: se falla hacia "no toco nada".
+  //
+  // Pero solo es ambiguo cuando las dos lecturas DIFIEREN: en `"0.000"` las dos
+  // dan cero, y rechazarlo sería un falso negativo que deja a ese cliente sin
+  // refrescar nunca — o sea, el bug original por otra puerta.
+  if (FORMATO_MILES_AMBIGUO.test(s)) {
+    const comoDecimal = parseFloat(s);
+    const comoMilesAr = parseFloat(s.replace(/\./g, ''));
+    if (comoDecimal !== comoMilesAr) {
+      throw new Error(
+        `GR cliente ${grClienteId}: cuentas.debt ambiguo (${JSON.stringify(s)}) — ` +
+          `un punto seguido de exactamente 3 digitos puede ser ${comoDecimal} o ${comoMilesAr}`,
+      );
+    }
+  }
+  return parseArNumber(s);
+}
+
+/**
+ * Formatos de plata que GR emite y que `parseArNumber` interpreta BIEN:
+ *   - entero:                 `1234`, `-500`
+ *   - decimal plano:          `0.00`, `127561.28`  ← el que se midió en vivo (36/36)
+ *   - decimal con coma:       `1,5`
+ *   - miles AR CON decimales: `1.234,56`, `1.234.567,89`
+ *
+ * Todo lo demás tira. En particular quedan afuera `"1,234.56"` (locale EN, que se
+ * leía como **1.23456** en silencio) y `"1e5"`.
+ */
+const FORMATO_MONEDA_GR = /^-?(\d+|\d{1,3}(\.\d{3})+)([.,]\d+)?$/;
+
+/** Un punto + exactamente 3 dígitos y nada más: `"1.234"`. Miles AR o decimal, indistinguible. */
+const FORMATO_MILES_AMBIGUO = /^-?\d{1,3}\.\d{3}$/;
 
 /**
  * Parse an Argentine or plain-decimal number string to a JS number.

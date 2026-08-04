@@ -11,7 +11,8 @@ import { SyncGestionRealClients } from '@application/use-cases/SyncGestionRealCl
 import { SyncGestionRealContracts } from '@application/use-cases/SyncGestionRealContracts';
 import { SyncGestionRealContractsDelta } from '@application/use-cases/SyncGestionRealContractsDelta';
 import { BackfillGrContractsBatch } from '@application/use-cases/BackfillGrContractsBatch';
-import { RefreshDebtorBalances } from '@application/use-cases/RefreshDebtorBalances';
+import { RefreshDebtorBalances, FAST_LANE, SLOW_LANE } from '@application/use-cases/RefreshDebtorBalances';
+import { runBalanceLaneTick, LaneGuard } from './balanceLaneTick';
 import { DetectOwnershipTransferCases } from '@application/use-cases/actions/DetectOwnershipTransferCases';
 import { GestionRealSyncScheduler } from './GestionRealSyncScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
@@ -51,7 +52,15 @@ export async function bootstrapGestionRealSync(): Promise<GestionRealSyncSchedul
 
   const syncClients = new SyncGestionRealClients(client, mirror, state, featureFlags, { estados: persisted.estados });
   const syncContracts = new SyncGestionRealContracts(client, mirror);
-  const refreshDebtorBalances = new RefreshDebtorBalances(client, mirror, state);
+  // Dos CARRILES de refresco de balances/facturas (change `gr-balance-refresh-lanes`):
+  //   RÁPIDO (cada hora): activos + deudores + inactivos + incobrables — la data que el
+  //     cliente mira en la app. Antes los ACTIVOS quedaban afuera y una factura ya pagada
+  //     les quedaba `pendiente` para siempre.
+  //   LENTO (1×/día de madrugada): las Bajas, que son el 62% del volumen y cuya deuda
+  //     está congelada.
+  // El carril va EXPLÍCITO — el use case no tiene default a propósito.
+  const refreshFastLane = new RefreshDebtorBalances(client, mirror, state, FAST_LANE);
+  const refreshSlowLane = new RefreshDebtorBalances(client, mirror, state, SLOW_LANE);
   // Resumable, bounded contract backfill driven one batch per scheduler tick
   // (default batchSize 150). Enumerates the local client universe via the
   // read-only mirror port; reuses the contract fetch+upsert path.
@@ -72,31 +81,45 @@ export async function bootstrapGestionRealSync(): Promise<GestionRealSyncSchedul
 
   const scheduler = new GestionRealSyncScheduler(syncClients, syncContracts, { intervalMs: persisted.intervalMs }, lock, backfill, syncContractsDelta, detectOwnershipCases);
 
-  // Batch debtor balance refresh — runs on its own interval (default 1h), independently.
-  startBalanceBatchJob(refreshDebtorBalances, gr.balanceBatchIntervalMs);
+  // Refresco de balances — un ÚNICO ticker para los dos carriles (default 1h).
+  startBalanceLaneJobs({
+    fast: refreshFastLane,
+    slow: refreshSlowLane,
+    state,
+    intervalMs: gr.balanceBatchIntervalMs,
+  });
 
   return scheduler;
 }
 
-/** Start an independent interval job for refreshing debtor balances. */
-function startBalanceBatchJob(uc: RefreshDebtorBalances, intervalMs: number): void {
-  let inFlight = false;
+/**
+ * Un solo ticker horario que alterna entre los dos carriles.
+ *
+ * Deliberadamente NO son dos `setInterval` independientes: el carril lento tarda
+ * ~70 min y el rápido ~43, así que dos tickers los solaparían y duplicarían la
+ * carga instantánea sobre GR (riesgo de 429s, ya advertido en el use case). Un
+ * ticker con un guard compartido = exclusión mutua por construcción.
+ *
+ * Qué carril corre en cada tick lo decide `runBalanceLaneTick`, que está en su
+ * propio módulo justamente para poder testearlo sin timers.
+ */
+function startBalanceLaneJobs(deps: {
+  fast: RefreshDebtorBalances;
+  slow: RefreshDebtorBalances;
+  state: PrismaSyncStateRepository;
+  intervalMs: number;
+}): void {
+  // Parámetros NOMBRADOS a propósito: `fast` y `slow` son del MISMO tipo, así que
+  // como posicionales se podían invertir sin que el compilador ni ningún test se
+  // dieran cuenta — y con los carriles cruzados el batch de Bajas (70 min) correría
+  // cada hora y el de activos 1 vez por día, o sea el bug original de vuelta.
+  // Con un objeto, invertirlos es imposible.
+  const { fast, slow, state, intervalMs } = deps;
+  const guard: LaneGuard = { inFlight: false };
+  const tick = () => runBalanceLaneTick({ fast, slow, state, guard, now: () => new Date() });
 
-  const run = async () => {
-    if (inFlight) return;
-    inFlight = true;
-    try {
-      const result = await uc.execute();
-      console.log(`[gr-balance] batch done: refreshed=${result.refreshed}, errors=${result.errors}`);
-    } catch (err) {
-      console.error('[gr-balance] batch error:', (err as Error).message);
-    } finally {
-      inFlight = false;
-    }
-  };
-
-  // Run immediately on startup, then on interval
-  void run();
-  const timer = setInterval(() => void run(), intervalMs);
+  // Corre una vez al arrancar, después por intervalo.
+  void tick();
+  const timer = setInterval(() => void tick(), intervalMs);
   if (timer.unref) timer.unref();
 }

@@ -22,6 +22,32 @@ function validateEnv(): void {
 
 validateEnv();
 
+/**
+ * Intervalo del ticker de los dos carriles de balances. Se resuelve UNA SOLA VEZ
+ * y se reusa, porque `portalBalanceStaleTtlMinutes` se acota CONTRA este valor.
+ *
+ * Antes se parseaba el MISMO env dos veces con límites distintos (piso 60 s en la
+ * copia del clamp, piso 1 h en el valor real) ⇒ dos fuentes de verdad para la
+ * misma perilla, y el clamp podía estar acotando contra un intervalo que no era
+ * el que realmente corre.
+ *
+ * Piso = el default, NO 60 s: `parseIntervalMs` clampea al MÍNIMO ("honra la
+ * intención de más fresco") y para esta perilla el lado seguro es el GRANDE — una
+ * corrida cuesta 5.582 llamadas a GR y tarda ~43 min medidos. Con el piso viejo,
+ * un `GR_BALANCE_BATCH_INTERVAL_MS=3600` (alguien pensando en SEGUNDOS) era un
+ * valor válido que clampeaba a 1 minuto ⇒ carriles back-to-back permanentes.
+ * Acelerarlo por debajo del default es físicamente imposible: la corrida no entra.
+ *
+ * Techo 2 h, NO 3: la ventana del carril lento es [3,6) hora AR (3 h de ancho).
+ * Con 3 h exactas cae UN solo tick en la ventana, lo que anula su razón de ser
+ * (dar tres intentos) y no deja margen para el jitter del `setInterval`.
+ */
+const BALANCE_BATCH_INTERVAL_MS = parseIntervalMs(process.env.GR_BALANCE_BATCH_INTERVAL_MS, {
+  default: 3_600_000,
+  min: 3_600_000,
+  max: 7_200_000,
+});
+
 export const config = {
   splynxApiUrl: process.env.SPLYNX_API_URL as string,
   splynxApiKey: process.env.SPLYNX_API_KEY as string,
@@ -77,11 +103,25 @@ export const config = {
     estados: (process.env.GR_SYNC_ESTADOS || '1,2,3,4,6').split(',').map(s => s.trim()).filter(Boolean),
     // Balance refresh settings
     /** Minutes before a debtor's balance is considered stale and triggers on-demand refresh. */
-    balanceStaleTtlMinutes: parseInt(process.env.BALANCE_STALE_TTL_MINUTES || '60', 10),
+    balanceStaleTtlMinutes: parsePositiveInt(process.env.BALANCE_STALE_TTL_MINUTES, {
+      default: 60,
+      min: 1,
+      max: 1440,
+    }),
     /** Max ms for on-demand GR balance request before falling back to stored value. */
-    balanceRefreshTimeoutMs: parseInt(process.env.BALANCE_REFRESH_TIMEOUT_MS || '4000', 10),
-    /** Interval (ms) between batch debtor balance refresh runs (default: 1h). */
-    balanceBatchIntervalMs: parseInt(process.env.GR_BALANCE_BATCH_INTERVAL_MS || '3600000', 10),
+    balanceRefreshTimeoutMs: parsePositiveInt(process.env.BALANCE_REFRESH_TIMEOUT_MS, {
+      default: 4000,
+      min: 500,
+      max: 60_000,
+    }),
+    /**
+     * Interval (ms) between balance-lane runs (default: 1h).
+     *
+     * ⚠️ `shouldRunDailyLane` asume un ticker de como mucho 1 h: la ventana del
+     * carril lento es [3,6) hora argentina, así que un intervalo mayor a 3 h
+     * podría no caer NUNCA dentro de la ventana. Por eso el techo es 3 h.
+     */
+    balanceBatchIntervalMs: BALANCE_BATCH_INTERVAL_MS,
   },
 
   /**
