@@ -76,6 +76,13 @@ function makeApp(opts: { requireRead: RequestHandler; requireAudit: RequestHandl
       listSuspiciousClosures: new ListSuspiciousClosures({ iclass }),
       requireLocationRead: opts.requireRead,
       requireLocationAudit: opts.requireAudit,
+      // Reloj FIJO al gate dinámico del journey (antes faltaba → usaba `new Date()`
+      // real). Sin esto el test "journey gated by location_read" se pudría con el
+      // tiempo: pide day=2026-07-26 esperando que sea RECIENTE (read), pero cada
+      // día que pasa lo aleja del umbral OPERATIONAL_JOURNEY_DAYS=1 hasta volverlo
+      // histórico (audit) → 200 en vez de 403. Con NOW fijo, day==NOW ⇒ daysBack 0
+      // ⇒ siempre operativo ⇒ read, determinístico para siempre.
+      now: () => NOW,
     }),
   );
   return { app, repo };
