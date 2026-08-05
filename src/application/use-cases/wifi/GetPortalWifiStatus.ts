@@ -56,7 +56,7 @@ export class GetPortalWifiStatus {
     const saved = await this.credentials.findManyBySn(result.sn);
     const passwordByPort = new Map(saved.map((c) => [c.port, c.password]));
 
-    const guestPending = await this.evaluateGuestPending(result.sn);
+    const guestPending = await this.evaluateGuestPending(result.sn, contractId);
 
     return {
       eligible: true,
@@ -100,9 +100,17 @@ export class GetPortalWifiStatus {
    * Toda falla de SmartOLT en la verificación/re-push degrada SIN romper el
    * GET: 'in_progress'/'unconfirmed' según edad.
    */
-  private async evaluateGuestPending(sn: string): Promise<PortalGuestPendingDto | undefined> {
+  private async evaluateGuestPending(sn: string, contractId: string): Promise<PortalGuestPendingDto | undefined> {
     const intent = await this.intents.findBySn(sn);
     if (!intent) return undefined;
+
+    // Intent HUÉRFANO: el ONT se re-provisionó a OTRO contrato (reuso rutinario
+    // del parque) — el dueño nuevo NO hereda el nag 'unconfirmed' ni el poll de
+    // un cambio que no ordenó. Se borra en silencio, sin verificar nada.
+    if (intent.contractId !== contractId) {
+      await this.intents.deleteBySn(sn);
+      return undefined;
+    }
 
     const nowMs = this.now();
     const inProgress = isWifiGuestIntentInProgress(intent, nowMs);
@@ -135,12 +143,21 @@ export class GetPortalWifiStatus {
     if (wifiGuestIntentAgeMs(intent, nowMs) > WIFI_GUEST_RETRY_AFTER_MS && intent.retriedAt === null) {
       try {
         if (await this.guestWlanHasOnlineMacs(sn, intent)) {
-          await this.wifi.shutdownWifiPort(sn, intent.port);
+          // AT-MOST-ONCE: el sello va ANTES del push. Si fuera al revés y el
+          // push saliera pero markRetried fallara (blip de DB, P2025 por
+          // reemplazo concurrente), retriedAt quedaría null y el poll de 30s
+          // de la app re-pushearía en CADA GET (~14 POSTs en la ventana
+          // 3-10 min). Con el sello primero, el peor caso es UN push perdido
+          // (sellado pero nunca enviado) — preferimos un push perdido a una
+          // tormenta; a los 10 min la verificación decide igual (unconfirmed
+          // permite reintentar a mano).
           await this.intents.markRetried(intent.id, new Date(nowMs).toISOString());
+          await this.wifi.shutdownWifiPort(sn, intent.port);
         }
       } catch (err) {
-        // Verificación o re-push caídos: el GET jamás rompe por esto; sin
-        // sellar retriedAt, el próximo GET dentro de la ventana reintenta.
+        // Verificación, sello o re-push caídos: el GET jamás rompe por esto.
+        // Si falló el SELLO, el push ni se intentó (nunca un push sin sellar);
+        // si falló la verificación, el próximo GET en ventana reintenta.
         console.warn('[GetPortalWifiStatus] verificación/re-push del guest falló (best-effort):', err);
       }
     }

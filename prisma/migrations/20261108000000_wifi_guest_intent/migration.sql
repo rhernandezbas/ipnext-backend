@@ -2,6 +2,7 @@
 CREATE TABLE "WifiGuestIntent" (
     "id" TEXT NOT NULL,
     "sn" TEXT NOT NULL,
+    "contractId" TEXT NOT NULL,
     "action" TEXT NOT NULL,
     "port" TEXT NOT NULL,
     "since" TIMESTAMP(3) NOT NULL,

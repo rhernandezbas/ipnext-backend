@@ -9,6 +9,7 @@ import type {
 interface WifiGuestIntentRow {
   id: string;
   sn: string;
+  contractId: string;
   action: string;
   port: string;
   since: Date;
@@ -19,6 +20,7 @@ function toEntity(row: WifiGuestIntentRow): WifiGuestIntent {
   return {
     id: row.id,
     sn: row.sn,
+    contractId: row.contractId,
     // Basura al valor SEGURO: un action desconocido cae a 'creating' — se
     // autolimpia a los 10 min sin verificar ni re-pushear nada.
     action: row.action === 'deleting' ? 'deleting' : ('creating' as WifiGuestIntentAction),
@@ -46,11 +48,13 @@ export class PrismaWifiGuestIntentRepository implements WifiGuestIntentRepositor
       where: { sn: input.sn },
       create: {
         sn: input.sn,
+        contractId: input.contractId,
         action: input.action,
         port: input.port,
         since: new Date(input.since),
       },
       update: {
+        contractId: input.contractId,
         action: input.action,
         port: input.port,
         since: new Date(input.since),

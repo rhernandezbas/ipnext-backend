@@ -134,6 +134,23 @@ describe('SmartOltHttpGateway — getOnlineWifiMacs', () => {
     expect(transport.calls).toHaveLength(2);
   });
 
+  it('shutdownWifiPort y setWifiBand invalidan la cache de MACs de ESA sn: el próximo GET re-fetchea (sin esto, en el borde de los 10 min un snapshot pre-aplicación emite un unconfirmed falso)', async () => {
+    const { gateway, transport } = buildGateway();
+    transport.responses.set('onu/get_onu_full_status_info/HWTCA92F96B1', RAW_FULL_STATUS);
+    transport.responses.set('onu/shutdown_wifi_port/HWTCA92F96B1', { status: true });
+    transport.responses.set('onu/set_wifi_port_lan/HWTCA92F96B1', { status: true });
+    const fullStatusFetches = () => transport.calls.filter((c) => c.url.startsWith('onu/get_onu_full_status_info')).length;
+
+    await gateway.getOnlineWifiMacs('HWTCA92F96B1');
+    await gateway.shutdownWifiPort('HWTCA92F96B1', 'wifi_0/2');
+    await gateway.getOnlineWifiMacs('HWTCA92F96B1');
+    expect(fullStatusFetches()).toBe(2);
+
+    await gateway.setWifiBand('HWTCA92F96B1', { port: 'wifi_0/2', ssid: 'Visitas', password: 'clave1234' });
+    await gateway.getOnlineWifiMacs('HWTCA92F96B1');
+    expect(fullStatusFetches()).toBe(3);
+  });
+
   it('sin baseUrl/token -> not_configured ANTES de tocar la red', async () => {
     const { gateway, transport } = buildGateway({ baseUrl: '', token: '' });
 

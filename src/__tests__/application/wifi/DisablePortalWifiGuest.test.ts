@@ -128,7 +128,7 @@ describe('DisablePortalWifiGuest — estado PENDIENTE (wifi-guest-pending)', () 
 
   it('409 en pending: intent en curso (< 10 min) -> GuestChangePendingError sin tocar el gateway', async () => {
     const { uc, gw, intents } = await buildStack();
-    await intents.replace({ sn: SN, action: 'creating', port: 'wifi_0/2', since: iso(T0 - 9 * MIN) });
+    await intents.replace({ sn: SN, contractId: 'c1', action: 'creating', port: 'wifi_0/2', since: iso(T0 - 9 * MIN) });
 
     await expect(uc.execute('client-a', 'c1', '2.4')).rejects.toBeInstanceOf(GuestChangePendingError);
 
@@ -138,7 +138,7 @@ describe('DisablePortalWifiGuest — estado PENDIENTE (wifi-guest-pending)', () 
 
   it('intent con >= 10 min (unconfirmed) PERMITE reintentar: apaga de nuevo y REEMPLAZA el intent (retriedAt vuelve a null)', async () => {
     const { uc, gw, intents } = await buildStack();
-    const stale = await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
+    const stale = await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
     await intents.markRetried(stale.id, iso(T0 - 6 * MIN));
 
     const result = await uc.execute('client-a', 'c1', '2.4');

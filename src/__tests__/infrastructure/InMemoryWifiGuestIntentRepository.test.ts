@@ -15,12 +15,13 @@ describe('InMemoryWifiGuestIntentRepository', () => {
 
   it('replace crea el intent (retriedAt null) y findBySn lo devuelve', async () => {
     const repo = new InMemoryWifiGuestIntentRepository();
-    const created = await repo.replace({ sn: 'HWTC1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
+    const created = await repo.replace({ sn: 'HWTC1', contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
 
     const found = await repo.findBySn('HWTC1');
     expect(found).toEqual({
       id: created.id,
       sn: 'HWTC1',
+      contractId: 'c1',
       action: 'deleting',
       port: 'wifi_0/2',
       since: '2026-08-05T10:00:00.000Z',
@@ -30,10 +31,10 @@ describe('InMemoryWifiGuestIntentRepository', () => {
 
   it('replace sobre una sn con intent PISA el anterior (no duplica) y resetea retriedAt', async () => {
     const repo = new InMemoryWifiGuestIntentRepository();
-    const first = await repo.replace({ sn: 'HWTC1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
+    const first = await repo.replace({ sn: 'HWTC1', contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
     await repo.markRetried(first.id, '2026-08-05T10:04:00.000Z');
 
-    await repo.replace({ sn: 'HWTC1', action: 'creating', port: 'wifi_0/6', since: '2026-08-05T11:00:00.000Z' });
+    await repo.replace({ sn: 'HWTC1', contractId: 'c1', action: 'creating', port: 'wifi_0/6', since: '2026-08-05T11:00:00.000Z' });
 
     expect(repo.all()).toHaveLength(1);
     const found = await repo.findBySn('HWTC1');
@@ -42,7 +43,7 @@ describe('InMemoryWifiGuestIntentRepository', () => {
 
   it('markRetried sella retriedAt del intent por id', async () => {
     const repo = new InMemoryWifiGuestIntentRepository();
-    const created = await repo.replace({ sn: 'HWTC1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
+    const created = await repo.replace({ sn: 'HWTC1', contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
 
     await repo.markRetried(created.id, '2026-08-05T10:04:00.000Z');
 
@@ -51,8 +52,8 @@ describe('InMemoryWifiGuestIntentRepository', () => {
 
   it('deleteBySn borra SOLO esa sn — otra sn no se ve afectada', async () => {
     const repo = new InMemoryWifiGuestIntentRepository();
-    await repo.replace({ sn: 'HWTC1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
-    await repo.replace({ sn: 'HWTC2', action: 'creating', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
+    await repo.replace({ sn: 'HWTC1', contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
+    await repo.replace({ sn: 'HWTC2', contractId: 'c1', action: 'creating', port: 'wifi_0/2', since: '2026-08-05T10:00:00.000Z' });
 
     await repo.deleteBySn('HWTC1');
 

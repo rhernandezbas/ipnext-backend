@@ -23,6 +23,7 @@ export class InMemoryWifiGuestIntentRepository implements WifiGuestIntentReposit
     const row: WifiGuestIntent = {
       id: `intent-${++this.seq}`,
       sn: input.sn,
+      contractId: input.contractId,
       action: input.action,
       port: input.port,
       since: input.since,

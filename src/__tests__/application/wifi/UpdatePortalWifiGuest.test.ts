@@ -160,7 +160,7 @@ describe('UpdatePortalWifiGuest — estado PENDIENTE (wifi-guest-pending)', () =
 
   it('409 en pending: intent en curso (< 10 min) -> GuestChangePendingError, el gateway JAMÁS se toca y el intent NO cambia', async () => {
     const { uc, gw, intents } = await buildStack();
-    await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 5 * MIN) });
+    await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 5 * MIN) });
 
     await expect(uc.execute('client-a', 'c1', { band: '2.4', ssid: 'Visitas', password: 'clave1234' }))
       .rejects.toBeInstanceOf(GuestChangePendingError);
@@ -173,7 +173,7 @@ describe('UpdatePortalWifiGuest — estado PENDIENTE (wifi-guest-pending)', () =
 
   it('intent con >= 10 min (unconfirmed/expirado) PERMITE reintentar: escribe y lo REEMPLAZA por uno nuevo', async () => {
     const { uc, gw, intents } = await buildStack();
-    await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
+    await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
 
     const result = await uc.execute('client-a', 'c1', { band: '2.4', ssid: 'Visitas', password: 'clave1234' });
 
@@ -181,6 +181,19 @@ describe('UpdatePortalWifiGuest — estado PENDIENTE (wifi-guest-pending)', () =
     expect(gw.calls.filter((c) => c.method === 'setWifiBand')).toHaveLength(1);
     expect(intents.all()).toEqual([
       expect.objectContaining({ action: 'creating', since: T0_ISO, retriedAt: null }),
+    ]);
+  });
+
+  it('intent en curso pero de OTRO contrato (ONT re-provisionado) -> NO 409: el write procede y el intent huérfano se REEMPLAZA', async () => {
+    const { uc, gw, intents } = await buildStack();
+    await intents.replace({ sn: SN, contractId: 'c-dueno-anterior', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 2 * MIN) });
+
+    const result = await uc.execute('client-a', 'c1', { band: '2.4', ssid: 'Visitas', password: 'clave1234' });
+
+    expect(result).toMatchObject({ action: 'creating', status: 'in_progress' });
+    expect(gw.calls.filter((c) => c.method === 'setWifiBand')).toHaveLength(1);
+    expect(intents.all()).toEqual([
+      expect.objectContaining({ contractId: 'c1', action: 'creating', since: T0_ISO }),
     ]);
   });
 

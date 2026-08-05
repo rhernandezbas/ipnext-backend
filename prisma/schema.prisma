@@ -4590,6 +4590,10 @@ model WifiGuestIntent {
   id String @id @default(uuid())
   /// Serial NORMALIZADO (normalizeOnuSerial). UNIQUE: UN intent por ONU a la vez.
   sn String @unique
+  /// Contrato que ORDENÓ el cambio. Un ONT se re-provisiona a OTRO cliente de
+  /// forma rutinaria: si el contrato actual no coincide, el intent es huérfano
+  /// y el GET lo borra en silencio (el dueño nuevo no hereda el nag).
+  contractId String
   /// 'creating' | 'deleting'.
   action String
   /// Puerto de visita afectado ('wifi_0/2' | 'wifi_0/6') — re-push + índice WLAN de verificación.

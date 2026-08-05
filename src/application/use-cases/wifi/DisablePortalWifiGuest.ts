@@ -38,8 +38,14 @@ export class DisablePortalWifiGuest {
       throw new WifiNotEligibleError(result.reason);
     }
 
+    // Solo bloquea un intent de ESTE contrato (uno ajeno = ONT re-provisionado,
+    // huérfano: el replace lo pisa). RESIDUO ACEPTADO: check-then-act sin
+    // transacción — dos devices simultáneos del mismo cliente pueden pasar
+    // ambos el check y pushear ambos; el último replace gana y el daño es un
+    // push extra. Serializar por sn no paga con el tráfico real del portal
+    // (mismo razonamiento documentado en UpdatePortalWifiGuest).
     const existing = await this.intents.findBySn(result.sn);
-    if (existing && isWifiGuestIntentInProgress(existing, this.now())) {
+    if (existing && existing.contractId === contractId && isWifiGuestIntentInProgress(existing, this.now())) {
       throw new GuestChangePendingError();
     }
 
@@ -52,7 +58,7 @@ export class DisablePortalWifiGuest {
 
     const since = new Date(this.now()).toISOString();
     try {
-      await this.intents.replace({ sn: result.sn, action: 'deleting', port: target.port, since });
+      await this.intents.replace({ sn: result.sn, contractId, action: 'deleting', port: target.port, since });
     } catch (err) {
       console.warn('[DisablePortalWifiGuest] persistencia del intent falló (best-effort — la orden ya se envió):', err);
     }

@@ -23,6 +23,13 @@ export interface WifiGuestIntent {
   id: string;
   /** Serial NORMALIZADO (normalizeOnuSerial) — misma clave que el resto de wifi-self-service. */
   sn: string;
+  /**
+   * Contrato que ORDENÓ el cambio. Un ONT se re-provisiona a OTRO cliente de
+   * forma rutinaria (reuso del parque): si el contrato actual del GET no
+   * coincide, el intent es HUÉRFANO — se borra en silencio, el dueño nuevo
+   * jamás hereda el nag 'unconfirmed' de un cambio que no hizo.
+   */
+  contractId: string;
   action: WifiGuestIntentAction;
   /** Puerto de visita afectado ('wifi_0/2' | 'wifi_0/6') — para el re-push y el índice WLAN de verificación. */
   port: string;
@@ -34,6 +41,7 @@ export interface WifiGuestIntent {
 
 export interface ReplaceWifiGuestIntentInput {
   sn: string;
+  contractId: string;
   action: WifiGuestIntentAction;
   port: string;
   since: string;

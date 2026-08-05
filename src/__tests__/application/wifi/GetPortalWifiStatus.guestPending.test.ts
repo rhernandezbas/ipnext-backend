@@ -96,10 +96,24 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
     expect(res).not.toHaveProperty('guestPending');
   });
 
+  it('intent HUÉRFANO (el ONT se re-provisionó a OTRO contrato) -> se borra en silencio, sin guestPending y SIN verificación (el dueño nuevo no hereda el nag)', async () => {
+    const { uc, gw, intents } = await buildStack();
+    // Intent viejo del contrato anterior, en la ventana que más molestaría (>= 10 min, deleting con MACs vivas -> daría unconfirmed).
+    await intents.replace({ sn: SN, contractId: 'c-dueno-anterior', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 15 * MIN) });
+    gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
+
+    const res = await uc.execute('client-a', 'c1');
+
+    expect(res).not.toHaveProperty('guestPending');
+    expect(intents.all()).toHaveLength(0);
+    expect(verifyCalls(gw)).toHaveLength(0);
+    expect(shutdownCalls(gw)).toHaveLength(0);
+  });
+
   describe("action='creating'", () => {
     it('edad < 10 min -> in_progress, SIN verificación (la lectura viva no se gasta en altas)', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'creating', port: 'wifi_0/2', since: iso(T0 - 2 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'creating', port: 'wifi_0/2', since: iso(T0 - 2 * MIN) });
 
       const res = await uc.execute('client-a', 'c1');
 
@@ -111,7 +125,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
     it('edad >= 10 min -> intent BORRADO y sin guestPending (la DB de SmartOLT ya refleja el alta; pending del alta = UX temporal)', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'creating', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'creating', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
 
       const res = await uc.execute('client-a', 'c1');
 
@@ -124,7 +138,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
   describe("action='deleting', edad < 10 min", () => {
     it('edad <= 3 min -> in_progress SIN verificar ni re-pushear (ventana de gracia del TR-069)', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 2 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 2 * MIN) });
       gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
 
       const res = await uc.execute('client-a', 'c1');
@@ -136,7 +150,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
     it('re-push a los 3 min: edad > 3 min, sin retriedAt y MACs SIGUEN en el índice guest -> re-push UNA vez + retriedAt sellado', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
       // La radio sigue al aire: MAC online en WLAN 2 (= wifi_0/2), el caso real HWTCA92F96B1.
       gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
 
@@ -149,7 +163,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
     it('re-push es UNA sola vez: el 2do GET (retriedAt ya sellado) NO vuelve a pushear ni verificar', async () => {
       const { uc, gw, intents, setNow } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
       gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
 
       await uc.execute('client-a', 'c1');
@@ -163,7 +177,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
     it('asimetría de índice: MACs online SOLO en otros WLAN (1 y 5) -> NO re-push (la señal es POR índice guest)', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
       gw.onlineWifiMacsBySn.set(SN, [
         { wlanIndex: 1, mac: 'f8:16:0c:31:fc:16' },
         { wlanIndex: 5, mac: 'da:88:d8:52:85:0e' },
@@ -178,7 +192,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
     it('banda 5 (wifi_0/6): la verificación mira WLAN 6 — MAC en WLAN 2 NO dispara el re-push', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/6', since: iso(T0 - 4 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/6', since: iso(T0 - 4 * MIN) });
       gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
 
       await uc.execute('client-a', 'c1');
@@ -186,15 +200,47 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
       gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 6, mac: 'aa:bb:cc:dd:ee:ff' }]);
       const { uc: uc2, gw: gw2, intents: intents2 } = await buildStack();
-      await intents2.replace({ sn: SN, action: 'deleting', port: 'wifi_0/6', since: iso(T0 - 4 * MIN) });
+      await intents2.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/6', since: iso(T0 - 4 * MIN) });
       gw2.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 6, mac: 'aa:bb:cc:dd:ee:ff' }]);
       await uc2.execute('client-a', 'c1');
       expect(shutdownCalls(gw2)).toEqual([{ method: 'shutdownWifiPort', sn: SN, port: 'wifi_0/6' }]);
     });
 
+    it('at-most-once: retriedAt se sella ANTES del push — push falla pero el sello queda, y los GETs siguientes NO verifican ni re-pushean', async () => {
+      const { uc, gw, intents } = await buildStack();
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
+      gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
+      gw.failMethods = ['shutdownWifiPort'];
+
+      const res = await uc.execute('client-a', 'c1');
+
+      // El GET no rompe y el sello quedó puesto AUNQUE el push falló.
+      expect(res).toMatchObject({ guestPending: { action: 'deleting', status: 'in_progress' } });
+      expect((await intents.findBySn(SN))!.retriedAt).toBe(iso(T0));
+
+      // Poll de 30s dentro de la ventana: NINGÚN GET posterior vuelve a
+      // verificar ni a pushear (sin el sello previo serían ~14 POSTs).
+      await uc.execute('client-a', 'c1');
+      await uc.execute('client-a', 'c1');
+      expect(verifyCalls(gw)).toHaveLength(1);
+      expect(shutdownCalls(gw)).toHaveLength(0); // el push fallido jamás se registró ni se reintentó
+    });
+
+    it('si el SELLO (markRetried) falla, el push NI SE INTENTA — nunca un push sin sellar, nunca tormenta', async () => {
+      const { uc, gw, intents } = await buildStack();
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
+      gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
+      intents.markRetried = async () => { throw new Error('DB blip (simulado)'); };
+
+      const res = await uc.execute('client-a', 'c1');
+
+      expect(res).toMatchObject({ guestPending: { action: 'deleting', status: 'in_progress' } });
+      expect(shutdownCalls(gw)).toHaveLength(0);
+    });
+
     it('SmartOLT caído en la verificación -> el GET NO rompe: in_progress, sin re-push, retriedAt sigue null', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 4 * MIN) });
       gw.failOnlineWifiMacs = true;
 
       const res = await uc.execute('client-a', 'c1');
@@ -208,7 +254,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
   describe("action='deleting', edad >= 10 min", () => {
     it('unconfirmed a los 10: MACs SIGUEN en el índice guest -> status unconfirmed, intent SE MANTIENE y NO hay re-push (aunque nunca se haya reintentado)', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
       gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 2, mac: '1e:be:33:9b:97:b2' }]);
 
       const res = await uc.execute('client-a', 'c1');
@@ -222,7 +268,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
     it('asimetría: sin MACs en el índice guest -> intent BORRADO y sin guestPending (asumimos aplicado)', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 15 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 15 * MIN) });
       gw.onlineWifiMacsBySn.set(SN, [{ wlanIndex: 1, mac: 'f8:16:0c:31:fc:16' }]);
 
       const res = await uc.execute('client-a', 'c1');
@@ -233,7 +279,7 @@ describe('GetPortalWifiStatus — guestPending (evaluación lazy del intent)', (
 
     it('SmartOLT caído en la verificación -> unconfirmed SIN romper el GET, intent se mantiene', async () => {
       const { uc, gw, intents } = await buildStack();
-      await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
+      await intents.replace({ sn: SN, contractId: 'c1', action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
       gw.failOnlineWifiMacs = true;
 
       const res = await uc.execute('client-a', 'c1');

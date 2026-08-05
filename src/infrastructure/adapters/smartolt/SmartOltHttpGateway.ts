@@ -471,6 +471,9 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
   async setWifiBand(sn: string, input: SetWifiBandInput): Promise<void> {
     await this.postSetWifiPort(sn, input.port, input.ssid, input.password);
     this.wifiStatusCache.delete(sn);
+    // wifi-guest-pending — la lectura viva también queda stale tras un write
+    // (misma disciplina que abajo en shutdownWifiPort).
+    this.onlineMacsCache.delete(sn);
   }
 
   /**
@@ -489,6 +492,10 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
     await this.post(`onu/shutdown_wifi_port/${encodeURIComponent(sn)}`, form);
     this.wifiStatusCache.delete(sn);
     this.routerHostsCache.delete(sn);
+    // wifi-guest-pending — sin esto, en el borde de los 10 min la evaluación
+    // lazy puede leer un snapshot de MACs PRE-aplicación y emitir un
+    // 'unconfirmed' falso (se auto-cura al expirar el TTL, pero es gratis).
+    this.onlineMacsCache.delete(sn);
   }
 
   /**
