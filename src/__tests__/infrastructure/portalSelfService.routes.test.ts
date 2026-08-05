@@ -11,6 +11,8 @@ import express, { Request, Response } from 'express';
 import request from 'supertest';
 
 import { createPortalRouter } from '@infrastructure/http/routes/portal.routes';
+import { ListPortalPayments } from '@application/use-cases/portal/ListPortalPayments';
+import type { PortalPaymentsReader } from '@domain/ports/PortalPaymentsReader';
 import { createPortalAuthMiddleware } from '@infrastructure/http/middleware/portalAuthMiddleware';
 import { createPortalKillSwitchMiddleware } from '@infrastructure/http/middleware/portalKillSwitchMiddleware';
 import { createPortalGeneralRateLimiter, createPortalTicketCreateRateLimiter } from '@infrastructure/http/middleware/rateLimiters';
@@ -178,6 +180,28 @@ function buildStack() {
   const changePortalPassword = new ChangePortalPassword(accounts, hasher, sessions);
   const getPortalMe = new GetPortalMe(customers as unknown as CustomerRepository);
   const listPortalInvoices = new ListPortalInvoices(customers as unknown as CustomerRepository);
+  // portal-payments — reader in-memory sembrado con el pago REAL del usuario
+  // (03-08-2026, $2.500,01 por MercadoPago, aplicado a FB-00010-000080104).
+  const paymentsReader: PortalPaymentsReader = {
+    listByGrClienteId: async (grClienteId, q) => ({
+      // Solo el cliente 204366 tiene este pago: asi el test anti-IDOR discrimina
+      // de verdad en vez de devolver lo mismo para cualquiera.
+      data: grClienteId !== '204366' ? [] : [
+        {
+          grReceiptId: '344174',
+          fechaRecibo: '2026-08-03T00:00:00.000Z',
+          recaudador: 'mercadopago',
+          items: [{ amount: 2500.01, moneda: 'PES' }],
+          retenciones: [],
+          applications: [{ grInvoiceId: 'FB-00010-000080104', grType: 'FB', amount: 2500.01 }],
+        },
+      ],
+      total: grClienteId === '204366' ? 1 : 0,
+      page: q.page ?? 1,
+      limit: q.limit ?? 25,
+    }),
+  };
+  const listPortalPayments = new ListPortalPayments(customers as unknown as CustomerRepository, paymentsReader);
   const listPortalPlans = new ListPortalPlans(customers as unknown as CustomerRepository);
   const listPortalTasks = new ListPortalTasks(scheduling);
   const listPortalTickets = new ListPortalTickets(ticketRepo, ticketCommentRepo);
@@ -210,6 +234,7 @@ function buildStack() {
       generalRateLimiter,
       getPortalMe,
       listPortalInvoices,
+      listPortalPayments,
       listPortalPlans,
       listPortalTasks,
       listPortalTickets,
@@ -776,6 +801,102 @@ describe('portal self-service + account-deletion routes — Fases 4/5/6', () => 
 
       expect(await stack.accounts.findById(accountA.id)).toBeNull();
       expect(await stack.accounts.findById(accountB.id)).not.toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // portal-payments — GET /api/portal/payments
+  //
+  // Existe porque cuando el cliente paga, GR saca la factura de la lista y el
+  // replace-all la BORRA del espejo: el pago no dejaba NINGUN rastro. El recibo es
+  // la evidencia positiva, y su `aplicacion` reconstruye a que factura correspondia.
+  // ===========================================================================
+  describe('GET /api/portal/payments', () => {
+    it('sin token de portal ⇒ 401', async () => {
+      const stack = buildStack();
+      const res = await request(stack.app).get('/api/portal/payments');
+      expect(res.status).toBe(401);
+    });
+
+    it('devuelve el pago con su importe, medio y A QUE FACTURA se aplico', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', grClienteId: '204366' }));
+      const account = await stack.accounts.create({ clientId: 'client-a', dni: '30111222', passwordHash: await stack.hasher.hash('Secret123') });
+      const token = stack.tokenService.signAccessToken({ accountId: account.id, clientId: account.clientId });
+
+      const res = await request(stack.app).get('/api/portal/payments').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ total: 1, page: 1, limit: 25 });
+      expect(res.body.data[0]).toEqual({
+        date: '2026-08-03T00:00:00.000Z',
+        amounts: [{ currency: 'ARS', amount: 2500.01 }],
+        method: 'mercadopago',
+        appliedTo: [{ invoiceNumber: '000080104', amount: 2500.01 }],
+      });
+    });
+
+    it('anti-IDOR: un cliente con OTRO grClienteId no ve el pago ajeno', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-b', grClienteId: '999999' }));
+      const account = await stack.accounts.create({ clientId: 'client-b', dni: '30999888', passwordHash: await stack.hasher.hash('OtherPass1') });
+      const token = stack.tokenService.signAccessToken({ accountId: account.id, clientId: account.clientId });
+
+      const res = await request(stack.app).get('/api/portal/payments').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('PAY-1.1 — mandar ?clientId= de OTRO cliente se IGNORA (el escenario del spec)', async () => {
+      // Este test faltaba y su ausencia era el hallazgo mas grave del review: la
+      // invariante anti-IDOR mas importante del endpoint se apoyaba SOLO en un regex
+      // de TEXTO sobre el fuente, que un revisor esquivo con un alias local
+      // (`const q = req.query; q.clientId`) dejando 57/57 tests en verde con un IDOR
+      // total. Un assert de AUSENCIA sobre texto no discrimina; este corre la ruta.
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-b', grClienteId: '999999' }));
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', grClienteId: '204366' }));
+      const cuentaB = await stack.accounts.create({ clientId: 'client-b', dni: '30999888', passwordHash: await stack.hasher.hash('OtherPass1') });
+      const tokenB = stack.tokenService.signAccessToken({ accountId: cuentaB.id, clientId: cuentaB.clientId });
+
+      // Token de B, pero pidiendo explicitamente los datos de A por query param.
+      const res = await request(stack.app)
+        .get('/api/portal/payments?clientId=client-a')
+        .set('Authorization', `Bearer ${tokenB}`);
+
+      expect(res.status).toBe(200);
+      // B no tiene pagos: si el endpoint hubiera honrado el query param, veria el de A.
+      expect(res.body.data).toEqual([]);
+      expect(res.body.total).toBe(0);
+    });
+
+    it('PAY-1.1 — tampoco lo honra por body ni por header', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-b', grClienteId: '999999' }));
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', grClienteId: '204366' }));
+      const cuentaB = await stack.accounts.create({ clientId: 'client-b', dni: '30999888', passwordHash: await stack.hasher.hash('OtherPass1') });
+      const tokenB = stack.tokenService.signAccessToken({ accountId: cuentaB.id, clientId: cuentaB.clientId });
+
+      const res = await request(stack.app)
+        .get('/api/portal/payments')
+        .set('Authorization', `Bearer ${tokenB}`)
+        .set('X-Client-Id', 'client-a')
+        .send({ clientId: 'client-a' });
+
+      expect(res.body.data).toEqual([]);
+    });
+
+    it('cliente sin grClienteId ⇒ 200 con lista vacia (no 500)', async () => {
+      const stack = buildStack();
+      stack.customers.seedCustomer(makeCustomer({ id: 'client-a', grClienteId: null }));
+      const account = await stack.accounts.create({ clientId: 'client-a', dni: '30111222', passwordHash: await stack.hasher.hash('Secret123') });
+      const token = stack.tokenService.signAccessToken({ accountId: account.id, clientId: account.clientId });
+
+      const res = await request(stack.app).get('/api/portal/payments').set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ data: [], total: 0, page: 1, limit: 25 });
     });
   });
 });

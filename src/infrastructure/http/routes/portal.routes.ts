@@ -5,6 +5,7 @@ import { LogoutPortal } from '@application/use-cases/portal/LogoutPortal';
 import { ChangePortalPassword } from '@application/use-cases/portal/ChangePortalPassword';
 import { GetPortalMe } from '@application/use-cases/portal/GetPortalMe';
 import { ListPortalInvoices } from '@application/use-cases/portal/ListPortalInvoices';
+import { ListPortalPayments } from '@application/use-cases/portal/ListPortalPayments';
 import { ListPortalPlans } from '@application/use-cases/portal/ListPortalPlans';
 import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
 import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
@@ -114,6 +115,7 @@ export interface PortalRouterDeps {
   // de F2, que solo pasa los deps de auth). Fase 7 los inyecta desde app.ts.
   getPortalMe?: GetPortalMe;
   listPortalInvoices?: ListPortalInvoices;
+  listPortalPayments?: ListPortalPayments;
   listPortalPlans?: ListPortalPlans;
   listPortalTasks?: ListPortalTasks;
   listPortalTickets?: ListPortalTickets;
@@ -397,6 +399,27 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           // M2 — parseo estricto compartido (entero >=1, cap 100): basura => default.
           const { page, limit } = parsePagination(req.query);
           const result = await listPortalInvoices.execute(clientId, { page, limit });
+          res.status(200).json(result);
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
+  }
+
+  if (deps.listPortalPayments) {
+    const listPortalPayments = deps.listPortalPayments;
+    router.get(
+      '/payments',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        // `clientId` SIEMPRE del token — nunca del request (PAY-1.1).
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const { page, limit } = parsePagination(req.query);
+          const result = await listPortalPayments.execute(clientId, { page, limit });
           res.status(200).json(result);
         } catch (err) {
           next(err);

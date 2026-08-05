@@ -976,6 +976,8 @@ import { LogoutPortal } from '@application/use-cases/portal/LogoutPortal';
 import { ChangePortalPassword } from '@application/use-cases/portal/ChangePortalPassword';
 import { GetPortalMe } from '@application/use-cases/portal/GetPortalMe';
 import { ListPortalInvoices } from '@application/use-cases/portal/ListPortalInvoices';
+import { ListPortalPayments } from '@application/use-cases/portal/ListPortalPayments';
+import { PrismaPortalPaymentsReader } from '../adapters/prisma/PrismaPortalPaymentsReader';
 import { ListPortalPlans } from '@application/use-cases/portal/ListPortalPlans';
 import { ListPortalTasks } from '@application/use-cases/portal/ListPortalTasks';
 import { ListPortalTickets } from '@application/use-cases/portal/ListPortalTickets';
@@ -3812,6 +3814,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const changePortalPassword = new ChangePortalPassword(portalAccountRepo, passwordHasher, portalSessionRepo);
   const getPortalMe = new GetPortalMe(customerAdapter);
   const listPortalInvoices = new ListPortalInvoices(customerAdapter);
+  // portal-payments — el historial de pagos sale de los RECIBOS de GR, no de
+  // deducir sobre la factura que el replace-all borro.
+  const listPortalPayments = new ListPortalPayments(customerAdapter, new PrismaPortalPaymentsReader());
   const listPortalPlans = new ListPortalPlans(customerAdapter);
   const listPortalTasks = new ListPortalTasks(schedulingRepo);
   // v2.B (portal-ticket-messaging) — reusa el MISMO `ticketCommentRepo` singleton
@@ -3993,6 +3998,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     generalRateLimiter: portalGeneralRateLimiter,
     getPortalMe,
     listPortalInvoices,
+      listPortalPayments,
     listPortalPlans,
     listPortalTasks,
     listPortalTickets,
