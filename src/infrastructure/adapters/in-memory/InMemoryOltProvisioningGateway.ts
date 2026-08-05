@@ -9,6 +9,7 @@ import {
   OnuWifiStatus,
   SetWifiBandInput,
   RouterHost,
+  OnlineWifiMac,
 } from '@domain/ports/WifiManagementPort';
 import { OltProvisioningError } from '@domain/errors/smartolt';
 import { mapWifiPortsToBands, mapWifiPortsToGuest, RawWifiPort } from '@domain/services/mapWifiPortsToBands';
@@ -24,7 +25,11 @@ export type RecordedGatewayCall =
   | { method: 'reboot'; sn: string }
   // EPIC v3 (wifi de visitas) — escrituras del lado WifiManagementPort.
   | { method: 'setWifiBand'; sn: string; input: SetWifiBandInput }
-  | { method: 'shutdownWifiPort'; sn: string; port: string };
+  | { method: 'shutdownWifiPort'; sn: string; port: string }
+  // wifi-guest-pending — lectura VIVA registrada A PROPÓSITO (única read en
+  // `calls`): los tests asserten CUÁNTAS verificaciones dispara la evaluación
+  // lazy (presupuesto del rate limit 1000/h de SmartOLT).
+  | { method: 'getOnlineWifiMacs'; sn: string };
 
 type WriteMethod = 'authorizeOnu' | 'setMgmtIp' | 'enableTr069' | 'allowRemoteWanAccess' | 'reboot' | 'shutdownWifiPort';
 
@@ -65,6 +70,14 @@ export class InMemoryOltProvisioningGateway implements OltProvisioningGateway, W
   readonly wifiOnus = new Map<string, InMemoryWifiOnuState>();
   /** EPIC v3 — hosts del router por sn (getRouterHosts). */
   readonly routerHostsBySn = new Map<string, RouterHost[]>();
+  /** wifi-guest-pending — MACs online por sn (lectura VIVA del ONT, getOnlineWifiMacs). */
+  readonly onlineWifiMacsBySn = new Map<string, OnlineWifiMac[]>();
+  /**
+   * wifi-guest-pending — SOLO la verificación viva falla (SmartOLT caído a
+   * mitad del flujo), sin tumbar `getOnuWifiStatus` (que en prod sobrevive por
+   * su cache 60s): modela "elegibilidad resuelta, verificación degradada".
+   */
+  failOnlineWifiMacs = false;
   /** ONUs con mgmt IP ya seteada (prerrequisito de tr069). */
   private readonly mgmtDone = new Set<string>();
   /** ONUs con TR-069 habilitado (prerrequisito de wifi). */
@@ -197,5 +210,14 @@ export class InMemoryOltProvisioningGateway implements OltProvisioningGateway, W
   async getRouterHosts(sn: string): Promise<RouterHost[]> {
     this.guardUnreachable();
     return (this.routerHostsBySn.get(sn) ?? []).map((h) => ({ ...h }));
+  }
+
+  async getOnlineWifiMacs(sn: string): Promise<OnlineWifiMac[]> {
+    this.guardUnreachable();
+    if (this.failOnlineWifiMacs) {
+      throw new OltProvisioningError('unreachable', 'SmartOLT full_status unreachable (fake)');
+    }
+    this.calls.push({ method: 'getOnlineWifiMacs', sn });
+    return (this.onlineWifiMacsBySn.get(sn) ?? []).map((m) => ({ ...m }));
   }
 }

@@ -1053,6 +1053,7 @@ import { EnableOnuTr069 } from '@application/use-cases/wifi/EnableOnuTr069';
 import { createWifiRouter } from './routes/wifi.routes';
 // wifi-password-snapshot — snapshot de password (SmartOLT nunca la devuelve, ver el modelo).
 import { PrismaOnuWifiCredentialRepository } from '@infrastructure/adapters/prisma/PrismaOnuWifiCredentialRepository';
+import { PrismaWifiGuestIntentRepository } from '@infrastructure/adapters/prisma/PrismaWifiGuestIntentRepository';
 
 // portal-equipment-reboot — "Reiniciar mi equipo" (extiende wifi-self-service:
 // reusa el MISMO smartoltWifiGateway/getOnuWifiStatus, elegibilidad MÁS AMPLIA).
@@ -3957,13 +3958,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // wifi-password-snapshot — instancia ÚNICA, compartida por el GET/PUT del
   // portal y el GET/PUT admin de más abajo (una sola tabla, un solo repo).
   const onuWifiCredentialRepo = new PrismaOnuWifiCredentialRepository();
-  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
+  // wifi-guest-pending — intent PERSISTIDO del cambio de la red de visitas
+  // (sobrevive restarts): compartido por el GET (evaluación lazy) y los dos
+  // writes guest (409 en pending + creación del intent).
+  const wifiGuestIntentRepo = new PrismaWifiGuestIntentRepository();
+  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo, wifiGuestIntentRepo);
   const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
   const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, smartoltWifiGateway);
   // EPIC v3 (wifi de visitas) — mismos resolver/gateway/snapshot que "Mi WiFi";
   // el rate limiter se comparte a nivel router (instancia única por router).
-  const updatePortalWifiGuest = new UpdatePortalWifiGuest(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo);
-  const disablePortalWifiGuest = new DisablePortalWifiGuest(resolveWifiEligibility, smartoltWifiGateway);
+  const updatePortalWifiGuest = new UpdatePortalWifiGuest(resolveWifiEligibility, smartoltWifiGateway, onuWifiCredentialRepo, wifiGuestIntentRepo);
+  const disablePortalWifiGuest = new DisablePortalWifiGuest(resolveWifiEligibility, smartoltWifiGateway, wifiGuestIntentRepo);
 
   // EPIC v3 (clave de TV del portal) — GET 100% local (catálogo + slot TV del
   // contrato); el PUT usa el wrapper `ChangePortalTvPassword` (fix wave W2:

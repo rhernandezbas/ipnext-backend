@@ -62,6 +62,19 @@ export interface RouterHost {
   wlanIndex: number | null;
 }
 
+/**
+ * wifi-guest-pending — una MAC asociada AHORA a un SSID del ONT, leída de
+ * "Online MACs on this ONU" de GET onu/get_onu_full_status_info/<sn>. Es la
+ * ÚNICA lectura VIVA del equipo: `getOnuWifiStatus` (get_onu_details) es la DB
+ * de SmartOLT y MIENTE tras un push TR-069 perdido (evidencia 2026-08-04/05,
+ * HWTCA92F96B1: wifi_0/2 "Disabled" con la red emitiendo). "WLAN N" del
+ * payload = SSID index N = número de puerto wifi (wifi_0/2 → 2).
+ */
+export interface OnlineWifiMac {
+  wlanIndex: number;
+  mac: string;
+}
+
 export interface WifiManagementPort {
   /** GET onu/get_onu_details/<sn>. Cacheado (TTL corto) — el resolver de elegibilidad lo llama seguido. */
   getOnuWifiStatus(sn: string): Promise<OnuWifiStatus>;
@@ -79,4 +92,11 @@ export interface WifiManagementPort {
    * esta sn: el próximo GET debe ver `enabled:false`, no el snapshot stale.
    */
   shutdownWifiPort(sn: string, port: string): Promise<void>;
+  /**
+   * wifi-guest-pending — GET onu/get_onu_full_status_info/<sn>, SOLO las filas
+   * WLAN de "Online MACs on this ONU" (las ETH no son WiFi). Cacheado (TTL 60s
+   * — la evaluación lazy del GET del portal lo llama seguido; rate limit
+   * SmartOLT 1000/h).
+   */
+  getOnlineWifiMacs(sn: string): Promise<OnlineWifiMac[]>;
 }

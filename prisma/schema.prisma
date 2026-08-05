@@ -4580,3 +4580,23 @@ model OnuWifiCredential {
 
   @@unique([sn, port])
 }
+
+/// wifi-guest-pending — intent PERSISTIDO de un cambio de la red de visitas en
+/// vuelo (alta o baja). En el EG8041V5 el shutdown_wifi_port es aceptado por
+/// SmartOLT pero el push TR-069 SE PIERDE (verificado 2026-08-05, HWTCA92F96B1):
+/// el GET del portal evalúa este intent lazy — verificación viva + re-push único
+/// + 'unconfirmed' a los 10 min. En DB (no in-memory) para sobrevivir restarts.
+model WifiGuestIntent {
+  id String @id @default(uuid())
+  /// Serial NORMALIZADO (normalizeOnuSerial). UNIQUE: UN intent por ONU a la vez.
+  sn String @unique
+  /// 'creating' | 'deleting'.
+  action String
+  /// Puerto de visita afectado ('wifi_0/2' | 'wifi_0/6') — re-push + índice WLAN de verificación.
+  port String
+  /// Inicio del cambio — lo pone el use case (reloj inyectable), no la DB.
+  since DateTime
+  /// Sellado tras el ÚNICO re-push del flujo deleting. null = nunca re-pusheado.
+  retriedAt DateTime?
+  createdAt DateTime  @default(now())
+}

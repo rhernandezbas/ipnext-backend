@@ -13,7 +13,9 @@ import { ResolveWifiEligibility } from '@application/use-cases/wifi/ResolveWifiE
 import { InMemoryOltProvisioningGateway } from '@infrastructure/adapters/in-memory/InMemoryOltProvisioningGateway';
 import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
 import { InMemoryOnuWifiCredentialRepository } from '@infrastructure/adapters/in-memory/InMemoryOnuWifiCredentialRepository';
-import { GuestBandUnavailableError, WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError } from '@domain/errors/wifi';
+import { InMemoryWifiGuestIntentRepository } from '@infrastructure/adapters/in-memory/InMemoryWifiGuestIntentRepository';
+import { GuestBandUnavailableError, GuestChangePendingError, WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError } from '@domain/errors/wifi';
+import { OltProvisioningError } from '@domain/errors/smartolt';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { Contract } from '@domain/entities/customer';
 import type { ContractInstalledItem } from '@domain/entities/contract-installed-item';
@@ -62,6 +64,12 @@ const TWO_PORTS: RawWifiPort[] = [
   { port: 'wifi_0/2', ssid: null, enabled: false },
 ];
 
+/** Reloj fijo del suite (wifi-guest-pending) — la edad del intent se controla con `since` relativo a T0. */
+const T0 = Date.parse('2026-08-05T12:00:00.000Z');
+const T0_ISO = '2026-08-05T12:00:00.000Z';
+const MIN = 60_000;
+const iso = (ms: number) => new Date(ms).toISOString();
+
 async function buildStack(opts?: { ports?: RawWifiPort[]; tr069Enabled?: boolean }) {
   const customers = fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
   const inventory = new InMemoryContractInventoryRepository();
@@ -69,9 +77,10 @@ async function buildStack(opts?: { ports?: RawWifiPort[]; tr069Enabled?: boolean
   const gw = new InMemoryOltProvisioningGateway();
   gw.wifiOnus.set(SN, { onuType: 'HG8145V5', online: true, tr069Enabled: opts?.tr069Enabled ?? true, ports: opts?.ports ?? EIGHT_PORTS });
   const credentials = new InMemoryOnuWifiCredentialRepository();
+  const intents = new InMemoryWifiGuestIntentRepository();
   const resolve = new ResolveWifiEligibility(customers, inventory, gw);
-  const uc = new UpdatePortalWifiGuest(resolve, gw, credentials);
-  return { uc, gw, credentials };
+  const uc = new UpdatePortalWifiGuest(resolve, gw, credentials, intents, () => T0);
+  return { uc, gw, credentials, intents };
 }
 
 describe('UpdatePortalWifiGuest', () => {
@@ -131,7 +140,56 @@ describe('UpdatePortalWifiGuest', () => {
   it('snapshot falla -> NO tumba la escritura (el equipo ya cambió)', async () => {
     const { uc, gw, credentials } = await buildStack();
     credentials.upsert = async () => { throw new Error('DB caída (simulado)'); };
-    await expect(uc.execute('client-a', 'c1', { band: '2.4', ssid: 'V', password: 'clave1234' })).resolves.toBeUndefined();
+    await expect(uc.execute('client-a', 'c1', { band: '2.4', ssid: 'V', password: 'clave1234' }))
+      .resolves.toMatchObject({ action: 'creating', status: 'in_progress' });
     expect(gw.calls.filter((c) => c.method === 'setWifiBand')).toHaveLength(1);
+  });
+});
+
+describe('UpdatePortalWifiGuest — estado PENDIENTE (wifi-guest-pending)', () => {
+  it('happy path: devuelve guestPending creating/in_progress y PERSISTE el intent (sobrevive restarts)', async () => {
+    const { uc, intents } = await buildStack();
+
+    const result = await uc.execute('client-a', 'c1', { band: '2.4', ssid: 'Visitas_Casa', password: 'clave1234' });
+
+    expect(result).toEqual({ action: 'creating', since: T0_ISO, status: 'in_progress' });
+    expect(intents.all()).toEqual([
+      expect.objectContaining({ sn: SN, action: 'creating', port: 'wifi_0/2', since: T0_ISO, retriedAt: null }),
+    ]);
+  });
+
+  it('409 en pending: intent en curso (< 10 min) -> GuestChangePendingError, el gateway JAMÁS se toca y el intent NO cambia', async () => {
+    const { uc, gw, intents } = await buildStack();
+    await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 5 * MIN) });
+
+    await expect(uc.execute('client-a', 'c1', { band: '2.4', ssid: 'Visitas', password: 'clave1234' }))
+      .rejects.toBeInstanceOf(GuestChangePendingError);
+
+    expect(gw.calls).toHaveLength(0);
+    expect(intents.all()).toEqual([
+      expect.objectContaining({ action: 'deleting', since: iso(T0 - 5 * MIN) }),
+    ]);
+  });
+
+  it('intent con >= 10 min (unconfirmed/expirado) PERMITE reintentar: escribe y lo REEMPLAZA por uno nuevo', async () => {
+    const { uc, gw, intents } = await buildStack();
+    await intents.replace({ sn: SN, action: 'deleting', port: 'wifi_0/2', since: iso(T0 - 10 * MIN) });
+
+    const result = await uc.execute('client-a', 'c1', { band: '2.4', ssid: 'Visitas', password: 'clave1234' });
+
+    expect(result).toMatchObject({ action: 'creating', since: T0_ISO, status: 'in_progress' });
+    expect(gw.calls.filter((c) => c.method === 'setWifiBand')).toHaveLength(1);
+    expect(intents.all()).toEqual([
+      expect.objectContaining({ action: 'creating', since: T0_ISO, retriedAt: null }),
+    ]);
+  });
+
+  it('SmartOLT rechaza el write -> el error propaga COMO HOY y NO se crea intent', async () => {
+    const { uc, gw, intents } = await buildStack();
+    gw.failWifiPorts = ['wifi_0/2'];
+
+    await expect(uc.execute('client-a', 'c1', { band: '2.4', ssid: 'Visitas', password: 'clave1234' }))
+      .rejects.toBeInstanceOf(OltProvisioningError);
+    expect(intents.all()).toHaveLength(0);
   });
 });
