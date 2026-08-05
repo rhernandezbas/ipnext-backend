@@ -67,6 +67,25 @@
 > **⛔ PENDIENTE:** la pantalla "Mis pagos" en `ipnext-customer-app` (change coordinado, contrato ya cerrado y verificado en vivo).
 > **📌 Deudas anotadas (medidas, no arregladas):** (a) **`FinanceReceiptRetencion` NO tiene columna `moneda`** aunque GR la manda (`PES` en las 4 líneas medidas) — la ingesta la descarta y el use case atribuye las retenciones a ARS. (b) Un importe de item no numérico cae a `0` en silencio (`parseArNumber`); es la MISMA clase que en este repo ya se endureció con throw para `cuentas.debt`, y en los items de recibo quedó permisiva. (c) **La clave del join nunca se ejerció**: `Client.grClienteId` y `FinancePaymentReceipt.clientGrId` salen de dos parsers distintos de GR (uno con `str()`/trim, el otro con la clave cruda del dict) y la tabla tiene 0 filas ⇒ si difieren en un carácter, TODOS ven lista vacía con 200 OK y la suite en verde. **Chequeo obligatorio post-backfill**: `SELECT count(*) FROM "FinancePaymentReceipt" r JOIN "Client" c ON c."grClienteId" = r."clientGrId";` contra el total de recibos.
 
+### 📱 [FEAT] Pantalla "Mis pagos" en la app de clientes — el BE ya está listo y verificado — PENDIENTE *(2026-08-05, cierre del change `portal-payments`)*
+> **Es lo único que falta para que el cliente VEA sus pagos.** El backend está en prod y verificado en vivo: `GET /api/portal/payments` devuelve el pago real del usuario. Lo que no existe todavía es la pantalla en `ipnext-customer-app`.
+> **El contrato ya está CERRADO y probado contra datos reales** — que es justo por qué se hizo BE primero (el workflow avisa que un contrato definido sobre un endpoint que nunca vio datos driftea sin que ningún test lo cace):
+> ```json
+> { "data": [ { "date": "2026-08-03T03:00:00.000Z",
+>               "amounts": [ { "currency": "ARS", "amount": 2500.01 } ],
+>               "method": "mercadopago",
+>               "appliedTo": [ { "invoiceNumber": "000080104", "amount": 2500.01 } ] } ],
+>   "total": 1, "page": 1, "limit": 25 }
+> ```
+> **Lo que la pantalla tiene que respetar (sale del spec, no es decoración):**
+> - **`amounts` es un ARRAY por moneda y NUNCA se suma.** Renderizar una línea por moneda, jamás un total mezclado — misma regla que ya aplica el Inicio con `balances[]`.
+> - **`appliedTo` es lo que le da valor a la pantalla**: dice a qué factura corresponde el pago, y esa factura **ya no existe** en el listado de Facturas (GR la saca al pagarse y el espejo la borra). Es el vínculo que se perdía. Mostrar el número, no linkear a una fila que no está.
+> - **`date` puede venir `null`** (el modelo lo permite) — cubrir ese estado.
+> - **`amounts` puede venir `[]`**: quedaría si un recibo no tiene items NI retenciones. No mostrar "$0" — eso sería inventar.
+> - **`currency` puede ser `'DESCONOCIDA'`** (centinela cuando GR no manda moneda). ⚠️ **`Intl.NumberFormat` CRASHEA con ese código** (`RangeError: Invalid currency code`) — verificado. Hay que interceptarlo antes de formatear. Aplica igual a `balances[]` de `/me`, así que revisar si la pantalla de Inicio ya tiene el mismo agujero.
+> - Estados: loading (skeleton) · vacío (con explicación: "todavía no registramos pagos tuyos") · error (`role="alert"` + reintento) · éxito. Y paginado — el envelope es el mismo del resto del portal.
+> **Alcance**: repo `ipnext-customer-app`, change SDD propio. El BE **no se toca**.
+
 ### 🧾 [BUG] Un recibo ANULADO después de ingerido queda visible para siempre — el filtro `anulado` es un no-op estructural — PENDIENTE *(2026-08-05, hallazgo del review de `portal-payments`)*
 > **EL BUG:** `mapGrReceipt.ts:33` **hardcodea `anulado: false`** y es la ÚNICA escritura de esa columna en todo el repo — nada escribe `true` jamás. La ingesta **saltea** (`continue`) los recibos con anulación real en vez de marcarlos, y no hay ningún pase de reconciliación ni delete. ⇒ el filtro `anulado: false` del reader del portal **no puede excluir nada, nunca**; el docstring que lo llama "defensa en profundidad" describe un no-op.
 > **ESCENARIO:** el cliente paga el 03-08 y se persiste el recibo. El 05-08 hay un contracargo y Administración lo anula en GR. La próxima pasada del delta lo saltea ⇒ la fila vieja queda intacta ⇒ el cliente sigue viendo "Pagado $2.500,01 · aplicado a la factura 000080104" mientras **esa misma factura le reaparece impaga en `/invoices`**. Dos pantallas de la misma app contradiciéndose.
