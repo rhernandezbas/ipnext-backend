@@ -23,6 +23,7 @@ import { InMemorySettingsRepository } from '@infrastructure/adapters/in-memory/I
 import { JwtPortalTokenService } from '@infrastructure/adapters/jwt/JwtPortalTokenService';
 import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
 import { InMemoryOnuWifiCredentialRepository } from '@infrastructure/adapters/in-memory/InMemoryOnuWifiCredentialRepository';
+import { InMemoryWifiGuestIntentRepository } from '@infrastructure/adapters/in-memory/InMemoryWifiGuestIntentRepository';
 
 import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
 import { ResolveWifiEligibility } from '@application/use-cases/wifi/ResolveWifiEligibility';
@@ -121,6 +122,12 @@ class FakeWifiManagementPort implements WifiManagementPort {
   // EPIC v3 (wifi de visitas) — requerido por WifiManagementPort; este suite no lo ejercita
   // (los endpoints guest se cubren en portalWifiGuest.routes.test.ts con el fake con estado).
   async shutdownWifiPort(): Promise<void> {}
+
+  // wifi-guest-pending — requerido por WifiManagementPort; este suite no lo
+  // ejercita (la evaluación lazy vive en GetPortalWifiStatus.guestPending.test.ts).
+  async getOnlineWifiMacs(): Promise<never[]> {
+    return [];
+  }
 }
 
 function buildStack(opts?: {
@@ -146,7 +153,14 @@ function buildStack(opts?: {
   const credentials = opts?.credentials ?? new InMemoryOnuWifiCredentialRepository();
 
   const resolveWifiEligibility = new ResolveWifiEligibility(customers, inventory, wifi);
-  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, wifi, credentials);
+  // wifi-guest-pending — intents vacíos: este suite pinea el contrato F0 (sin
+  // cambios de visitas en vuelo); la evaluación lazy tiene su propio suite.
+  const getPortalWifiStatus = new GetPortalWifiStatus(
+    resolveWifiEligibility,
+    wifi,
+    credentials,
+    new InMemoryWifiGuestIntentRepository(),
+  );
   const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, wifi, credentials);
   const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, wifi);
 

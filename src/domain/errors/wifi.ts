@@ -50,6 +50,22 @@ export class GuestBandUnavailableError extends DomainError {
   }
 }
 
+/**
+ * wifi-guest-pending — ya hay un cambio de la red de visitas EN CURSO
+ * (`WifiGuestIntent` con edad < ventana de pending) para esta ONU: el alta
+ * tarda ~2 min (TR-069 + cache) y la baja se verifica lazy — un segundo write
+ * encimado pisaría el que está en vuelo. 409 con body FIJO
+ * `{ error: 'guest_change_pending' }` (contrato con la app, la ruta lo emite
+ * tal cual). Con el intent ya 'unconfirmed' (edad >= ventana) el write se
+ * PERMITE y reemplaza el intent — este error no aplica.
+ */
+export class GuestChangePendingError extends DomainError {
+  constructor() {
+    super('Ya hay un cambio de la red de visitas en curso para este equipo', 'GUEST_CHANGE_PENDING');
+    this.name = 'GuestChangePendingError';
+  }
+}
+
 /** ssid/password fuera de los límites de forma (largo, chars de control, puerto inválido). */
 export class WifiValidationError extends DomainError {
   constructor(message: string) {

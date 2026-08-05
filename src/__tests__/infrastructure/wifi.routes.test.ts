@@ -92,6 +92,12 @@ class FakeAdminWifi implements WifiManagementPort {
   async shutdownWifiPort(): Promise<void> {
     this.guard();
   }
+
+  // wifi-guest-pending — requerido por WifiManagementPort; el admin no lo usa.
+  async getOnlineWifiMacs(): Promise<never[]> {
+    this.guard();
+    return [];
+  }
 }
 
 class FakeProvisioning implements Pick<OltProvisioningGateway, 'setMgmtIp' | 'enableTr069'> {

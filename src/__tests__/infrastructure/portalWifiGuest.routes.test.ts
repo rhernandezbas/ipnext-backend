@@ -24,6 +24,7 @@ import { InMemorySettingsRepository } from '@infrastructure/adapters/in-memory/I
 import { JwtPortalTokenService } from '@infrastructure/adapters/jwt/JwtPortalTokenService';
 import { InMemoryContractInventoryRepository } from '@infrastructure/adapters/in-memory/InMemoryContractInventoryRepository';
 import { InMemoryOnuWifiCredentialRepository } from '@infrastructure/adapters/in-memory/InMemoryOnuWifiCredentialRepository';
+import { InMemoryWifiGuestIntentRepository } from '@infrastructure/adapters/in-memory/InMemoryWifiGuestIntentRepository';
 import { InMemoryOltProvisioningGateway } from '@infrastructure/adapters/in-memory/InMemoryOltProvisioningGateway';
 
 import { PortalLogin } from '@application/use-cases/portal/PortalLogin';
@@ -102,12 +103,16 @@ function buildStack(opts?: { customers?: Pick<CustomerRepository, 'listContracts
   const gw = new InMemoryOltProvisioningGateway();
   const customers = opts?.customers ?? fakeCustomers({ 'client-a': [makeContract({ id: 'c1' })] });
   const credentials = new InMemoryOnuWifiCredentialRepository();
+  // wifi-guest-pending — intents con reloj fijo: este suite no recorre las
+  // ventanas de 3/10 min (eso vive en portalWifiGuestPending.routes.test.ts).
+  const intents = new InMemoryWifiGuestIntentRepository();
+  const now = () => Date.parse('2026-08-05T12:00:00.000Z');
 
   const resolveWifiEligibility = new ResolveWifiEligibility(customers, inventory, gw);
-  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, gw, credentials);
+  const getPortalWifiStatus = new GetPortalWifiStatus(resolveWifiEligibility, gw, credentials, intents, now);
   const updatePortalWifiBand = new UpdatePortalWifiBand(resolveWifiEligibility, gw, credentials);
-  const updatePortalWifiGuest = new UpdatePortalWifiGuest(resolveWifiEligibility, gw, credentials);
-  const disablePortalWifiGuest = new DisablePortalWifiGuest(resolveWifiEligibility, gw);
+  const updatePortalWifiGuest = new UpdatePortalWifiGuest(resolveWifiEligibility, gw, credentials, intents, now);
+  const disablePortalWifiGuest = new DisablePortalWifiGuest(resolveWifiEligibility, gw, intents, now);
   const listPortalWifiDevices = new ListPortalWifiDevices(resolveWifiEligibility, gw);
 
   const app = express();
@@ -131,7 +136,7 @@ function buildStack(opts?: { customers?: Pick<CustomerRepository, 'listContracts
     }),
   );
 
-  return { app, accounts, hasher, inventory, gw };
+  return { app, accounts, hasher, inventory, gw, intents };
 }
 
 async function loginAs(app: express.Express, accounts: InMemoryPortalAccountRepository, hasher: InMemoryPasswordHasher, clientId: string): Promise<string> {
@@ -209,7 +214,11 @@ describe('EPIC v3 — PUT /api/portal/wifi/:contractId/guest', () => {
       .send({ band: '2.4', ssid: 'Visitas_Casa', password: 'clave1234' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ applied: true });
+    // wifi-guest-pending — ADITIVO: guestPending se suma a {applied:true}.
+    expect(res.body).toEqual({
+      applied: true,
+      guestPending: { action: 'creating', since: '2026-08-05T12:00:00.000Z', status: 'in_progress' },
+    });
     expect(stack.gw.calls).toEqual([
       { method: 'setWifiBand', sn: SN, input: { port: 'wifi_0/2', ssid: 'Visitas_Casa', password: 'clave1234' } },
     ]);
@@ -298,7 +307,11 @@ describe('EPIC v3 — POST /api/portal/wifi/:contractId/guest/disable', () => {
       .send({ band: '2.4' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ applied: true });
+    // wifi-guest-pending — ADITIVO: guestPending se suma a {applied:true}.
+    expect(res.body).toEqual({
+      applied: true,
+      guestPending: { action: 'deleting', since: '2026-08-05T12:00:00.000Z', status: 'in_progress' },
+    });
     expect(stack.gw.calls).toEqual([{ method: 'shutdownWifiPort', sn: SN, port: 'wifi_0/2' }]);
 
     const getRes = await request(stack.app).get('/api/portal/wifi/c1').set('Authorization', `Bearer ${token}`);
@@ -349,6 +362,10 @@ describe('EPIC v3 — rate limit COMPARTIDO entre el PUT principal y los endpoin
       expect(res.status).toBe(200);
     }
     for (let i = 0; i < 2; i++) {
+      // wifi-guest-pending — el intent en curso daría 409 en el 2do write guest
+      // (cubierto en portalWifiGuestPending.routes.test.ts); acá se limpia para
+      // aislar lo que ESTE test pinea: el presupuesto COMPARTIDO del limiter.
+      await stack.intents.deleteBySn(SN);
       const res = await request(stack.app)
         .put('/api/portal/wifi/c1/guest')
         .set('Authorization', `Bearer ${token}`)

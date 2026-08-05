@@ -37,6 +37,16 @@ function portNumber(port: string): number | null {
 }
 
 /**
+ * wifi-guest-pending — índice WLAN de la sección "Online MACs on this ONU"
+ * del full status = número de puerto wifi ('wifi_0/2' → 2). Nota literal del
+ * payload real (2026-08-05): "When the ONT port-type is WLAN, the ONT port-ID
+ * indicates WLAN SSID index".
+ */
+export function wifiPortWlanIndex(port: string): number | null {
+  return portNumber(port);
+}
+
+/**
  * EPIC v3 (wifi de visitas) — estado del puerto de VISITA de cada banda.
  * Convención (skill smartolt-ipnext): visita 2.4 = wifi_0/2, visita 5 = wifi_0/6.
  * `available` = el puerto de visita FIGURA en la lista de puertos del template

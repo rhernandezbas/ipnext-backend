@@ -49,7 +49,7 @@ import {
   PortalContractNotFoundError,
   PortalTicketTopicNotFoundError,
 } from '@domain/errors/portal.errors';
-import { WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError, GuestBandUnavailableError } from '@domain/errors/wifi';
+import { WifiContractNotFoundError, WifiNotEligibleError, WifiValidationError, GuestBandUnavailableError, GuestChangePendingError } from '@domain/errors/wifi';
 import { EquipmentContractNotFoundError, EquipmentNotEligibleError } from '@domain/errors/equipment';
 // EPIC v3 (clave de TV del portal) — errores del guard order de ChangeTvPassword (#65).
 import { ClientNotFoundError } from '@domain/errors';
@@ -1353,8 +1353,11 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           return;
         }
         try {
-          await updatePortalWifiGuest.execute(clientId, req.params['contractId'] as string, parsed.data);
-          res.status(200).json({ applied: true });
+          // wifi-guest-pending — ADITIVO sobre {applied:true}: el alta tarda
+          // ~2 min en llegar al equipo (TR-069 + cache); guestPending le dice
+          // a la app que bloquee el botón mientras el intent esté en curso.
+          const guestPending = await updatePortalWifiGuest.execute(clientId, req.params['contractId'] as string, parsed.data);
+          res.status(200).json({ applied: true, guestPending });
         } catch (err) {
           if (err instanceof WifiContractNotFoundError) {
             res.status(404).json({ error: err.message, code: err.code });
@@ -1362,6 +1365,12 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           }
           if (err instanceof WifiValidationError) {
             res.status(400).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof GuestChangePendingError) {
+            // Contrato FIJO con la app: EXACTAMENTE este body (sin code) —
+            // la app matchea `error === 'guest_change_pending'` tal cual.
+            res.status(409).json({ error: 'guest_change_pending' });
             return;
           }
           if (err instanceof GuestBandUnavailableError) {
@@ -1396,11 +1405,19 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
           return;
         }
         try {
-          await disablePortalWifiGuest.execute(clientId, req.params['contractId'] as string, parsed.data.band);
-          res.status(200).json({ applied: true });
+          // wifi-guest-pending — la baja NO se da por aplicada (el push TR-069
+          // al EG8041V5 se PIERDE, verificado 2026-08-05): guestPending deja el
+          // cambio en vuelo y el GET lo evalúa lazy (verificación + re-push).
+          const guestPending = await disablePortalWifiGuest.execute(clientId, req.params['contractId'] as string, parsed.data.band);
+          res.status(200).json({ applied: true, guestPending });
         } catch (err) {
           if (err instanceof WifiContractNotFoundError) {
             res.status(404).json({ error: err.message, code: err.code });
+            return;
+          }
+          if (err instanceof GuestChangePendingError) {
+            // Contrato FIJO con la app: EXACTAMENTE este body (sin code).
+            res.status(409).json({ error: 'guest_change_pending' });
             return;
           }
           if (err instanceof GuestBandUnavailableError) {

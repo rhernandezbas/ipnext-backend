@@ -5,7 +5,7 @@ import {
   AuthorizeOnuInput,
   SetWifiInput,
 } from '@domain/ports/OltProvisioningGateway';
-import { WifiManagementPort, OnuWifiStatus, SetWifiBandInput, RouterHost } from '@domain/ports/WifiManagementPort';
+import { WifiManagementPort, OnuWifiStatus, SetWifiBandInput, RouterHost, OnlineWifiMac } from '@domain/ports/WifiManagementPort';
 import { OltProvisioningError } from '@domain/errors/smartolt';
 import { mapWifiPortsToBands, mapWifiPortsToGuest, RawWifiPort } from '@domain/services/mapWifiPortsToBands';
 
@@ -43,6 +43,13 @@ const WIFI_STATUS_CACHE_TTL_MS = 60_000;
  * vuelvan a pegarle a la red.
  */
 const ROUTER_HOSTS_CACHE_TTL_MS = 60_000;
+/**
+ * wifi-guest-pending — TTL de la cache de `getOnlineWifiMacs` (60s, igual que
+ * las otras dos por consistencia): la evaluación lazy del GET del portal la
+ * llama en cada visita a la pantalla WiFi mientras haya un intent activo, y
+ * el rate limit de SmartOLT es 1000/h.
+ */
+const ONLINE_MACS_CACHE_TTL_MS = 60_000;
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -140,6 +147,35 @@ function toRouterHost(raw: any): RouterHost {
 }
 
 /**
+ * wifi-guest-pending — shape crudo de GET onu/get_onu_full_status_info/<sn>.
+ *
+ * ✅ VERIFICADO CONTRA EL PAYLOAD REAL (GET en vivo 2026-08-05, ONU
+ * HWTCA92F96B1): el payload trae el texto crudo en `full_status_info` Y un
+ * espejo estructurado en `full_status_json`; la sección
+ * `"Online MACs on this ONU"` es un OBJETO indexado por string (no array) con
+ * filas `{ Port: 'WLAN 2' | 'ETH 1', 'MAC address': '..', VLAN: '-' }`.
+ * Nota literal del payload: "When the ONT port-type is WLAN, the ONT port-ID
+ * indicates WLAN SSID index" — WLAN N = SSID index N = número de puerto wifi.
+ * Las filas ETH no son WiFi y se descartan. Sección ausente = sin clientes.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toOnlineWifiMacs(raw: any): OnlineWifiMac[] {
+  const section = raw?.full_status_json?.['Online MACs on this ONU'];
+  if (section == null || typeof section !== 'object') return [];
+  const macs: OnlineWifiMac[] = [];
+  for (const row of Object.values(section)) {
+    if (typeof row !== 'object' || row === null) continue;
+    const r = row as Record<string, unknown>;
+    const wlanMatch = /^WLAN\s+(\d+)$/i.exec(String(r['Port'] ?? ''));
+    const mac = r['MAC address'];
+    if (wlanMatch && mac != null && mac !== '') {
+      macs.push({ wlanIndex: Number(wlanMatch[1]), mac: String(mac) });
+    }
+  }
+  return macs;
+}
+
+/**
  * Shape crudo de una fila de GET onu/unconfigured_onus — verificado contra la
  * instancia real 2026-07-17 (read-only, durante el review adversarial): key raíz
  * `response`, campos sn/onu_type_name/onu_type_id/olt_id/board/port/pon_type/actions.
@@ -192,6 +228,8 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
   private readonly wifiStatusCache = new Map<string, { value: OnuWifiStatus; expiresAt: number }>();
   /** wifi-portal-read-perf — cache in-memory de `getRouterHosts`, keyed por sn normalizada. */
   private readonly routerHostsCache = new Map<string, { value: RouterHost[]; expiresAt: number }>();
+  /** wifi-guest-pending — cache in-memory de `getOnlineWifiMacs`, keyed por sn normalizada. */
+  private readonly onlineMacsCache = new Map<string, { value: OnlineWifiMac[]; expiresAt: number }>();
 
   constructor(opts: SmartOltHttpGatewayOptions) {
     this.token = opts.token;
@@ -433,6 +471,9 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
   async setWifiBand(sn: string, input: SetWifiBandInput): Promise<void> {
     await this.postSetWifiPort(sn, input.port, input.ssid, input.password);
     this.wifiStatusCache.delete(sn);
+    // wifi-guest-pending — la lectura viva también queda stale tras un write
+    // (misma disciplina que abajo en shutdownWifiPort).
+    this.onlineMacsCache.delete(sn);
   }
 
   /**
@@ -451,6 +492,10 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
     await this.post(`onu/shutdown_wifi_port/${encodeURIComponent(sn)}`, form);
     this.wifiStatusCache.delete(sn);
     this.routerHostsCache.delete(sn);
+    // wifi-guest-pending — sin esto, en el borde de los 10 min la evaluación
+    // lazy puede leer un snapshot de MACs PRE-aplicación y emitir un
+    // 'unconfirmed' falso (se auto-cura al expirar el TTL, pero es gratis).
+    this.onlineMacsCache.delete(sn);
   }
 
   /**
@@ -481,5 +526,28 @@ export class SmartOltHttpGateway implements OltProvisioningGateway, WifiManageme
 
     this.routerHostsCache.set(sn, { value: hosts, expiresAt: this.now() + ROUTER_HOSTS_CACHE_TTL_MS });
     return hosts;
+  }
+
+  /**
+   * wifi-guest-pending — GET onu/get_onu_full_status_info/<sn>, cacheado (TTL
+   * 60s). Lectura VIVA del ONT ("Online MACs on this ONU") — la única fuente
+   * que NO miente tras un push TR-069 perdido (get_onu_details es la DB de
+   * SmartOLT). Los errores propagan SIN cachearse (misma disciplina que
+   * `getOnuWifiStatus` con unreachable): el consumer (evaluación lazy del GET
+   * del portal) degrada sin romper.
+   */
+  async getOnlineWifiMacs(sn: string): Promise<OnlineWifiMac[]> {
+    const cached = this.onlineMacsCache.get(sn);
+    if (cached && cached.expiresAt > this.now()) {
+      return cached.value;
+    }
+
+    const data = await this.callRead<unknown>(() =>
+      this.http.get(`onu/get_onu_full_status_info/${encodeURIComponent(sn)}`, { headers: this.headers() }),
+    );
+    const macs = toOnlineWifiMacs(data);
+
+    this.onlineMacsCache.set(sn, { value: macs, expiresAt: this.now() + ONLINE_MACS_CACHE_TTL_MS });
+    return macs;
   }
 }

@@ -18,6 +18,22 @@ export interface PortalGuestWifiBandDto {
   enabled: boolean;
 }
 
+/**
+ * wifi-guest-pending — cambio de la red de visitas EN VUELO (contrato FIJO con
+ * la app, se consume tal cual):
+ *  - `action`: 'creating' (alta/edición, PUT guest) | 'deleting' (baja, POST disable).
+ *  - `since`: ISO — inicio del cambio.
+ *  - `status`: 'in_progress' (< 10 min — la app bloquea el botón) |
+ *    'unconfirmed' (>= 10 min con la radio aún al aire — la app permite reintentar).
+ * Presente en el GET mientras exista intent, y en la respuesta del PUT/disable
+ * (siempre 'in_progress' recién creado).
+ */
+export interface PortalGuestPendingDto {
+  action: 'creating' | 'deleting';
+  since: string;
+  status: 'in_progress' | 'unconfirmed';
+}
+
 export type PortalWifiStatusDto =
   | { eligible: false; reason: WifiEligibilityReason }
   | {
@@ -33,6 +49,8 @@ export type PortalWifiStatusDto =
       connectedCount: number | null;
       /** EPIC v3 — ADITIVO: SIEMPRE las dos bandas listadas. Solo presente cuando eligible. */
       guest: { bands: PortalGuestWifiBandDto[] };
+      /** wifi-guest-pending — ADITIVO y OPCIONAL: ausente cuando no hay cambio en vuelo. */
+      guestPending?: PortalGuestPendingDto;
     };
 
 /** `PUT /api/portal/wifi/:contractId` — validación de FORMA (ssid/password los revisa `validateWifiCredentials`, ver use case). */
