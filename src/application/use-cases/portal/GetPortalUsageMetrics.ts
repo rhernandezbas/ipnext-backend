@@ -1,10 +1,10 @@
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { PppoeServiceRepository } from '@domain/ports/PppoeServiceRepository';
-import type { UsageMetricsReader, UsageDailyBucket } from '@domain/ports/UsageMetricsReader';
-import { pickCurrentPppoeService } from '@domain/entities/pppoeService';
+import type { UsageMetricsReader } from '@domain/ports/UsageMetricsReader';
 import { UsageContractNotFoundError } from '@domain/errors/usage';
 import type { PortalUsageMetricsDto, PortalUsageDailyDto } from '@application/dto/portal/portalUsage.dto';
 import { currentArgentinaMonthPeriod, type PortalUsagePeriod } from './portalUsagePeriod';
+import { prorateUsageSessions } from './usageProration';
 
 /**
  * portal-usage-metrics — "Mi consumo" de Mis servicios
@@ -18,30 +18,36 @@ import { currentArgentinaMonthPeriod, type PortalUsagePeriod } from './portalUsa
  *     esto un `contractId` ajeno llegaría a la query de consumo. Mismo criterio
  *     que `/equipment/:contractId` y `/wifi/:contractId`.
  *
- *  2. contrato -> username de RADIUS: el `username` de `RadiusEvent` ES el login
- *     PPPoE, y el vínculo con el contrato ya existe en el modelo
- *     (`PppoeService.contractId`). Se usa ESE camino (`findByContract`), no un
- *     join nuevo. Cuando el contrato tiene VARIOS PPPoE se resuelve con
- *     `pickCurrentPppoeService`, el mismo desempate canónico del dominio que usa
- *     el snapshot de finanzas — para que "el PPPoE actual del contrato" no
- *     signifique dos cosas distintas según quién pregunte.
+ *  2. contrato -> usernames de RADIUS: el `username` de `RadiusEvent` ES el
+ *     login PPPoE, y el vínculo con el contrato ya existe en el modelo
+ *     (`PppoeService.contractId`). Se usa ESE camino (`findByContract`) y se
+ *     toman TODOS los usernames del contrato — vigente + históricos — no solo el
+ *     canónico (fix C1, multi-username): una re-provisión a mitad de mes crea un
+ *     username NUEVO, y mirar solo ese borraba el consumo de la primera
+ *     quincena. Sumar los históricos es seguro: sus sesiones son del MISMO
+ *     contrato.
  *
- *  3. Sin PPPoE resoluble, o sin NINGUNA sesión en el mes -> `available:false`
- *     con todo en 0/[]/null. Es un ESTADO NORMAL (200), no un error: mismo
- *     criterio que la elegibilidad WiFi.
+ *  3. Sin PPPoE resoluble, o sin NINGUNA sesión que SOLAPE el mes ->
+ *     `available:false` con todo en 0/[]/null. Es un ESTADO NORMAL (200), no un
+ *     error: mismo criterio que la elegibilidad WiFi.
  *
- *  4. El `UsageMetricsReader` devuelve SOLO los días con tráfico; acá se rellena
- *     el calendario completo del mes con ceros. Los totales se suman DESDE
- *     `daily`, no desde los buckets crudos: el número grande y el gráfico salen
- *     de la misma fuente y no pueden discrepar.
+ *  4. El `UsageMetricsReader` devuelve las sesiones SOLAPANTES crudas (fix C1:
+ *     `startedAt < to AND (stoppedAt IS NULL OR stoppedAt >= from)` — la sesión
+ *     always-on nacida el mes anterior ENTRA; antes el filtro `startedAt >=
+ *     from` la excluía y el cliente veía 0 bytes). `prorateUsageSessions` — LA
+ *     función compartida con el gemelo in-memory — atribuye al período la
+ *     FRACCIÓN temporal solapada de cada sesión y reparte uniforme entre sus
+ *     días vivos; si alguna fracción fue < 1, el DTO viaja con
+ *     `approximate:true` y la app muestra "aproximado". Ver el docblock de
+ *     `usageProration.ts`: es una ESTIMACIÓN documentada — el total de una
+ *     sesión que cruza el borde del mes no es exacto (los contadores acumulados
+ *     no dicen cuánto pasó adentro), es la mejor atribución disponible sin otro
+ *     modelo de datos.
  *
- * SIMPLIFICACIÓN DOCUMENTADA (reparto por día): una sesión cuenta ENTERA en el
- * día en que ARRANCÓ (`startedAt`). Una sesión PPPoE que dura 9 días le carga
- * los 9 días de tráfico al primero. Con los eventos `interim` se podría prorratear
- * de verdad (cada interim trae el acumulado a su hora, así que la diferencia entre
- * interims consecutivos ES el consumo de ese tramo) — pero eso es otra query y
- * otro modelo, y no se hace ahora. El TOTAL del mes es correcto igual; lo que se
- * distorsiona es el reparto del gráfico diario.
+ *  5. Acá se rellena el calendario completo del mes con ceros. Los totales se
+ *     suman DESDE `daily`, no desde las sesiones: el número grande y el gráfico
+ *     salen de la misma fuente y no pueden discrepar (el reparto conserva la
+ *     suma byte a byte). `peakDay` sale de los daily nuevos.
  *
  * NO expone "velocidad máxima": el accounting de RADIUS no la trae.
  */
@@ -64,23 +70,26 @@ export class GetPortalUsageMetrics {
     const now = this.now();
     const period = currentArgentinaMonthPeriod(now);
 
-    const service = pickCurrentPppoeService(await this.pppoe.findByContract(contractId));
-    if (!service) {
+    // TODOS los usernames del contrato (vigente + históricos), dedupeados.
+    const services = await this.pppoe.findByContract(contractId);
+    const usernames = [...new Set(services.map((s) => s.username))];
+    if (usernames.length === 0) {
       return unavailable(period);
     }
 
-    const buckets = await this.usage.dailyUsageByUsername({
-      username: service.username,
+    const sessions = await this.usage.sessionsOverlappingRange({
+      usernames,
       from: period.fromUtc,
       to: now,
     });
-    if (buckets.length === 0) {
+    if (sessions.length === 0) {
       return unavailable(period);
     }
 
-    const byDate = new Map<string, UsageDailyBucket>(buckets.map((b) => [b.date, b]));
+    const prorated = prorateUsageSessions(sessions, { from: period.fromUtc, to: now });
+
     const daily: PortalUsageDailyDto[] = period.days.map((date) => {
-      const bucket = byDate.get(date);
+      const bucket = prorated.daily.get(date);
       return {
         date,
         downloadBytes: Number(bucket?.downloadBytes ?? 0n),
@@ -97,6 +106,7 @@ export class GetPortalUsageMetrics {
 
     return {
       available: true,
+      approximate: prorated.approximate,
       period: { from: period.from, to: period.to },
       downloadBytes,
       uploadBytes,
@@ -110,6 +120,7 @@ export class GetPortalUsageMetrics {
 function unavailable(period: PortalUsagePeriod): PortalUsageMetricsDto {
   return {
     available: false,
+    approximate: false,
     period: { from: period.from, to: period.to },
     downloadBytes: 0,
     uploadBytes: 0,

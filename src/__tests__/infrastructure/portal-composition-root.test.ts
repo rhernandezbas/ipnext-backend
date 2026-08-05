@@ -246,7 +246,9 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
   describe('portal-usage-metrics — "Mi consumo" llega a prod', () => {
     it('importa el use case y el adapter Prisma REAL (no el gemelo in-memory)', () => {
       expect(appSrc).toContain('GetPortalUsageMetrics');
-      expect(appSrc).toContain("from '../adapters/prisma/PrismaUsageMetricsReader'");
+      // S1 (fix wave): alias `@infrastructure/...`, no ruta relativa — y el guard
+      // pinea el MISMO string que el import real para que no puedan divergir.
+      expect(appSrc).toContain("from '@infrastructure/adapters/prisma/PrismaUsageMetricsReader'");
       expect(appSrc).not.toContain('InMemoryUsageMetricsReader');
     });
 

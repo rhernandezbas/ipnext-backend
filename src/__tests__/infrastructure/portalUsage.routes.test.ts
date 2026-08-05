@@ -141,6 +141,7 @@ describe('portal-usage-metrics — GET /api/portal/usage/:contractId', () => {
       sourceUniqueId: 's1',
       username: 'juan.perez',
       startedAt: new Date('2026-08-02T15:00:00.000Z'),
+      stoppedAt: new Date('2026-08-02T20:00:00.000Z'),
       bytesIn: BigInt(30 * GB),
       bytesOut: BigInt(700 * GB),
     });
@@ -150,6 +151,7 @@ describe('portal-usage-metrics — GET /api/portal/usage/:contractId', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       available: true,
+      approximate: false, // sesión 100% contenida en el mes: números EXACTOS
       period: { from: '2026-08-01', to: '2026-08-05' },
       downloadBytes: 700 * GB,
       uploadBytes: 30 * GB,
@@ -193,6 +195,7 @@ describe('portal-usage-metrics — GET /api/portal/usage/:contractId', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       available: false,
+      approximate: false,
       period: { from: '2026-08-01', to: '2026-08-05' },
       downloadBytes: 0,
       uploadBytes: 0,
@@ -200,6 +203,30 @@ describe('portal-usage-metrics — GET /api/portal/usage/:contractId', () => {
       daily: [],
       peakDay: null,
     });
+  });
+
+  it('C1 wire: la sesión always-on nacida el mes anterior viaja PRORRATEADA con approximate:true (antes: 0 bytes)', async () => {
+    const { app, accounts, hasher, reader } = buildStack();
+    const token = await loginAs(app, accounts, hasher, 'client-a');
+    // Nació el 26/7 14:00Z, sigue viva: 10 días totales, 385.200.000 ms solapan
+    // agosto → 864 GB × fracción = 385,2 GB del período.
+    reader.record({
+      sourceUniqueId: 'always-on',
+      username: 'juan.perez',
+      startedAt: new Date('2026-07-26T14:00:00.000Z'),
+      stoppedAt: null,
+      bytesIn: BigInt(86.4 * GB),
+      bytesOut: BigInt(864 * GB),
+    });
+
+    const res = await request(app).get('/api/portal/usage/c1').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(true);
+    expect(res.body.approximate).toBe(true);
+    expect(res.body.downloadBytes).toBe(385_200_000_000);
+    expect(res.body.uploadBytes).toBe(38_520_000_000);
+    expect(typeof res.body.downloadBytes).toBe('number'); // sigue siendo serializable
   });
 
   it('sin token -> 401 (la ruta está detrás de portalAuthMiddleware)', async () => {

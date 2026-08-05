@@ -1,9 +1,8 @@
 import type {
   UsageMetricsReader,
-  UsageDailyBucket,
-  UsageDailyUsageQuery,
+  UsageSession,
+  UsageSessionsQuery,
 } from '@domain/ports/UsageMetricsReader';
-import { toArgentinaDateKey } from '@application/use-cases/messaging/reportsTimezone';
 
 /** Un evento de accounting crudo, como el que ingesta el BE en `RadiusEvent`. */
 export interface InMemoryRadiusUsageEvent {
@@ -11,6 +10,8 @@ export interface InMemoryRadiusUsageEvent {
   sourceUniqueId: string;
   username: string;
   startedAt: Date;
+  /** Cierre de la sesión. Omitido/`null` = sesión VIVA (como la deja un start/interim). */
+  stoppedAt?: Date | null;
   /** SUBIDA del cliente, acumulada de la sesión hasta este evento. */
   bytesIn: bigint;
   /** DESCARGA del cliente, acumulada de la sesión hasta este evento. */
@@ -21,25 +22,31 @@ export interface InMemoryRadiusUsageEvent {
  * portal-usage-metrics — gemelo in-memory de `UsageMetricsReader` para los tests
  * de use case (`GetPortalUsageMetrics`).
  *
- * Toma eventos CRUDOS (`record`), como los recibe el ingest, y replica las tres
+ * Toma eventos CRUDOS (`record`), como los recibe el ingest, y replica las
  * reglas del puerto — las MISMAS que el `PrismaUsageMetricsReader` expresa en
  * SQL, para que in-memory y Prisma no puedan divergir en silencio:
  *
- *  1. filtra por `username` y por el rango `[from, to)` sobre el instante crudo;
- *  2. DEDUPLICA por `sourceUniqueId` quedándose con UN solo evento por sesión —
+ *  1. DEDUPLICA por `sourceUniqueId` quedándose con UN solo evento por sesión —
  *     el de `startedAt` mayor, y a igualdad el último registrado (que es
  *     exactamente lo que produce el upsert del ingest, porque `sourceUniqueId`
- *     es UNIQUE en la tabla). Los contadores son ACUMULADOS, no deltas: sumar
- *     los eventos multiplicaría el consumo;
- *  3. bucketea por día en hora LOCAL de Argentina (UTC-3, mismo helper que el
- *     resto del proyecto) y mapea `bytesOut` -> DESCARGA, `bytesIn` -> SUBIDA.
+ *     es UNIQUE en la tabla). Los contadores son ACUMULADOS, no deltas. El dedup
+ *     va ANTES del filtro, igual que en prod: allá la tabla YA está deduplicada
+ *     cuando el WHERE corre.
+ *  2. filtra por `usernames` y por SOLAPAMIENTO con `[from, to)`:
+ *     `startedAt < to AND (stoppedAt IS NULL OR stoppedAt >= from)` — la sesión
+ *     viva solapa siempre (fix C1).
+ *  3. mapea `bytesOut` -> DESCARGA (`downloadBytes`), `bytesIn` -> SUBIDA
+ *     (`uploadBytes`).
  *
- * `queries` guarda cada llamada: deja assertear el rango pedido y —más
- * importante— que a un contrato ajeno NI SE LE PREGUNTA.
+ * El PRORRATEO no vive acá: es `prorateUsageSessions` (application), UNA función
+ * compartida con el camino de prod — este gemelo solo replica el FETCH.
+ *
+ * `queries` guarda cada llamada: deja assertear el rango y los usernames
+ * pedidos y —más importante— que a un contrato ajeno NI SE LE PREGUNTA.
  */
 export class InMemoryUsageMetricsReader implements UsageMetricsReader {
   private readonly events: InMemoryRadiusUsageEvent[] = [];
-  readonly queries: UsageDailyUsageQuery[] = [];
+  readonly queries: UsageSessionsQuery[] = [];
 
   record(event: InMemoryRadiusUsageEvent): void {
     this.events.push(event);
@@ -50,39 +57,33 @@ export class InMemoryUsageMetricsReader implements UsageMetricsReader {
     this.queries.length = 0;
   }
 
-  async dailyUsageByUsername(query: UsageDailyUsageQuery): Promise<UsageDailyBucket[]> {
+  async sessionsOverlappingRange(query: UsageSessionsQuery): Promise<UsageSession[]> {
     this.queries.push(query);
 
-    // (1) Anclaje por username + rango semi-abierto [from, to).
-    const inScope = this.events.filter(
-      (e) =>
-        e.username === query.username &&
-        e.startedAt.getTime() >= query.from.getTime() &&
-        e.startedAt.getTime() < query.to.getTime(),
-    );
-
-    // (2) UNA fila por sesión. Equivalente al `DISTINCT ON ("sourceUniqueId")
-    //     ... ORDER BY "sourceUniqueId", "startedAt" DESC` del adapter Prisma.
+    // (1) UNA fila por sesión — réplica del upsert del ingest (y del `DISTINCT ON
+    //     ("sourceUniqueId") ... ORDER BY "sourceUniqueId", "startedAt" DESC`).
     const lastPerSession = new Map<string, InMemoryRadiusUsageEvent>();
-    for (const e of inScope) {
+    for (const e of this.events) {
       const prev = lastPerSession.get(e.sourceUniqueId);
       if (!prev || e.startedAt.getTime() >= prev.startedAt.getTime()) {
         lastPerSession.set(e.sourceUniqueId, e);
       }
     }
 
-    // (3) Bucketing por día AR. bytesOut -> DESCARGA, bytesIn -> SUBIDA.
-    const byDate = new Map<string, UsageDailyBucket>();
-    for (const e of lastPerSession.values()) {
-      const date = toArgentinaDateKey(e.startedAt.toISOString());
-      const bucket = byDate.get(date) ?? { date, downloadBytes: 0n, uploadBytes: 0n };
-      byDate.set(date, {
-        date,
-        downloadBytes: bucket.downloadBytes + e.bytesOut,
-        uploadBytes: bucket.uploadBytes + e.bytesIn,
-      });
-    }
-
-    return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    // (2) Anclaje por usernames + ventana POR SOLAPAMIENTO con [from, to).
+    // (3) bytesOut -> DESCARGA, bytesIn -> SUBIDA.
+    return [...lastPerSession.values()]
+      .filter(
+        (e) =>
+          query.usernames.includes(e.username) &&
+          e.startedAt.getTime() < query.to.getTime() &&
+          (e.stoppedAt == null || e.stoppedAt.getTime() >= query.from.getTime()),
+      )
+      .map((e) => ({
+        startedAt: e.startedAt,
+        stoppedAt: e.stoppedAt ?? null,
+        downloadBytes: e.bytesOut,
+        uploadBytes: e.bytesIn,
+      }));
   }
 }

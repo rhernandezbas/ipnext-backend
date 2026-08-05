@@ -37,6 +37,14 @@ export interface PortalUsageMetricsDto {
    * encabezado del mes de todas formas).
    */
   available: boolean;
+  /**
+   * fix C1 (ADITIVO): `true` cuando ALGUNA sesión del período fue PRORRATEADA
+   * (una sesión que cruza el borde del mes se atribuye por fracción temporal —
+   * ver `usageProration.ts`), o sea los números son una ESTIMACIÓN y la app
+   * puede mostrar "aproximado". `false` = todo exacto (toda sesión 100%
+   * contenida en el período).
+   */
+  approximate: boolean;
   period: PortalUsagePeriodDto;
   downloadBytes: number;
   uploadBytes: number;
