@@ -78,6 +78,8 @@ import { GetPortalTvStatus } from '@application/use-cases/portal/GetPortalTvStat
 import { ChangePortalTvPassword } from '@application/use-cases/portal/ChangePortalTvPassword';
 import { ChangePortalTvPasswordSchema } from '@application/dto/portal/portalTv.dto';
 import { GetPortalEquipmentStatus } from '@application/use-cases/equipment/GetPortalEquipmentStatus';
+import { GetPortalUsageMetrics } from '@application/use-cases/portal/GetPortalUsageMetrics';
+import { UsageContractNotFoundError } from '@domain/errors/usage';
 import { RebootPortalEquipment } from '@application/use-cases/equipment/RebootPortalEquipment';
 import { ListPortalStoreProducts } from '@application/use-cases/portal/store/ListPortalStoreProducts';
 import { GetPortalStoreProduct } from '@application/use-cases/portal/store/GetPortalStoreProduct';
@@ -188,6 +190,12 @@ export interface PortalRouterDeps {
    * por cuenta). Applied ONLY to `POST /equipment/:contractId/reboot` — cada
    * reinicio corta el servicio ~2 minutos. */
   equipmentRebootRateLimiter?: RequestHandler;
+
+  // ── portal-usage-metrics — "Mi consumo" de Mis servicios ──────────────────
+  /** `GET /usage/:contractId`. Sin rate limiter propio: es una LECTURA, el
+   * `generalRateLimiter` alcanza (a diferencia del reboot, que toca la ONU). */
+  getPortalUsageMetrics?: GetPortalUsageMetrics;
+
   // ── store-backend — tienda del ISP dentro de la app de clientes ────────────
   listPortalStoreProducts?: ListPortalStoreProducts;
   getPortalStoreProduct?: GetPortalStoreProduct;
@@ -1496,6 +1504,43 @@ export function createPortalRouter(deps: PortalRouterDeps): Router {
             // La ONU dejó de ser elegible entre el GET y este POST — 409: el
             // request está bien formado, pero el ESTADO actual no lo permite.
             res.status(409).json({ error: err.message, code: err.code, reason: err.reason });
+            return;
+          }
+          next(err);
+        }
+      },
+    );
+  }
+
+  // ── portal-usage-metrics — "Mi consumo" ─────────────────────────────────────
+  // Misma estructura que el bloque `/equipment/:contractId`: portalAuthMiddleware
+  // → generalRateLimiter → handler. Anti-IDOR ESTRUCTURAL: el `contractId` del
+  // param se verifica SIEMPRE contra `req.portalClientId` (dentro de
+  // `GetPortalUsageMetrics`, que tira el MISMO `UsageContractNotFoundError` para
+  // "no existe" y "es de otro" — 404 indistinguible).
+  //
+  // Sin PPPoE asociado, o sin sesiones en el mes -> 200 con `available:false`.
+  // Es un ESTADO NORMAL, nunca un error (mismo criterio que la elegibilidad
+  // WiFi). El único no-200 posible es ese 404.
+  //
+  // Sin rate limiter propio: es una lectura agregada de UNA query, el
+  // `generalRateLimiter` del portal alcanza.
+
+  if (deps.getPortalUsageMetrics) {
+    const getPortalUsageMetrics = deps.getPortalUsageMetrics;
+    router.get(
+      '/usage/:contractId',
+      deps.portalAuthMiddleware,
+      generalRateLimiter,
+      async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        const clientId = requireClientId(req, res);
+        if (!clientId) return;
+        try {
+          const result = await getPortalUsageMetrics.execute(clientId, req.params['contractId'] as string);
+          res.status(200).json(result);
+        } catch (err) {
+          if (err instanceof UsageContractNotFoundError) {
+            res.status(404).json({ error: err.message, code: err.code });
             return;
           }
           next(err);

@@ -236,4 +236,24 @@ describe('customer-portal-api composition root — Fase 7 wiring', () => {
       expect(envExample).toContain('PORTAL_TICKET_AREA_NAME');
     });
   });
+
+  /**
+   * portal-usage-metrics — mismo guard "feature sin perilla = inerte": el
+   * handler de `GET /usage/:contractId` solo se monta si `getPortalUsageMetrics`
+   * viene en los deps. Olvidarlo en app.ts mata el endpoint SIN un solo error de
+   * compilación, y toda la suite queda en verde.
+   */
+  describe('portal-usage-metrics — "Mi consumo" llega a prod', () => {
+    it('importa el use case y el adapter Prisma REAL (no el gemelo in-memory)', () => {
+      expect(appSrc).toContain('GetPortalUsageMetrics');
+      // S1 (fix wave): alias `@infrastructure/...`, no ruta relativa — y el guard
+      // pinea el MISMO string que el import real para que no puedan divergir.
+      expect(appSrc).toContain("from '@infrastructure/adapters/prisma/PrismaUsageMetricsReader'");
+      expect(appSrc).not.toContain('InMemoryUsageMetricsReader');
+    });
+
+    it('pasa `getPortalUsageMetrics` al createPortalRouter (sin esto la ruta no se monta)', () => {
+      expect(appSrc).toMatch(/getPortalUsageMetrics,/);
+    });
+  });
 });
