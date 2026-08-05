@@ -1059,6 +1059,11 @@ import { PrismaOnuWifiCredentialRepository } from '@infrastructure/adapters/pris
 import { ResolveEquipmentRebootEligibility } from '@application/use-cases/equipment/ResolveEquipmentRebootEligibility';
 import { GetPortalEquipmentStatus } from '@application/use-cases/equipment/GetPortalEquipmentStatus';
 import { RebootPortalEquipment } from '@application/use-cases/equipment/RebootPortalEquipment';
+// portal-usage-metrics — "Mi consumo" de Mis servicios. Lee el accounting de
+// RADIUS (`RadiusEvent`) agregado en UNA query; el contrato se une al username
+// PPPoE por `PppoeService.contractId`, el camino que el modelo ya tiene.
+import { GetPortalUsageMetrics } from '@application/use-cases/portal/GetPortalUsageMetrics';
+import { PrismaUsageMetricsReader } from '../adapters/prisma/PrismaUsageMetricsReader';
 // store-backend — tienda del ISP (catálogo admin `/api/store` + pedidos del
 // portal `/api/portal/store`). Imagen reusa `taskPhotoStorage` (MinIO
 // compartido — mismo bucket que task-photos/ticket-messages/news, ver arriba).
@@ -3986,6 +3991,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const getPortalEquipmentStatus = new GetPortalEquipmentStatus(resolveEquipmentRebootEligibility);
   const rebootPortalEquipment = new RebootPortalEquipment(resolveEquipmentRebootEligibility, smartoltWifiGateway);
 
+  // portal-usage-metrics — "Mi consumo". Reusa el MISMO `customerAdapter` que el
+  // resto del portal para el chequeo anti-IDOR (contrato del token) y el repo de
+  // PPPoE para resolver contrato -> username de RADIUS. El reader es propio y de
+  // SOLO LECTURA: agrega `RadiusEvent` por día en una única query.
+  const getPortalUsageMetrics = new GetPortalUsageMetrics(
+    customerAdapter,
+    new PrismaPppoeServiceRepository(),
+    new PrismaUsageMetricsReader(),
+  );
+
   app.use('/api/portal', createPortalRouter({
     portalLogin,
     refreshPortalSession,
@@ -4034,6 +4049,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     tvPasswordRateLimiter: portalTvPasswordRateLimiter,
     getPortalEquipmentStatus,
     rebootPortalEquipment,
+    getPortalUsageMetrics,
     listPortalStoreProducts,
     getPortalStoreProduct,
     getPortalStoreProductImage,
