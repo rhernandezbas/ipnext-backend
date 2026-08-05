@@ -25,9 +25,9 @@
 - [x] 4.3 Composition-root test del wiring.
 
 ## Fase 5 — Gate y cierre
-- [ ] 5.1 Suite completa + `tsc --noEmit`, corridos por el orquestador.
+- [x] 5.1 Suite completa + `tsc --noEmit`, corridos por el orquestador.
 - [x] 5.2 Revert-probes: sacar el filtro de cliente del WHERE · sacar el de `anulado`.
-- [ ] 5.3 Review adversarial → fix wave → re-review hasta CLEAN.
-- [ ] 5.4 Push con OK.
-- [ ] 5.5 **Después del deploy**: prender `enabled=true` + `backfillFloorYearMonth=2026-05`.
-- [ ] 5.6 **E2E en vivo**: verificar que el pago real del usuario (03-08, $2.500,01, MercadoPago, aplicado a FB-00010-000080104) aparece en el endpoint.
+- [x] 5.3 Review adversarial → fix wave → re-review hasta CLEAN.
+- [x] 5.4 Push con OK.
+- [x] 5.5 **Después del deploy**: prender `enabled=true` + `backfillFloorYearMonth=2026-05`.
+- [x] 5.6 **E2E en vivo**: verificar que el pago real del usuario (03-08, $2.500,01, MercadoPago, aplicado a FB-00010-000080104) aparece en el endpoint.
