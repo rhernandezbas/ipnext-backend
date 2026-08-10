@@ -123,10 +123,20 @@ export class RefreshClientBalanceIfStale {
       // Guard (review #1): debt reported (amount > 0) but no itemized invoices ⇒ the list
       // is non-authoritative (schema drift / partial payload); a blind replace-all would
       // wipe the mirror. Sync only when authoritative: non-empty, or genuine zero-debt.
-      await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
-      if (balance.invoices.length > 0 || balance.amount <= 0) {
-        await this.mirror.upsertInvoices(grClienteId, balance.invoices, at);
-      }
+      const invoices = balance.invoices.length > 0 || balance.amount <= 0 ? balance.invoices : null;
+      // fix wave F3 — saldo y facturas en UNA transacción. Antes eran dos
+      // escrituras independientes: si la segunda fallaba, la primera ya estaba
+      // commiteada y este método devolvía `false` — el caller creía que no había
+      // pasado nada mientras la base quedaba en split-brain (saldo nuevo,
+      // facturas viejas), sellado con un `lastBalanceAt` fresco que impedía que
+      // alguien lo volviera a pedir.
+      await this.mirror.updateBalanceAndInvoices({
+        grClienteId,
+        amount: balance.amount,
+        currency: balance.currency,
+        invoices,
+        at,
+      });
       return true;
     } catch {
       // Swallow — caller will serve stored value with balanceStale:true

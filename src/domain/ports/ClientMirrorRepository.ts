@@ -36,4 +36,29 @@ export interface ClientMirrorRepository {
    * (grClienteId) is not found locally.
    */
   upsertInvoices(grClienteId: string, invoices: GrInvoice[], at: Date): Promise<void>;
+  /**
+   * fix wave F3 — escribe el saldo Y (opcionalmente) el espejo de facturas en
+   * UNA SOLA transacción.
+   *
+   * Existe porque hacerlo en dos llamadas era no-atómico de una forma silenciosa:
+   * `updateClientBalance` commitea, y si `upsertInvoices` falla después, la base
+   * queda con saldo NUEVO y facturas VIEJAS mientras el caller recibe "no se
+   * refrescó nada". Encima el `lastBalanceAt` fresco tapa la inconsistencia:
+   * nadie la ve stale, nadie la vuelve a pedir.
+   *
+   * `invoices: null` ⇒ el payload NO es autoritativo sobre facturas (deuda
+   * reportada pero lista vacía: schema drift / payload parcial) y el espejo de
+   * facturas NO se toca — sólo se escribe el saldo. La decisión de autoridad es
+   * del use case; el puerto sólo la ejecuta.
+   */
+  updateBalanceAndInvoices(params: UpdateBalanceAndInvoicesParams): Promise<void>;
+}
+
+export interface UpdateBalanceAndInvoicesParams {
+  grClienteId: string;
+  amount: number;
+  currency: string | null;
+  /** `null` ⇒ no tocar el espejo de facturas (payload no autoritativo). */
+  invoices: GrInvoice[] | null;
+  at: Date;
 }

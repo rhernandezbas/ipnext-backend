@@ -130,6 +130,52 @@ describe('RefreshClientBalanceIfStale', () => {
 });
 
 /**
+ * fix wave F3 — **saldo y facturas, una sola escritura atómica.**
+ *
+ * El split-brain que esto cierra: `updateClientBalance` commiteaba, y si
+ * `upsertInvoices` fallaba después, `execute()` devolvía `false` (el caller cree
+ * que no pasó nada) con el saldo NUEVO ya en la base y las facturas VIEJAS. Y
+ * con `lastBalanceAt` fresco encima, así que nadie lo veía stale.
+ */
+describe('RefreshClientBalanceIfStale — escritura atómica (F3)', () => {
+  const now = new Date('2026-05-27T12:00:00Z');
+
+  it('F3 — si la parte de facturas falla, el saldo NO queda escrito (rollback)', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balancesByClient['100011'] = {
+      ...makeBalance('100011', 65722.07),
+      invoices: [makeGrInvoice('0001')],
+    };
+    // Falla inyectada EN LA PARTE DE FACTURAS (la segunda escritura).
+    mirror.upsertInvoices = async () => {
+      throw new Error('deadlock en Invoice');
+    };
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: 60 });
+
+    const refreshed = await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+
+    expect(refreshed).toBe(false);
+    // ⚠️ EL PIN: antes de F3 el saldo quedaba commiteado igual.
+    expect(mirror.balances.has('100011')).toBe(false);
+  });
+
+  it('F3 — el camino feliz sigue escribiendo saldo Y facturas', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balancesByClient['100011'] = {
+      ...makeBalance('100011', 1234),
+      invoices: [makeGrInvoice('0001')],
+    };
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: 60 });
+
+    expect(await uc.execute({ grClienteId: '100011', lastBalanceAt: null })).toBe(true);
+    expect(mirror.balances.get('100011')?.amount).toBe(1234);
+    expect(mirror.invoices).toHaveLength(1);
+  });
+});
+
+/**
  * fix wave F2 — **single-flight por `grClienteId`.**
  *
  * La carrera real medida en el review: la ficha (`GetClientDetail`) y el bot

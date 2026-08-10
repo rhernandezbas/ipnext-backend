@@ -155,15 +155,25 @@ export class RefreshDebtorBalances {
     for (const grClienteId of clientIdSet) {
       try {
         const balance = await this.gr.fetchClientBalance(grClienteId);
-        await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
         // Sync the client's GR invoices from the SAME payload (zero extra GR calls).
         // Guard (review #1): if GR reports debt (amount > 0) but returns NO itemized
         // invoices, the list is non-authoritative (schema drift / partial payload) — a
         // blind replace-all would wipe the mirror and reintroduce the $0-vs-debt bug this
         // feature kills. Sync only when authoritative: non-empty, or genuine zero-debt (paid off).
-        if (balance.invoices.length > 0 || balance.amount <= 0) {
-          await this.mirror.upsertInvoices(grClienteId, balance.invoices, at);
-        }
+        const invoices = balance.invoices.length > 0 || balance.amount <= 0 ? balance.invoices : null;
+        // fix wave F3 (el HERMANO) — este carril escribía por el MISMO camino
+        // no-atómico que `RefreshClientBalanceIfStale`: saldo commiteado y
+        // facturas en otra transacción. Acá el split-brain es peor todavía,
+        // porque el error se traga en el `catch` de abajo, se cuenta como UN
+        // error entre miles y nadie vuelve a mirar esa fila hasta el próximo
+        // ciclo. Se arregla la CLASE, no la instancia señalada por el review.
+        await this.mirror.updateBalanceAndInvoices({
+          grClienteId,
+          amount: balance.amount,
+          currency: balance.currency,
+          invoices,
+          at,
+        });
         refreshed++;
       } catch (err) {
         console.error(`[${this.lane.logPrefix}] Error refreshing ${grClienteId}:`, (err as Error).message);

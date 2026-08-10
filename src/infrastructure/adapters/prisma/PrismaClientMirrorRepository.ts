@@ -1,4 +1,9 @@
-import { ClientMirrorRepository, UpsertResult } from '@domain/ports/ClientMirrorRepository';
+import { Prisma } from '@prisma/client';
+import {
+  ClientMirrorRepository,
+  UpdateBalanceAndInvoicesParams,
+  UpsertResult,
+} from '@domain/ports/ClientMirrorRepository';
 import { GrClient, GrContract, GrInvoice } from '@domain/entities/gestionReal';
 import { mapContractStatus } from '@application/use-cases/mapContractStatus';
 import { mapGrInvoice } from '@application/use-cases/mapGrInvoice';
@@ -25,6 +30,70 @@ function parseGrDate(s: string | null): Date | null {
   const [d, m, y] = date.split('-').map(Number);
   if (!d || !m || !y) return null;
   return new Date(y, m - 1, d);
+}
+
+/**
+ * Cliente Prisma o cliente transaccional — las escrituras de abajo son idénticas
+ * en los dos, y ésa es toda la gracia: la MISMA sentencia corre suelta
+ * (`updateClientBalance`) o dentro de una tx (`updateBalanceAndInvoices`) sin
+ * duplicar el cuerpo. Duplicarlo sería el molde clásico de "la función que decide
+ * no es la que se testea".
+ */
+type Db = typeof prisma | Prisma.TransactionClient;
+
+/** Escribe SÓLO las tres columnas de balance — nunca customAttributes, status ni catálogo. */
+async function writeBalance(db: Db, grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
+  await db.client.updateMany({
+    where: { grClienteId },
+    data: {
+      balanceDue: amount,
+      balanceCurrency: currency,
+      lastBalanceAt: at,
+    },
+  });
+}
+
+/** Replace-all de las facturas GR del cliente (borra las que GR ya no trae, upsertea las actuales). */
+async function replaceGrInvoices(
+  db: Db,
+  client: { id: string; name: string },
+  invoices: GrInvoice[],
+  at: Date,
+): Promise<void> {
+  const mapped = invoices.map((inv) => mapGrInvoice(inv, at));
+  const currentIds = mapped.map((m) => m.grInvoiceId);
+
+  await db.invoice.deleteMany({
+    where: {
+      clientId: client.id,
+      grInvoiceId: { not: null },
+      NOT: { grInvoiceId: { in: currentIds } },
+    },
+  });
+
+  for (const m of mapped) {
+    const data = {
+      number: m.number,
+      clientId: client.id,
+      customerName: client.name,
+      issueDate: m.issueDate ?? at,
+      dueDate: m.dueDate ?? at,
+      amount: m.amount,
+      balance: m.balance,
+      grType: m.grType,
+      currency: m.currency,
+      pdfUrl: m.pdfUrl,
+      couponPdfUrl: m.couponPdfUrl,
+      paymentUrl: m.paymentUrl,
+      status: m.status,
+      lineItems: [] as unknown as object, // GR gives no line items
+    };
+    await db.invoice.upsert({
+      where: { grInvoiceId: m.grInvoiceId },
+      create: { ...data, grInvoiceId: m.grInvoiceId },
+      update: data,
+    });
+  }
 }
 
 /**
@@ -70,14 +139,34 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
   }
 
   async updateClientBalance(grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
-    // Touch ONLY the three balance columns — never customAttributes, status, or catalog data.
-    await prisma.client.updateMany({
-      where: { grClienteId },
-      data: {
-        balanceDue: amount,
-        balanceCurrency: currency,
-        lastBalanceAt: at,
-      },
+    await writeBalance(prisma, grClienteId, amount, currency, at);
+  }
+
+  /**
+   * fix wave F3 — saldo + facturas en UNA transacción (ver el docstring del puerto).
+   *
+   * Las DOS escrituras corren con el cliente transaccional `tx`: si la de
+   * facturas revienta, Postgres tira abajo también la del saldo. Antes, la del
+   * saldo ya estaba commiteada y la inconsistencia quedaba sellada con
+   * `lastBalanceAt` fresco.
+   */
+  async updateBalanceAndInvoices(params: UpdateBalanceAndInvoicesParams): Promise<void> {
+    const { grClienteId, amount, currency, invoices, at } = params;
+
+    // La resolución del cliente local va FUERA de la tx: es una lectura y no
+    // participa del rollback (mismo criterio que `upsertInvoices`, que ya la
+    // hacía afuera). Sin cliente local, el espejo de facturas no aplica —
+    // pero la escritura del saldo sigue siendo un no-op inofensivo, igual que
+    // en `updateClientBalance`.
+    const client = invoices === null
+      ? null
+      : await prisma.client.findUnique({ where: { grClienteId }, select: { id: true, name: true } });
+
+    await prisma.$transaction(async (tx) => {
+      await writeBalance(tx, grClienteId, amount, currency, at);
+      if (invoices !== null && client) {
+        await replaceGrInvoices(tx, client, invoices, at);
+      }
     });
   }
 
@@ -99,41 +188,8 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     });
     if (!client) return; // unknown client → no-op (mirror of updateClientBalance)
 
-    const mapped = invoices.map((inv) => mapGrInvoice(inv, at));
-    const currentIds = mapped.map((m) => m.grInvoiceId);
-
     await prisma.$transaction(async (tx) => {
-      await tx.invoice.deleteMany({
-        where: {
-          clientId: client.id,
-          grInvoiceId: { not: null },
-          NOT: { grInvoiceId: { in: currentIds } },
-        },
-      });
-
-      for (const m of mapped) {
-        const data = {
-          number: m.number,
-          clientId: client.id,
-          customerName: client.name,
-          issueDate: m.issueDate ?? at,
-          dueDate: m.dueDate ?? at,
-          amount: m.amount,
-          balance: m.balance,
-          grType: m.grType,
-          currency: m.currency,
-          pdfUrl: m.pdfUrl,
-          couponPdfUrl: m.couponPdfUrl,
-          paymentUrl: m.paymentUrl,
-          status: m.status,
-          lineItems: [] as unknown as object, // GR gives no line items
-        };
-        await tx.invoice.upsert({
-          where: { grInvoiceId: m.grInvoiceId },
-          create: { ...data, grInvoiceId: m.grInvoiceId },
-          update: data,
-        });
-      }
+      await replaceGrInvoices(tx, client, invoices, at);
     });
   }
 
