@@ -10,8 +10,25 @@
  * usaba `isBalanceOlderThanTtl`. Este test ejercita los TRES caminos PÚBLICOS
  * (no llama al helper puro tres veces — sería tautológico) para probar que
  * ninguno reintrodujo un cálculo de edad propio.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * fix wave F7 + F8 — **el pin ahora es "mismo TTL para el MISMO carril".**
+ *
+ * F8 (mutante M5, sobrevivía 67/67): el archivo corría SÓLO con `ttl=60`, que es
+ * también el default hardcodeado. Un mapper que ignorara el `balanceTtlMinutes`
+ * inyectado y usara 60 fijo pasaba entero. Ahora el TTL configurado es **120**:
+ * el que hardcodee 60 muere.
+ *
+ * F7: el TTL dejó de ser único. Había uno solo (60min) para una base que se
+ * refresca en DOS cadencias — el carril rápido cada hora, el lento (las 9.082
+ * bajas) una vez por día. Resultado: `balanceStale:true` PERMANENTE para el 62%
+ * de los clientes, un flag que grita todo el tiempo y por lo tanto no dice nada.
+ * Ahora el TTL sale del carril del status, y este test cruza **las dos
+ * cadencias** (la lección de R2: los tests de staleness nunca cruzaban la
+ * cadencia real, así que la deriva era invisible).
  */
 import { toCustomer } from '@infrastructure/adapters/prisma/PrismaCustomerRepository';
+import { mapStatus } from '@infrastructure/adapters/prisma/PrismaClientMirrorRepository';
 import { GetInboxClientContext } from '@application/use-cases/messaging/GetInboxClientContext';
 import { GetClientContextByPhone } from '@application/use-cases/messaging/GetClientContextByPhone';
 import { GetClientContracts } from '@application/use-cases/GetClientContracts';
@@ -20,20 +37,34 @@ import { GetClientLogs } from '@application/use-cases/GetClientLogs';
 import { ListTickets } from '@application/use-cases/ListTickets';
 import { ListTasks } from '@application/use-cases/ListTasks';
 import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract';
-import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
+import {
+  RefreshClientBalanceIfStale,
+  SLOW_LANE_BALANCE_TTL_MINUTES,
+  balanceTtlMinutesForStatus,
+} from '@application/use-cases/RefreshClientBalanceIfStale';
+import { FAST_LANE, SLOW_LANE } from '@application/use-cases/RefreshDebtorBalances';
 import { InMemoryConversationRepository } from '@infrastructure/adapters/in-memory/InMemoryConversationRepository';
 import { InMemoryTicketRepository } from '@infrastructure/adapters/in-memory/InMemoryTicketRepository';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
-import type { CustomerRepository } from '@domain/ports/CustomerRepository';
-import type { GrClientBalance } from '@domain/entities/gestionReal';
 import { parseClientBalanceResponse } from '@infrastructure/adapters/gestion-real/GestionRealClient';
+import type { CustomerRepository } from '@domain/ports/CustomerRepository';
+import type { CustomerStatus } from '@domain/entities/customer';
+import type { GrClientBalance } from '@domain/entities/gestionReal';
 import { customerFrom, grBalancePayload } from '../helpers/customerFixture';
 
 const NOW = () => new Date('2026-08-10T12:00:00.000Z');
-const TTL_MINUTES = 60;
+
+/**
+ * ⚠️ **120, NO 60.** El default hardcodeado del helper es 60; probar con 60 no
+ * distingue "lee el TTL inyectado" de "ignora el parámetro". Éste es el pin de
+ * F8, y es el mismo patrón que `GetInboxClientContext.test.ts` ya usaba (#1b).
+ */
+const TTL_MINUTES = 120;
+
+const MIN = 60 * 1000;
 
 function makeCustomerRepo(overrides?: Partial<CustomerRepository>): CustomerRepository {
   return {
@@ -52,10 +83,10 @@ function makeCustomerRepo(overrides?: Partial<CustomerRepository>): CustomerRepo
   };
 }
 
-async function inboxStale(lastBalanceAt: string | null): Promise<boolean> {
+async function inboxStale(lastBalanceAt: string | null, status: CustomerStatus): Promise<boolean> {
   const customer = customerFrom({
     id: 'c1',
-    status: 'active',
+    status,
     grClienteId: 'gr-1',
     lastBalanceAt: lastBalanceAt ? new Date(lastBalanceAt) : null,
   }, { ttlMinutes: TTL_MINUTES, now: NOW });
@@ -87,7 +118,7 @@ async function inboxStale(lastBalanceAt: string | null): Promise<boolean> {
   return result.status === 'matched' ? result.client!.balance.stale : true;
 }
 
-async function refreshJudgedStale(lastBalanceAt: string | null): Promise<boolean> {
+async function refreshJudgedStale(lastBalanceAt: string | null, status: CustomerStatus): Promise<boolean> {
   const gr = new InMemoryGestionRealPort();
   const mirror = new InMemoryClientMirrorRepository();
   // fix wave (F1) — el balance nace de un payload GR pasado por el parser real,
@@ -98,40 +129,103 @@ async function refreshJudgedStale(lastBalanceAt: string | null): Promise<boolean
   gr.balancesByClient['gr-1'] = balance;
   const refresh = new RefreshClientBalanceIfStale(gr, mirror, { now: NOW, ttlMinutes: TTL_MINUTES });
 
-  await refresh.execute({ grClienteId: 'gr-1', lastBalanceAt });
+  await refresh.execute({ grClienteId: 'gr-1', lastBalanceAt, status });
   // Si RefreshClientBalanceIfStale juzgó "fresco", NUNCA llama a GR (short-circuit interno).
   return gr.balanceCalls.includes('gr-1');
 }
 
-function mapperStale(lastBalanceAt: string | null): boolean {
+function mapperStale(lastBalanceAt: string | null, status: CustomerStatus): boolean {
   const c = customerFrom({
-    status: 'active',
+    status,
     grClienteId: 'gr-1',
     lastBalanceAt: lastBalanceAt ? new Date(lastBalanceAt) : null,
   }, { ttlMinutes: TTL_MINUTES, now: NOW });
   return c.balanceStale!;
 }
 
-describe('balanceStale — un solo criterio en los tres call sites (S13)', () => {
-  it('lastBalanceAt fresco (10min): toCustomer, GetInboxClientContext y RefreshClientBalanceIfStale coinciden en "no stale"', async () => {
-    const freshAt = new Date(NOW().getTime() - 10 * 60 * 1000).toISOString();
+/** Los tres call sites, para el mismo input. El pin es que coincidan. */
+async function losTres(lastBalanceAt: string | null, status: CustomerStatus): Promise<boolean[]> {
+  return [
+    mapperStale(lastBalanceAt, status),
+    await inboxStale(lastBalanceAt, status),
+    await refreshJudgedStale(lastBalanceAt, status),
+  ];
+}
 
-    expect(mapperStale(freshAt)).toBe(false);
-    expect(await inboxStale(freshAt)).toBe(false);
-    expect(await refreshJudgedStale(freshAt)).toBe(false);
+const hace = (ms: number) => new Date(NOW().getTime() - ms).toISOString();
+
+describe.each([
+  { carril: 'RÁPIDO', status: 'active' as CustomerStatus, ttl: TTL_MINUTES },
+  { carril: 'LENTO (bajas)', status: 'baja' as CustomerStatus, ttl: SLOW_LANE_BALANCE_TTL_MINUTES },
+])('balanceStale — un solo criterio en los tres call sites, carril $carril (S13 + F7/F8)', ({ status, ttl }) => {
+  it('dentro del TTL del carril: los tres coinciden en "no stale"', async () => {
+    const dentro = hace((ttl - 10) * MIN);
+    expect(await losTres(dentro, status)).toEqual([false, false, false]);
   });
 
-  it('lastBalanceAt viejo (90min, >TTL 60): los tres coinciden en "stale"', async () => {
-    const staleAt = new Date(NOW().getTime() - 90 * 60 * 1000).toISOString();
-
-    expect(mapperStale(staleAt)).toBe(true);
-    expect(await inboxStale(staleAt)).toBe(true);
-    expect(await refreshJudgedStale(staleAt)).toBe(true);
+  it('pasado el TTL del carril: los tres coinciden en "stale"', async () => {
+    const pasado = hace((ttl + 30) * MIN);
+    expect(await losTres(pasado, status)).toEqual([true, true, true]);
   });
 
-  it('lastBalanceAt null (nunca fetcheado): los tres coinciden en "stale", cualquier status', async () => {
-    expect(mapperStale(null)).toBe(true);
-    expect(await inboxStale(null)).toBe(true);
-    expect(await refreshJudgedStale(null)).toBe(true);
+  it('lastBalanceAt null (nunca fetcheado): los tres coinciden en "stale"', async () => {
+    expect(await losTres(null, status)).toEqual([true, true, true]);
+  });
+});
+
+/**
+ * ⚠️ **El test que cruza las DOS cadencias.** Un balance de 3 horas es el mismo
+ * dato en los dos casos; lo que cambia es cada cuánto se refresca ese cliente.
+ * Para un `active` (carril rápido, cada hora) 3h es viejo. Para una `baja`
+ * (carril lento, 1×/día) 3h es lo más fresco que ese dato va a estar nunca —
+ * marcarlo stale era gritar por 9.082 clientes, todo el tiempo, sin que nadie
+ * pudiera hacer nada al respecto.
+ *
+ * Con TTL único, ESTE test es imposible de escribir: las dos filas darían lo
+ * mismo. Por eso M5 sobrevivía.
+ */
+describe('F7 — el MISMO lastBalanceAt da veredictos distintos según el carril', () => {
+  const treHoras = hace(3 * 60 * MIN);
+
+  it('3h en el carril rápido (TTL 120min) ⇒ stale en los tres', async () => {
+    expect(await losTres(treHoras, 'active')).toEqual([true, true, true]);
+  });
+
+  it('3h en el carril lento (TTL 26h) ⇒ NO stale en los tres', async () => {
+    expect(await losTres(treHoras, 'baja')).toEqual([false, false, false]);
+  });
+
+  it('30h ⇒ stale incluso en el carril lento (el margen sobre la cadencia diaria es 26h, no infinito)', async () => {
+    expect(await losTres(hace(30 * 60 * MIN), 'baja')).toEqual([true, true, true]);
+  });
+});
+
+/**
+ * Anti-deriva: la lista de statuses del carril lento vive en la capa de
+ * aplicación (`balanceTtlMinutesForStatus`) mientras que la de estados GR vive
+ * en `RefreshDebtorBalances` y la traducción estado→status en el adapter Prisma.
+ * Un test SÍ puede mirar las tres a la vez, y es el único lugar donde el
+ * "carril del status" y el "carril del sync" se pueden verificar iguales. Si
+ * alguien mueve un estado de carril y no toca el TTL, esto se rompe.
+ */
+describe('F7 — el carril del TTL coincide con el carril del sync (anti-deriva)', () => {
+  it('todo estado del SLOW_LANE mapea a un status con TTL diario', () => {
+    for (const estado of SLOW_LANE.estados) {
+      expect(balanceTtlMinutesForStatus(mapStatus(estado), TTL_MINUTES)).toBe(SLOW_LANE_BALANCE_TTL_MINUTES);
+    }
+  });
+
+  it('ningún estado del FAST_LANE usa el TTL diario', () => {
+    for (const estado of FAST_LANE.estados) {
+      expect(balanceTtlMinutesForStatus(mapStatus(estado), TTL_MINUTES)).toBe(TTL_MINUTES);
+    }
+  });
+
+  it('status desconocido/ausente cae al carril RÁPIDO (el lado que refresca más seguido)', () => {
+    // Basura al valor seguro: equivocarse hacia "refrescar de más" cuesta una
+    // llamada a GR; hacia "refrescar de menos" cuesta un saldo viejo dicho como fresco.
+    expect(balanceTtlMinutesForStatus(undefined, TTL_MINUTES)).toBe(TTL_MINUTES);
+    expect(balanceTtlMinutesForStatus(null, TTL_MINUTES)).toBe(TTL_MINUTES);
+    expect(balanceTtlMinutesForStatus('cualquier-cosa', TTL_MINUTES)).toBe(TTL_MINUTES);
   });
 });

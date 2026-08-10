@@ -21,7 +21,7 @@ import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
 import { ClientNotFoundError } from '@domain/errors';
 import { normalizeGrCurrency } from '@domain/services/normalizeGrCurrency';
-import { isBalanceOlderThanTtl } from '@application/use-cases/RefreshClientBalanceIfStale';
+import { isBalanceOlderThanTtl, balanceTtlMinutesForStatus } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { prisma } from '../../database/prisma';
 
 const DEFAULT_BALANCE_TTL_MINUTES = 60;
@@ -75,7 +75,16 @@ export function toCustomer(
     // `GetInboxClientContext` (spec `balance-staleness-helper`). El status
     // dejó de decidir frescura — antes de este change el guard estaba
     // cortocircuitado en abierto para todo no-`late`, sin importar la edad.
-    balanceStale: isBalanceOlderThanTtl(lastBalanceAtIso, balanceTtlMinutes, now),
+    // fix wave F7 — el TTL sale del CARRIL del status, no es único. El helper de
+    // edad (`isBalanceOlderThanTtl`) es EL MISMO para todos; lo que cambia es
+    // qué ttl se le pasa. Con TTL único (60min), las 9.082 bajas —que se
+    // refrescan 1×/día por diseño— salían `balanceStale:true` de forma
+    // PERMANENTE: un flag que grita siempre no informa nada.
+    balanceStale: isBalanceOlderThanTtl(
+      lastBalanceAtIso,
+      balanceTtlMinutesForStatus(status, balanceTtlMinutes),
+      now,
+    ),
     // client-geolocation — Prominense-owned GPS fields (GR sync NEVER writes these)
     lat: row.lat ?? null,
     lng: row.lng ?? null,

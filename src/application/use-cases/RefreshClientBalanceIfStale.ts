@@ -8,6 +8,50 @@ import { ClientMirrorRepository } from '@domain/ports/ClientMirrorRepository';
 export const DEFAULT_BALANCE_STALE_TTL_MINUTES = 60;
 
 /**
+ * fix wave F7 — TTL del carril LENTO: 26 horas.
+ *
+ * = la cadencia del carril (1×/día, de madrugada) + 2h de margen para que un
+ * corrimiento de la ventana no marque stale a toda la población de golpe.
+ */
+export const SLOW_LANE_BALANCE_TTL_MINUTES = 26 * 60;
+
+/**
+ * Statuses cuyo balance se refresca en el carril LENTO.
+ *
+ * ⚠️ Espejo de `SLOW_LANE.estados` (`RefreshDebtorBalances`) traducido por
+ * `mapStatus`. No se importan de allá a propósito: `mapStatus` vive en el
+ * adapter Prisma y esto es capa de aplicación. La correspondencia NO queda
+ * librada al comentario — `balanceStaleness.crossSite.test.ts` la pinea
+ * recorriendo `SLOW_LANE.estados`/`FAST_LANE.estados` de verdad, que es el
+ * único lugar donde se pueden mirar las tres capas a la vez.
+ */
+const SLOW_LANE_STATUSES: ReadonlySet<string> = new Set(['baja']);
+
+/**
+ * fix wave F7 — **el TTL sale del CARRIL, no es único.**
+ *
+ * Había un solo TTL (60min) para una base que se refresca en dos cadencias: el
+ * carril rápido cada hora, y el lento —las 9.082 bajas, el 62% de los
+ * clientes— una vez por día. Con 60min, toda baja quedaba `balanceStale:true`
+ * de forma PERMANENTE: un flag que grita siempre no informa nada, y encima
+ * empujaba refrescos on-demand contra GR que jamás iban a "arreglar" la
+ * frescura, porque el dato ya era todo lo fresco que su carril permite.
+ *
+ * Un status desconocido cae al carril RÁPIDO a propósito: equivocarse hacia
+ * "refrescar de más" cuesta una llamada a GR; hacia "refrescar de menos" cuesta
+ * un saldo viejo servido como fresco, que es el modo de falla que todo este
+ * change existe para evitar. La basura va al valor SEGURO, no al permisivo.
+ */
+export function balanceTtlMinutesForStatus(
+  status: string | null | undefined,
+  fastLaneTtlMinutes: number,
+): number {
+  return status != null && SLOW_LANE_STATUSES.has(status)
+    ? SLOW_LANE_BALANCE_TTL_MINUTES
+    : fastLaneTtlMinutes;
+}
+
+/**
  * messaging-inbox-v2 (F1.5, B2) — pure staleness check, extracted out of the
  * `isStale` private method so it can be reused verbatim by GetInboxClientContext's
  * default (no-refresh) path (RICH-4): that path MUST compute `balance.stale` with
@@ -44,6 +88,16 @@ export interface RefreshInput {
   grClienteId: string | null | undefined;
   /** ISO timestamp of the last balance fetch, or null if never fetched. */
   lastBalanceAt: string | null | undefined;
+  /**
+   * fix wave F7 — status del cliente, para elegir el TTL del CARRIL correcto
+   * (ver `balanceTtlMinutesForStatus`). Opcional y aditivo: sin él se usa el
+   * TTL rápido, que es el lado seguro (refresca de más, nunca de menos).
+   *
+   * Que esté acá y no sólo en el mapper importa: sin esto, la ficha de una
+   * `baja` se muestra "fresca" (TTL 26h) pero igual dispara una llamada a GR
+   * cada 60 minutos — el gate visible y el gate real discrepando en silencio.
+   */
+  status?: string | null;
 }
 
 /**
@@ -95,12 +149,12 @@ export class RefreshClientBalanceIfStale {
    * (not stale, no grClienteId, or GR failed).
    */
   async execute(input: RefreshInput): Promise<boolean> {
-    const { grClienteId, lastBalanceAt } = input;
+    const { grClienteId, lastBalanceAt, status } = input;
     if (!grClienteId) return false;
     // El gate de staleness va ANTES del dedup a propósito: es local, barato y
     // per-caller. Lo que se dedupe es el VUELO, que es lo caro (una llamada a GR)
     // y lo único que puede invertir snapshots.
-    if (!this.isStale(lastBalanceAt)) return false;
+    if (!this.isStale(lastBalanceAt, status)) return false;
 
     const inFlight = this.inFlight.get(grClienteId);
     if (inFlight) return inFlight; // el segundo caller ESPERA al primero, no abre otro vuelo
@@ -144,8 +198,10 @@ export class RefreshClientBalanceIfStale {
     }
   }
 
-  private isStale(lastBalanceAt: string | null | undefined): boolean {
-    return isBalanceOlderThanTtl(lastBalanceAt, this.ttlMinutes, this.now);
+  private isStale(lastBalanceAt: string | null | undefined, status?: string | null): boolean {
+    // `isBalanceOlderThanTtl` NO cambia (misma regla de edad para todos): lo que
+    // cambia es QUÉ ttl se le pasa, según el carril del status (F7).
+    return isBalanceOlderThanTtl(lastBalanceAt, balanceTtlMinutesForStatus(status, this.ttlMinutes), this.now);
   }
 
   private withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

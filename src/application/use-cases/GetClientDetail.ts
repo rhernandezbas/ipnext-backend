@@ -21,6 +21,10 @@ export class GetClientDetail {
       const refreshed = await this.balanceRefresh.execute({
         grClienteId: customer.grClienteId,
         lastBalanceAt: customer.lastBalanceAt,
+        // fix wave F7 — el carril del status decide el TTL. Sin esto, la ficha
+        // de una `baja` se muestra fresca (TTL 26h) pero igual golpea GR cada
+        // 60min: el gate visible y el gate real discrepando en silencio.
+        status: customer.status,
       });
 
       // If GR gave us fresh data, re-load so the caller sees the updated balance

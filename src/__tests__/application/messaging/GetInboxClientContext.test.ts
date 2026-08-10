@@ -422,7 +422,8 @@ describe('GetInboxClientContext', () => {
 
     const result = await uc.execute(conv.id, { refresh: true });
 
-    expect(refreshBalance.execute).toHaveBeenCalledWith({ grClienteId: '100011', lastBalanceAt: '2026-07-11T08:00:00.000Z' });
+    // fix wave F7 — el `status` viaja al colaborador (el TTL sale del carril).
+    expect(refreshBalance.execute).toHaveBeenCalledWith({ grClienteId: '100011', lastBalanceAt: '2026-07-11T08:00:00.000Z', status: 'active' });
     expect(findById).toHaveBeenCalledTimes(2);
     expect(result.client?.balance.due).toBe(5000);
     expect(result.client?.balance.stale).toBe(false);

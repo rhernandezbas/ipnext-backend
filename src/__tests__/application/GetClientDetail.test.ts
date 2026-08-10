@@ -68,7 +68,10 @@ describe('GetClientDetail', () => {
 
       await uc.execute('42');
 
-      expect(refresh.execute).toHaveBeenCalledWith({ grClienteId: '100011', lastBalanceAt: null });
+      // fix wave F7 — el `status` viaja al colaborador: es lo que le dice de qué
+      // CARRIL sale el TTL. Sin él, la ficha de una baja mostraría "fresco"
+      // (TTL 26h) mientras golpea GR cada 60min por detrás.
+      expect(refresh.execute).toHaveBeenCalledWith({ grClienteId: '100011', lastBalanceAt: null, status: 'active' });
     });
 
     it('does NOT trigger the refresh for a client without a grClienteId', async () => {
