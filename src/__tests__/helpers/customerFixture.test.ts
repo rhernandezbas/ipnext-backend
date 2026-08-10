@@ -42,13 +42,15 @@ describe('customerFrom', () => {
   });
 
   it('opts.now permite overridear el reloj fijo cuando el test lo necesita', () => {
-    const later = new Date(FIXED_NOW.getTime() + 2 * 60 * 60 * 1000);
+    const later = new Date(FIXED_NOW.getTime() + 4 * 60 * 60 * 1000);
     const c = customerFrom(
       { status: 'late', grClienteId: 'GR1', lastBalanceAt: new Date(FIXED_NOW.getTime()) },
       { now: () => later, ttlMinutes: 60 },
     );
 
-    // 2h despues del lastBalanceAt, TTL 60min -> stale.
+    // FW2-2: 4h despues del lastBalanceAt. El TTL efectivo del carril rapido es
+    // el configurado (60) + el margen que cubre el batch (60) = 2h, asi que con
+    // 2h justas ya no alcanzaba para ser stale.
     expect(c.balanceStale).toBe(true);
   });
 
