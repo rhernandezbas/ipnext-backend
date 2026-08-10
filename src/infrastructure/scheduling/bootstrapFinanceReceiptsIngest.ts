@@ -59,7 +59,10 @@ export async function bootstrapFinanceReceiptsIngest(): Promise<FinanceReceiptIn
   // fix-wave-3 R9 — itemRepo/retencionRepo are now MANDATORY constructor args
   // (never optional-trailing) precisely so a future refactor that drops them
   // here fails to COMPILE instead of silently zeroing the cash metric.
-  const syncDelta = new SyncGrReceiptsDelta(client, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo);
+  // fix-wave RF2 — the delta lane now takes the SAME live `syncConfig` as the
+  // other two (positional, mandatory): the systemic annulment guard's
+  // thresholds are editable in DB for all three carriles, not just two.
+  const syncDelta = new SyncGrReceiptsDelta(client, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo);
   const syncBackfill = new SyncGrReceiptsBackfillBatch(client, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo);
   // gr-receipt-annulment (design.md Decision 8) — the third lane, SAME Prisma
   // repos + syncConfig as the other two (itemRepo/retencionRepo mandatory,

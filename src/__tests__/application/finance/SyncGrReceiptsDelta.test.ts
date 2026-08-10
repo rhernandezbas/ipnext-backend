@@ -5,6 +5,7 @@ import { InMemoryFinanceReceiptApplicationRepository } from '@infrastructure/ada
 import { InMemoryFinanceInvoiceTypeClassificationRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceInvoiceTypeClassificationRepository';
 import { InMemoryFinanceReceiptItemRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceReceiptItemRepository';
 import { InMemoryFinanceReceiptRetencionRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceReceiptRetencionRepository';
+import { InMemoryFinanceReceiptSyncConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceReceiptSyncConfigRepository';
 import { SyncGrReceiptsDelta } from '@application/use-cases/finance/SyncGrReceiptsDelta';
 import { FinanceReceiptPersistenceError } from '@application/use-cases/finance/financeIngestErrors';
 import { GrReceipt } from '@domain/entities/gestionReal';
@@ -32,10 +33,11 @@ function makeHarness(pageSize: number, now: () => Date) {
   const receipts = new InMemoryFinancePaymentReceiptRepository();
   const applications = new InMemoryFinanceReceiptApplicationRepository(receipts);
   const invoiceTypes = new InMemoryFinanceInvoiceTypeClassificationRepository();
+  const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
   const items = new InMemoryFinanceReceiptItemRepository();
   const retenciones = new InMemoryFinanceReceiptRetencionRepository();
-  const uc = new SyncGrReceiptsDelta(gr, state, receipts, applications, invoiceTypes, items, retenciones, { pageSize, now });
-  return { gr, state, receipts, applications, invoiceTypes, items, retenciones, uc };
+  const uc = new SyncGrReceiptsDelta(gr, state, receipts, applications, invoiceTypes, syncConfig, items, retenciones, { pageSize, now });
+  return { gr, state, receipts, applications, invoiceTypes, syncConfig, items, retenciones, uc };
 }
 
 describe('SyncGrReceiptsDelta', () => {
@@ -55,6 +57,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         undefined as never,
         new InMemoryFinanceReceiptRetencionRepository(),
       )).toThrow(/itemRepo and retencionRepo are REQUIRED/);
@@ -67,6 +70,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         undefined as never,
       )).toThrow(/itemRepo and retencionRepo are REQUIRED/);
@@ -79,6 +83,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
       )).not.toThrow();
@@ -131,6 +136,7 @@ describe('SyncGrReceiptsDelta', () => {
       new InMemoryFinancePaymentReceiptRepository(),
       new InMemoryFinanceReceiptApplicationRepository(),
       new InMemoryFinanceInvoiceTypeClassificationRepository(),
+      new InMemoryFinanceReceiptSyncConfigRepository(),
       new InMemoryFinanceReceiptItemRepository(),
       new InMemoryFinanceReceiptRetencionRepository(),
       { pageSize: 100, now: () => new Date('2026-07-15T14:00:00Z') },
@@ -151,6 +157,7 @@ describe('SyncGrReceiptsDelta', () => {
       new InMemoryFinancePaymentReceiptRepository(),
       new InMemoryFinanceReceiptApplicationRepository(),
       new InMemoryFinanceInvoiceTypeClassificationRepository(),
+      new InMemoryFinanceReceiptSyncConfigRepository(),
       new InMemoryFinanceReceiptItemRepository(),
       new InMemoryFinanceReceiptRetencionRepository(),
       { pageSize: 2, now: () => new Date('2026-07-15T14:00:00Z') },
@@ -206,6 +213,7 @@ describe('SyncGrReceiptsDelta', () => {
         gr, state, receipts,
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -232,6 +240,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         applications,
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -261,6 +270,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         applications,
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -281,6 +291,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -307,6 +318,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -328,6 +340,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -356,6 +369,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -380,6 +394,7 @@ describe('SyncGrReceiptsDelta', () => {
         new InMemoryFinancePaymentReceiptRepository(),
         new InMemoryFinanceReceiptApplicationRepository(),
         new InMemoryFinanceInvoiceTypeClassificationRepository(),
+        new InMemoryFinanceReceiptSyncConfigRepository(),
         new InMemoryFinanceReceiptItemRepository(),
         new InMemoryFinanceReceiptRetencionRepository(),
         { pageSize: 100, now },
@@ -389,6 +404,125 @@ describe('SyncGrReceiptsDelta', () => {
 
       expect(gr.receiptsCalls[0]).toMatchObject({ fechaDesde: '15-07-2026', fechaHasta: '15-07-2026', offset: 0 });
       warnSpy.mockRestore();
+    });
+  });
+  // ── fix-wave RF2/RF11 — THE pin for this fix: the systemic annulment
+  // guard on the DELTA lane must read the LIVE DB config, not the constants
+  // compiled into the binary. This lane carries TODAY cash, so it is exactly
+  // where an operator facing a legitimate high-annulment day needs the knob to
+  // work — and it was the one lane where it did nothing.
+  describe('RF2: the annulment-guard thresholds are LIVE config, not hardcoded defaults', () => {
+    function annulledReceipt(id: string, dateDDMMYYYY: string): GrReceipt {
+      return { ...receipt(id, dateDDMMYYYY), fechaAnulacion: dateDDMMYYYY + ' 12:00:00' };
+    }
+
+    /** 20 receipts for "today", 6 of them annulled = 30% — well over the 5% default. */
+    function seedTodayPage(gr: InMemoryGestionRealPort) {
+      for (let i = 0; i < 6; i++) gr.receipts.push(annulledReceipt('A' + i, '15-07-2026'));
+      for (let i = 0; i < 14; i++) gr.receipts.push(receipt('H' + i, '15-07-2026'));
+    }
+
+    const now = () => new Date('2026-07-15T14:00:00Z');
+
+    it('30% annulled ABORTS under the default 5% threshold (baseline)', async () => {
+      const { gr, uc } = makeHarness(100, now);
+      seedTodayPage(gr);
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(uc.execute()).rejects.toThrow(/ABORT/);
+      errSpy.mockRestore();
+    });
+
+    it('the SAME page persists once the operator raises annulmentGuardMaxPct to 50 — the DB knob reaches the delta lane', async () => {
+      const { gr, receipts, syncConfig, uc } = makeHarness(100, now);
+      await syncConfig.update({ annulmentGuardMaxPct: 50 });
+      seedTodayPage(gr);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await uc.execute();
+      warnSpy.mockRestore();
+
+      expect(result.pageProcessed).toBe(20);
+      expect(receipts.rows.size).toBe(20);
+    });
+
+    // ── fix-wave RF4 (hermano) — the abort-pins-the-cursor pathology the
+    // review found on the reconcile lane is STRUCTURALLY IDENTICAL here: a
+    // composite cursor makes this lane due on every tick, so a poisoned page
+    // is re-requested forever. Fixing only the lane that was pointed at would
+    // leave the twin defect on the lane that carries today's cash.
+    describe('RF4 (hermano): three consecutive guard aborts abandon the RANGE instead of pinning the cursor', () => {
+      it('the first two aborts keep the composite cursor pinned', async () => {
+        const { gr, state, uc } = makeHarness(100, now);
+        seedTodayPage(gr);
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+        expect((await state.get(ENTITY))?.cursor).toBe('15-07-2026:15-07-2026:0');
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+        expect((await state.get(ENTITY))?.cursor).toBe('15-07-2026:15-07-2026:0');
+        errSpy.mockRestore();
+      });
+
+      it('the THIRD abort COLLAPSES the cursor to the plain fechaDesde — no coverage is claimed, and the lane stops being due every tick', async () => {
+        const { gr, state, uc } = makeHarness(100, now);
+        seedTodayPage(gr);
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        for (let i = 0; i < 3; i++) await expect(uc.execute()).rejects.toThrow(/ABORT/);
+        errSpy.mockRestore();
+
+        const saved = await state.get(ENTITY);
+        // Plain cursor = "covered through 15-07-2026", the range's own START:
+        // the next run re-scans [15-07-2026, hoy] from offset 0. Nothing new is
+        // ever marked as covered by an abandonment.
+        expect(saved?.cursor).toBe('15-07-2026');
+        expect(saved?.lastResult).toMatch(/ABANDONADO/);
+      });
+
+      it('a successful page in between resets the streak — the three aborts must be CONSECUTIVE', async () => {
+        const { gr, state, uc } = makeHarness(100, now);
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        seedTodayPage(gr);
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+
+        gr.receipts.length = 0;
+        gr.receipts.push(receipt('OK1', '15-07-2026'));
+        await uc.execute();
+
+        gr.receipts.length = 0;
+        seedTodayPage(gr);
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+        errSpy.mockRestore();
+        warnSpy.mockRestore();
+
+        expect((await state.get(ENTITY))?.cursor).toBe('15-07-2026:15-07-2026:0');
+      });
+
+      it('a NON-guard failure (GR down) still pins the cursor for a plain retry — unaffected', async () => {
+        const { gr, state, uc } = makeHarness(100, now);
+        jest.spyOn(gr, 'fetchReceipts').mockRejectedValue(new Error('GR down'));
+
+        for (let i = 0; i < 4; i++) await expect(uc.execute()).rejects.toThrow(/GR down/);
+
+        expect((await state.get(ENTITY))?.cursor).toBe('15-07-2026:15-07-2026:0');
+      });
+    });
+
+    it('raising annulmentGuardMinCount also stops the abort — both knobs are read live on this lane', async () => {
+      const { gr, receipts, syncConfig, uc } = makeHarness(100, now);
+      await syncConfig.update({ annulmentGuardMinCount: 50 });
+      seedTodayPage(gr);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await uc.execute();
+      warnSpy.mockRestore();
+
+      expect(result.pageProcessed).toBe(20);
+      expect(receipts.rows.size).toBe(20);
     });
   });
 });

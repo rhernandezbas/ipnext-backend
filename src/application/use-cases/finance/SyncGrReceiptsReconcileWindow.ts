@@ -7,8 +7,9 @@ import { FinanceReceiptSyncConfigRepository, FinanceReceiptSyncConfig } from '@d
 import { FinanceReceiptItemRepository } from '@domain/ports/FinanceReceiptItemRepository';
 import { FinanceReceiptRetencionRepository } from '@domain/ports/FinanceReceiptRetencionRepository';
 import { grDateAr } from './financeDates';
-import { FinanceReceiptPersistenceError } from './financeIngestErrors';
+import { FinanceReceiptPersistenceError, FinanceReceiptAnnulmentGuardError } from './financeIngestErrors';
 import { mapAndGuardReceiptPage, persistReceiptPage } from './financeReceiptPageIngest';
+import { GUARD_ABORT_ABANDON_THRESHOLD, GUARD_ABORT_MARKER, parseGuardAbortStreak } from './financeAnnulmentGuard';
 import { MappedGrReceipt } from './mapGrReceipt';
 import { deltaCursorHasPendingPages, parseCompositeCursor } from './financeReceiptCursors';
 
@@ -16,6 +17,7 @@ import { deltaCursorHasPendingPages, parseCompositeCursor } from './financeRecei
 export const RECONCILE_ENTITY = 'finance-receipts-reconcile';
 const LANE = 'reconcile';
 const DEFAULT_PAGE_SIZE = 100;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface ReconcilePageResult {
   /** Receipts persisted THIS page. */
@@ -51,7 +53,10 @@ export interface SyncGrReceiptsReconcileWindowOptions {
  *    cursor for every subsequent page of that same sweep — even if the clock
  *    crosses AR midnight mid-sweep. Re-deriving the window per page would let
  *    GR's reported `total` shift mid-paginate and silently skip/duplicate
- *    receipts.
+ *    receipts. fix-wave RF13 completes this: the window also ENDS YESTERDAY,
+ *    so the underlying result set cannot grow while the sweep walks it (frozen
+ *    dates are not enough if one of those dates is "today"). Today is the
+ *    delta lane's territory.
  */
 export class SyncGrReceiptsReconcileWindow {
   private readonly now: () => Date;
@@ -119,7 +124,7 @@ export class SyncGrReceiptsReconcileWindow {
         );
       }
 
-      const mapped = mapAndGuardReceiptPage(receipts, cfg, LANE);
+      const mapped = mapAndGuardReceiptPage(receipts, cfg, LANE, { rango: `${fechaDesde}..${fechaHasta}`, offset });
       const receiptIds = mapped.map((m) => m.receipt.grReceiptId);
       // design.md Decision 9 — "nuevos=" observability: which of this page's
       // ids the mirror did NOT already have BEFORE this sweep persists it —
@@ -134,8 +139,9 @@ export class SyncGrReceiptsReconcileWindow {
       try {
         await persistReceiptPage(
           mapped,
-          { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes },
+          { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes, syncState: this.state },
           LANE,
+          this.now(),
         );
 
         if (hasPendingPages) {
@@ -166,6 +172,36 @@ export class SyncGrReceiptsReconcileWindow {
 
       return { pageProcessed: mapped.length, sweepInProgress: hasPendingPages, windowFrom: fechaDesde, windowTo: fechaHasta };
     } catch (err) {
+      // fix-wave RF4 — a systemic-guard abort is the ONE failure that will
+      // repeat identically until GR itself changes: retrying the same page
+      // every tick forever spends the shared budget to produce the same abort.
+      // After `GUARD_ABORT_ABANDON_THRESHOLD` consecutive aborts on this
+      // sweep, the sweep is abandoned (cursor → null, `lastRunAt` = now), so
+      // the next attempt waits the full `reconcileCheckIntervalMs` and starts
+      // from a freshly computed window. The streak marker is dropped on
+      // abandonment so the NEXT sweep gets its own three attempts, and any
+      // successful page clears it naturally (a success writes a `lastResult`
+      // without the marker).
+      if (err instanceof FinanceReceiptAnnulmentGuardError) {
+        const streak = parseGuardAbortStreak(prior?.lastResult) + 1;
+        const abandon = streak >= GUARD_ABORT_ABANDON_THRESHOLD;
+        await this.state.save({
+          entity: RECONCILE_ENTITY,
+          cursor: abandon ? null : `${fechaDesde}:${fechaHasta}:${offset}`,
+          lastRunAt: this.now(),
+          lastResult: abandon
+            ? `error: ${err.message} [barrido ABANDONADO tras ${streak} aborts consecutivos del guard — reintenta en la cadencia normal]`
+            : `error: ${err.message} [${GUARD_ABORT_MARKER}${streak}]`,
+          itemsSynced: prior?.itemsSynced ?? 0,
+        });
+        if (abandon) {
+          console.error(
+            `[finance-receipts-${LANE}] barrido ${fechaDesde}..${fechaHasta} ABANDONADO tras ${streak} aborts consecutivos del guard en offset=${offset} — el carril queda degradado y reintenta un barrido nuevo en la próxima cadencia.`,
+          );
+        }
+        throw err;
+      }
+
       await this.state.save({
         entity: RECONCILE_ENTITY,
         cursor: `${fechaDesde}:${fechaHasta}:${offset}`,
@@ -177,11 +213,24 @@ export class SyncGrReceiptsReconcileWindow {
     }
   }
 
-  /** design.md Decision 2 — `fechaHasta = today`, `fechaDesde = today - (windowDays-1)`, counting days INCLUSIVE of today. */
+  /**
+   * design.md Decision 2 + fix-wave RF13 — `fechaHasta = YESTERDAY`,
+   * `fechaDesde = yesterday - (windowDays-1)`, counting days INCLUSIVE of
+   * yesterday.
+   *
+   * Ending at TODAY (as this did) leaves the sweep walking a result set that
+   * KEEPS GROWING underneath it: every receipt GR confirms while the sweep
+   * paginates changes `total` and shifts rows between offsets, so a
+   * multi-page sweep silently re-reads some receipts and skips others. The
+   * frozen-cursor rule (point 2 of the class docblock) freezes the DATES, not
+   * the contents — only a closed upper bound freezes the contents. Nothing is
+   * lost by excluding today: today is precisely the delta lane's job, on its
+   * own (much tighter) `deltaCheckIntervalMs` cadence.
+   */
   private computeWindow(cfg: FinanceReceiptSyncConfig): { fechaDesde: string; fechaHasta: string } {
-    const nowDate = this.now();
-    const fechaHasta = grDateAr(nowDate);
-    const fechaDesde = grDateAr(new Date(nowDate.getTime() - (cfg.reconcileWindowDays - 1) * 24 * 60 * 60 * 1000));
+    const yesterday = new Date(this.now().getTime() - DAY_MS);
+    const fechaHasta = grDateAr(yesterday);
+    const fechaDesde = grDateAr(new Date(yesterday.getTime() - (cfg.reconcileWindowDays - 1) * DAY_MS));
     return { fechaDesde, fechaHasta };
   }
 

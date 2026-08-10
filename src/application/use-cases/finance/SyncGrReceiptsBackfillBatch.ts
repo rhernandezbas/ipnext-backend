@@ -109,7 +109,6 @@ export class SyncGrReceiptsBackfillBatch {
       }
     }
 
-    const config = await this.syncConfig.get();
     const { fechaDesde, fechaHasta } = yearMonthToGrRange(cursorYearMonth);
 
     // fix-wave-1 F5: the ENTIRE run (fetch + persistence + classification) is
@@ -117,6 +116,11 @@ export class SyncGrReceiptsBackfillBatch {
     // guarded, so a throw from `upsertBatch`/`upsertIfAbsent` escaped
     // `execute()` UNCAUGHT and SyncState was never touched (see F4/F5).
     try {
+      // fix-wave RF2 (hermano de la lectura del delta) — el `get()` de config
+      // vive DENTRO del try: antes estaba afuera, así que un fallo del repo de
+      // config escapaba `execute()` sin tocar `SyncState` — exactamente el
+      // agujero F5 que este módulo ya cerró para todo lo demás.
+      const config = await this.syncConfig.get();
       const page = await this.gr.fetchReceipts({
         fechaDesde,
         fechaHasta,
@@ -139,7 +143,7 @@ export class SyncGrReceiptsBackfillBatch {
       // BEFORE any write. The backfill lane already has `syncConfig` wired
       // (it needs `backfillFloorYearMonth`), so — unlike delta — it uses the
       // LIVE, reloadable guard thresholds.
-      const mapped = mapAndGuardReceiptPage(receipts, config, LANE);
+      const mapped = mapAndGuardReceiptPage(receipts, config, LANE, { rango: `${fechaDesde}..${fechaHasta}`, offset: cursorOffset });
       const receiptRows = mapped.map((m) => m.receipt);
 
       // fix-wave-2 LOW (F3 residual, DEUDA declarada — not fixed, documented):
@@ -160,7 +164,12 @@ export class SyncGrReceiptsBackfillBatch {
       // `SyncGrReceiptsDelta` — see `financeIngestErrors.ts`.
       let outcome: BackfillPageResult;
       try {
-        await persistReceiptPage(mapped, { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes }, LANE);
+        await persistReceiptPage(
+          mapped,
+          { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes, syncState: this.state },
+          LANE,
+          this.now(),
+        );
 
         if (monthExhausted && compareYearMonth(cursorYearMonth, config.backfillFloorYearMonth) <= 0) {
           await this.state.save({

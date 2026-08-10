@@ -5,10 +5,11 @@ import { FinanceReceiptApplicationRepository } from '@domain/ports/FinanceReceip
 import { FinanceInvoiceTypeClassificationRepository } from '@domain/ports/FinanceInvoiceTypeClassificationRepository';
 import { FinanceReceiptItemRepository } from '@domain/ports/FinanceReceiptItemRepository';
 import { FinanceReceiptRetencionRepository } from '@domain/ports/FinanceReceiptRetencionRepository';
-import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
+import { FinanceReceiptSyncConfigRepository } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { grDateAr, isValidGrDate } from './financeDates';
-import { FinanceReceiptPersistenceError } from './financeIngestErrors';
+import { FinanceReceiptPersistenceError, FinanceReceiptAnnulmentGuardError } from './financeIngestErrors';
 import { mapAndGuardReceiptPage, persistReceiptPage } from './financeReceiptPageIngest';
+import { GUARD_ABORT_ABANDON_THRESHOLD, GUARD_ABORT_MARKER, parseGuardAbortStreak } from './financeAnnulmentGuard';
 import { deltaCursorHasPendingPages, parseCompositeCursor } from './financeReceiptCursors';
 
 /**
@@ -68,6 +69,25 @@ export class SyncGrReceiptsDelta {
     private readonly applicationRepo: FinanceReceiptApplicationRepository,
     private readonly invoiceTypes: FinanceInvoiceTypeClassificationRepository,
     /**
+     * gr-receipt-annulment fix-wave RF2 — the LIVE config, read fresh on every
+     * `execute()`. MANDATORY and POSITIONAL, in the SAME slot the backfill and
+     * reconcile lanes already put it (hermano alignment: three lanes, one
+     * signature shape).
+     *
+     * Before this fix the delta lane passed
+     * `FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS` to the systemic guard —
+     * hardcoded, unreachable from the DB. The stated reason was "not changing
+     * the constructor breaks the Fase 9 gate's existing call sites", i.e. a
+     * TEST-SHAPE argument deciding production behavior. The consequence was
+     * concrete: delta is the lane covering TODAY's cash, so an operator facing
+     * a legitimate 6% annulment day (`UPDATE FinanceReceiptSyncConfig SET
+     * "annulmentGuardMaxPct" = 15`) would watch the delta keep aborting
+     * against the 5% baked into the binary, with today's caja stuck and the
+     * knob doing nothing. A knob that cannot be turned in the lane that needs
+     * it most is not a knob.
+     */
+    private readonly syncConfig: FinanceReceiptSyncConfigRepository,
+    /**
      * fix-wave-3 R9 — MANDATORY (fix-wave-2 R1 made these optional-and-trailing
      * so ~15 pre-existing call sites kept compiling; that "convenience" was
      * F13's exact footgun reintroduced over the money path: `if (this.itemRepo)
@@ -89,6 +109,11 @@ export class SyncGrReceiptsDelta {
     if (!itemRepo || !retencionRepo) {
       throw new Error(
         'SyncGrReceiptsDelta: itemRepo and retencionRepo are REQUIRED (fix-wave-3 R9) — omitting them would silently zero the cash-collected metric instead of failing loudly.',
+      );
+    }
+    if (!syncConfig) {
+      throw new Error(
+        'SyncGrReceiptsDelta: syncConfig is REQUIRED (fix-wave RF2) — without it the systemic annulment guard silently runs on hardcoded defaults and the DB knob is inert on the hottest lane.',
       );
     }
     this.now = opts.now ?? (() => new Date());
@@ -140,6 +165,12 @@ export class SyncGrReceiptsDelta {
     // `execute()` UNCAUGHT and SyncState was never touched (the delta looked
     // frozen-healthy forever while actually dead — see F4/F5).
     try {
+      // fix-wave RF2 — LIVE config, re-read every run (same as the scheduler's
+      // own per-tick read). Inside the `try` on purpose: a config-repo failure
+      // is recorded in `SyncState` like any other run failure instead of
+      // escaping `execute()` uncaught and leaving the lane looking
+      // frozen-healthy (the F5 failure mode).
+      const cfg = await this.syncConfig.get();
       const page = await this.gr.fetchReceipts({ fechaDesde, fechaHasta, cantidad: this.pageSize, offset });
       const { total, receipts } = page;
 
@@ -154,18 +185,9 @@ export class SyncGrReceiptsDelta {
       }
 
       // gr-receipt-annulment (design.md Decision 4/8) — map + systemic guard,
-      // BEFORE any write. The delta lane has no `syncConfig` collaborator
-      // (deliberate: adding one would change this class's constructor
-      // signature, breaking `finance-receipts-ingest-seam.test.ts`'s and
-      // `SyncGrReceiptsDelta.test.ts`'s existing call sites — the Fase 9
-      // gate this refactor must not touch). The guard still runs on delta
-      // using the DEFAULT thresholds (5%/min 5, the SAME values the
-      // singleton config row starts with) rather than a live-reloadable
-      // config — delta's pages are small ("today" only) and the defaults
-      // are already the safe values (design.md Decision 7), so this is a
-      // deliberate, documented narrowing of Decision 4's "los tres carriles"
-      // for this ONE lane, not a silent skip.
-      const mapped = mapAndGuardReceiptPage(receipts, FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS, LANE);
+      // BEFORE any write, with the LIVE thresholds (fix-wave RF2): Decision
+      // 4's "los tres carriles" is now literally true, no narrowing.
+      const mapped = mapAndGuardReceiptPage(receipts, cfg, LANE, { rango: `${fechaDesde}..${fechaHasta}`, offset });
       const receiptRows = mapped.map((m) => m.receipt);
 
       const itemsSynced = (prior?.itemsSynced ?? 0) + receiptRows.length;
@@ -184,7 +206,12 @@ export class SyncGrReceiptsDelta {
       // `lastResult: error:` in SyncState regardless of which one this is —
       // that observability is unchanged.
       try {
-        await persistReceiptPage(mapped, { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes }, LANE);
+        await persistReceiptPage(
+          mapped,
+          { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes, syncState: this.state },
+          LANE,
+          this.now(),
+        );
 
         if (hasPendingPages) {
           await this.state.save({
@@ -212,6 +239,40 @@ export class SyncGrReceiptsDelta {
       }
       return { pageProcessed: receiptRows.length, hasPendingPages: false, coveredThroughDate: fechaHasta };
     } catch (err) {
+      // fix-wave RF4 (hermano del reconcile) — a systemic-guard abort pins the
+      // COMPOSITE cursor, and a composite cursor makes this lane "due" on every
+      // single tick: the same poisoned page is re-requested forever, with no
+      // backoff and no way out. Identical structure, identical fix: after
+      // `GUARD_ABORT_ABANDON_THRESHOLD` consecutive aborts the lane gives the
+      // range up and COLLAPSES the cursor to `fechaDesde` — the plain form,
+      // which claims coverage of NOTHING new (the next run re-scans
+      // `[fechaDesde, hoy]` from offset 0) and restores the normal
+      // `deltaCheckIntervalMs` cadence instead of every-tick hammering.
+      //
+      // Deliberately NOT mirrored on the backfill lane: there, "abandoning"
+      // would mean skipping a month's page permanently — unrecoverable history
+      // loss. Delta and reconcile both re-scan overlapping ranges by design, so
+      // giving up on a range costs nothing but a delay.
+      if (err instanceof FinanceReceiptAnnulmentGuardError) {
+        const streak = parseGuardAbortStreak(prior?.lastResult) + 1;
+        const abandon = streak >= GUARD_ABORT_ABANDON_THRESHOLD;
+        await this.state.save({
+          entity: DELTA_ENTITY,
+          cursor: abandon ? fechaDesde : `${fechaDesde}:${fechaHasta}:${offset}`,
+          lastRunAt: this.now(),
+          lastResult: abandon
+            ? `error: ${err.message} [rango ABANDONADO tras ${streak} aborts consecutivos del guard — reintenta en la cadencia normal]`
+            : `error: ${err.message} [${GUARD_ABORT_MARKER}${streak}]`,
+          itemsSynced: prior?.itemsSynced ?? 0,
+        });
+        if (abandon) {
+          console.error(
+            `[finance-receipts-${LANE}] rango ${fechaDesde}..${fechaHasta} ABANDONADO tras ${streak} aborts consecutivos del guard en offset=${offset} — el carril queda degradado y reintenta desde ${fechaDesde} en la próxima cadencia.`,
+          );
+        }
+        throw err;
+      }
+
       await this.state.save({
         entity: DELTA_ENTITY,
         cursor: `${fechaDesde}:${fechaHasta}:${offset}`,

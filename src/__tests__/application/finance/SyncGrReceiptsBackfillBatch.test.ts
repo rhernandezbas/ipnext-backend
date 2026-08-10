@@ -49,6 +49,48 @@ function makeHarness(pageSize = 100) {
 }
 
 describe('SyncGrReceiptsBackfillBatch', () => {
+  // ── fix-wave RF2/RF11 — the third of three identical pins (delta, reconcile,
+  // backfill): the systemic annulment guard reads the LIVE DB thresholds. The
+  // backfill lane already had `syncConfig` wired, but nothing pinned that the
+  // GUARD consults it — only that the lane read `backfillFloorYearMonth` from
+  // it. Pinning all three is what makes "los tres carriles" a fact instead of
+  // a claim.
+  describe('RF2: the annulment-guard thresholds are LIVE config, not hardcoded defaults', () => {
+    /** 20 receipts in the current backfill month, 6 annulled = 30% — over the 5% default. */
+    function seedAnnulledMonth(gr: InMemoryGestionRealPort, yearMonth: string) {
+      const [y, m] = yearMonth.split('-');
+      for (let i = 0; i < 20; i++) {
+        const day = String((i % 27) + 1).padStart(2, '0');
+        const base = receipt(yearMonth + '-' + i, day + '-' + m + '-' + y);
+        gr.receipts.push(i < 6 ? { ...base, fechaAnulacion: day + '-' + m + '-' + y + ' 12:00:00' } : base);
+      }
+    }
+
+    it('30% annulled ABORTS under the default 5% threshold (baseline)', async () => {
+      const { gr, state, uc } = makeHarness();
+      await state.save({ entity: ENTITY, cursor: '2026-05:0', lastRunAt: null, lastResult: 'page ok', itemsSynced: 0 });
+      seedAnnulledMonth(gr, '2026-05');
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(uc.execute()).rejects.toThrow(/ABORT/);
+      errSpy.mockRestore();
+    });
+
+    it('the SAME month persists once the operator raises annulmentGuardMaxPct to 50', async () => {
+      const { gr, state, receipts, syncConfig, uc } = makeHarness();
+      await state.save({ entity: ENTITY, cursor: '2026-05:0', lastRunAt: null, lastResult: 'page ok', itemsSynced: 0 });
+      await syncConfig.update({ annulmentGuardMaxPct: 50 });
+      seedAnnulledMonth(gr, '2026-05');
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await uc.execute();
+      warnSpy.mockRestore();
+
+      expect(result.pageProcessed).toBe(20);
+      expect(receipts.rows.size).toBe(20);
+    });
+  });
+
   // ── fix-wave-3 R9 — same criterion as SyncGrReceiptsDelta: the constructor
   // throws if either the item or retención repo is missing, instead of
   // silently skipping their upserts.
