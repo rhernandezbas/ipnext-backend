@@ -38,12 +38,28 @@ número.
   con dólares da un número sin sentido económico.
 
 ### PAY-1.5 — Los recibos ANULADOS no se muestran
-Un recibo con `anulado = true` NO DEBE aparecer.
+Un recibo con `anulado = true` NO DEBE aparecer en `GET /api/portal/payments`.
 
 - **Por qué**: mostrarle al cliente un pago que se anuló es peor que no mostrar nada.
-- **Nota**: el parser de `GestionRealClient` ya excluye las anulaciones REALES antes
-  de persistir; la columna es auditoría. El filtro es defensa en profundidad, y el
-  **servidor es la autoridad** (no se delega en el filtro del ingest).
+- **El servidor es la autoridad**: el filtro vive en el WHERE del adapter Prisma
+  (`PrismaPortalPaymentsReader.ts:46`), no se delega en el ingest.
+
+(Nota histórica: antes de `gr-receipt-annulment`, el parser de `GestionRealClient` excluía las
+anulaciones REALES antes de persistir, así que la columna `anulado` siempre valía `false` y este
+filtro era defensa en profundidad sobre un mundo donde ningún recibo anulado llegaba a
+persistirse. Con `gr-receipt-annulment` el ingest deja de saltear anulados y la columna empieza a
+poblarse de verdad — este filtro pasó de ser profiláctico a ser la primera línea de defensa real
+contra mostrar un pago anulado.)
+
+- **Escenario**: un recibo previamente visible con `anulado: false` es re-consultado por el
+  carril reconcile, que lo marca `anulado: true` ⇒ desaparece de `GET /api/portal/payments` en
+  la siguiente lectura.
+- **Contra-escenario (revert-probe)**: si se retira el filtro `anulado` del WHERE de
+  `PrismaPortalPaymentsReader`, un test con un fixture que incluye un recibo real `anulado: true`
+  y monto distinto de cero DEBE ponerse en rojo — una ausencia contra un fixture vacío no
+  discrimina nada, hace falta PRESENCIA antes de assertear la ausencia.
+- **Escenario**: un recibo nunca anulado sigue apareciendo sin cambios (misma forma: `date`,
+  `amounts`, `method`, `appliedTo` — PAY-1.2 a PAY-1.4 y PAY-1.6 no cambian).
 
 ### PAY-1.6 — Orden y paginado
 Orden por fecha DESC (lo más reciente primero), con el mismo contrato paginado que
