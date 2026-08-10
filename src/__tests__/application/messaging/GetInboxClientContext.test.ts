@@ -348,12 +348,15 @@ describe('GetInboxClientContext', () => {
     expect(customerRepo.listLogs).toHaveBeenCalledWith({ clientId: 'c1', page: 1, limit: 5 });
   });
 
-  it('#8 sin refresh, lastBalanceAt de hace 2h (>TTL 60min) — stale true, cero invocaciones a refreshBalance', async () => {
+  // FW2-2: 4h, no 2h. El TTL efectivo del carril rápido es "configurado (60) +
+  // margen del batch (60)" = 2h, así que 2h justas ya no son stale — el margen
+  // existe porque el batch tarda ~43min en tocar a cada cliente.
+  it('#8 sin refresh, lastBalanceAt de hace 4h (>TTL efectivo del carril rápido) — stale true, cero invocaciones a refreshBalance', async () => {
     const customer = makeCustomer({
       id: 'c1',
       name: 'Juan',
       grClienteId: '100011',
-      lastBalanceAt: '2026-07-11T08:00:00.000Z',
+      lastBalanceAt: '2026-07-11T06:00:00.000Z',
     });
     const customerRepo = makeCustomerRepo({
       listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),

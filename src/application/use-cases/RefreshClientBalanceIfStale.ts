@@ -16,6 +16,31 @@ export const DEFAULT_BALANCE_STALE_TTL_MINUTES = 60;
 export const SLOW_LANE_BALANCE_TTL_MINUTES = 26 * 60;
 
 /**
+ * fix wave 2 (FW2-2) — margen del carril RÁPIDO: 60 minutos.
+ *
+ * **La política es "cadencia + margen" y vale para los DOS carriles.** F7 se la
+ * aplicó al lento (24h + 2h = 26h) y dejó al rápido con margen CERO: el TTL
+ * configurado por defecto es 60min y la cadencia del carril rápido es, también,
+ * 60min. Empate ⇒ stale garantizado antes del próximo pase, porque el sello
+ * `lastBalanceAt` se pone cuando el batch TOCA a cada cliente, no cuando la
+ * ventana arranca: el batch rápido tarda ~43 min medidos sobre 5.582 clientes,
+ * así que el que se refresca al principio de la corrida queda "viejo" mientras
+ * el próximo pase todavía está a ~40 min. Buena parte de cada hora, para buena
+ * parte de la base, el flag gritaba sobre el dato más fresco que ese carril
+ * puede producir — y encima empujaba refrescos on-demand contra GR (uno por
+ * mensaje de WhatsApp, uno por ficha abierta) que no podían mejorarlo.
+ *
+ * 60min de margen cubre con holgura los ~43 medidos y deja lugar al crecimiento
+ * de la base antes de que haya que repartir carriles de nuevo. Con el default
+ * de producción el TTL efectivo del carril rápido queda en 2h.
+ *
+ * ⚠️ El margen se suma al TTL **configurado**, no lo reemplaza: bajar
+ * `BALANCE_STALE_TTL_MINUTES` sigue bajando el efectivo. La perilla no queda
+ * anulada, sólo desplazada.
+ */
+export const FAST_LANE_BATCH_MARGIN_MINUTES = 60;
+
+/**
  * Statuses cuyo balance se refresca en el carril LENTO.
  *
  * ⚠️ Espejo de `SLOW_LANE.estados` (`RefreshDebtorBalances`) traducido por
@@ -41,6 +66,11 @@ const SLOW_LANE_STATUSES: ReadonlySet<string> = new Set(['baja']);
  * "refrescar de más" cuesta una llamada a GR; hacia "refrescar de menos" cuesta
  * un saldo viejo servido como fresco, que es el modo de falla que todo este
  * change existe para evitar. La basura va al valor SEGURO, no al permisivo.
+ *
+ * fix wave 2 (FW2-2) — **los dos carriles usan la MISMA política: cadencia +
+ * margen.** El lento la traía desde F7 (24h + 2h, constante); el rápido la
+ * estrena acá (`fastLaneTtlMinutes + FAST_LANE_BATCH_MARGIN_MINUTES`), porque
+ * había quedado con margen cero y por lo tanto stale gran parte de cada hora.
  */
 export function balanceTtlMinutesForStatus(
   status: string | null | undefined,
@@ -48,7 +78,7 @@ export function balanceTtlMinutesForStatus(
 ): number {
   return status != null && SLOW_LANE_STATUSES.has(status)
     ? SLOW_LANE_BALANCE_TTL_MINUTES
-    : fastLaneTtlMinutes;
+    : fastLaneTtlMinutes + FAST_LANE_BATCH_MARGIN_MINUTES;
 }
 
 /**

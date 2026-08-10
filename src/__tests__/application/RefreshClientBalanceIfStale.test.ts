@@ -40,7 +40,9 @@ describe('RefreshClientBalanceIfStale', () => {
   });
 
   it('fetches balance when older than TTL (stale)', async () => {
-    const staleAt = new Date(now.getTime() - 90 * 60 * 1000); // 90 min ago
+    // FW2-2: 3h. El gate interno usa `balanceTtlMinutesForStatus`, cuyo efectivo
+    // rápido es TTL configurado + margen del batch (60 + 60 = 2h).
+    const staleAt = new Date(now.getTime() - 3 * 60 * 60 * 1000); // 3 h ago
     gr.balancesByClient['100011'] = makeBalance('100011', 1000);
 
     await uc.execute({ grClienteId: '100011', lastBalanceAt: staleAt.toISOString() });

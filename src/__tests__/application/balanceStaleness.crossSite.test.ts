@@ -40,6 +40,7 @@ import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract'
 import {
   RefreshClientBalanceIfStale,
   SLOW_LANE_BALANCE_TTL_MINUTES,
+  FAST_LANE_BATCH_MARGIN_MINUTES,
   balanceTtlMinutesForStatus,
 } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { FAST_LANE, SLOW_LANE } from '@application/use-cases/RefreshDebtorBalances';
@@ -63,6 +64,14 @@ const NOW = () => new Date('2026-08-10T12:00:00.000Z');
  * F8, y es el mismo patrón que `GetInboxClientContext.test.ts` ya usaba (#1b).
  */
 const TTL_MINUTES = 120;
+
+/**
+ * fix wave 2 (FW2-2) — el TTL **efectivo** del carril rápido: el configurado más
+ * el margen que cubre la duración del batch. El pin sigue siendo "mismo TTL para
+ * el mismo carril" (F7/F8); lo que cambió es cuánto vale ese TTL del lado
+ * rápido, y los tres call sites tienen que moverse JUNTOS.
+ */
+const FAST_TTL_EFECTIVO = TTL_MINUTES + FAST_LANE_BATCH_MARGIN_MINUTES;
 
 const MIN = 60 * 1000;
 
@@ -155,7 +164,7 @@ async function losTres(lastBalanceAt: string | null, status: CustomerStatus): Pr
 const hace = (ms: number) => new Date(NOW().getTime() - ms).toISOString();
 
 describe.each([
-  { carril: 'RÁPIDO', status: 'active' as CustomerStatus, ttl: TTL_MINUTES },
+  { carril: 'RÁPIDO', status: 'active' as CustomerStatus, ttl: FAST_TTL_EFECTIVO },
   { carril: 'LENTO (bajas)', status: 'baja' as CustomerStatus, ttl: SLOW_LANE_BALANCE_TTL_MINUTES },
 ])('balanceStale — un solo criterio en los tres call sites, carril $carril (S13 + F7/F8)', ({ status, ttl }) => {
   it('dentro del TTL del carril: los tres coinciden en "no stale"', async () => {
@@ -185,18 +194,60 @@ describe.each([
  * mismo. Por eso M5 sobrevivía.
  */
 describe('F7 — el MISMO lastBalanceAt da veredictos distintos según el carril', () => {
-  const treHoras = hace(3 * 60 * MIN);
+  // FW2-2: 5h — pasado el efectivo del rápido (120 + 60 = 180min) y muy dentro
+  // del lento. Con 3h ya no discriminaba: el margen del carril rápido lo cubre.
+  const cincoHoras = hace(5 * 60 * MIN);
 
-  it('3h en el carril rápido (TTL 120min) ⇒ stale en los tres', async () => {
-    expect(await losTres(treHoras, 'active')).toEqual([true, true, true]);
+  it('5h en el carril rápido (TTL efectivo 180min) ⇒ stale en los tres', async () => {
+    expect(await losTres(cincoHoras, 'active')).toEqual([true, true, true]);
   });
 
-  it('3h en el carril lento (TTL 26h) ⇒ NO stale en los tres', async () => {
-    expect(await losTres(treHoras, 'baja')).toEqual([false, false, false]);
+  it('5h en el carril lento (TTL 26h) ⇒ NO stale en los tres', async () => {
+    expect(await losTres(cincoHoras, 'baja')).toEqual([false, false, false]);
   });
 
   it('30h ⇒ stale incluso en el carril lento (el margen sobre la cadencia diaria es 26h, no infinito)', async () => {
     expect(await losTres(hace(30 * 60 * MIN), 'baja')).toEqual([true, true, true]);
+  });
+});
+
+/**
+ * ⚠️ **FW2-2 — la política de margen es UNA sola, para los dos carriles.**
+ *
+ * F7 le dio al carril lento `cadencia + margen` (24h + 2h = 26h) y dejó al
+ * rápido con margen CERO: TTL 60min contra una cadencia de 60min. Y el sello
+ * `lastBalanceAt` se pone cuando el batch TOCA a ese cliente, no cuando la
+ * ventana empieza — el batch rápido tarda ~43 min medidos, así que el cliente
+ * refrescado al minuto 2 queda marcado stale desde el minuto 62, con el próximo
+ * pase todavía a ~40 min de distancia. Buena parte de cada hora, para buena
+ * parte de la base, el flag decía "viejo" sobre el dato más fresco que su carril
+ * puede producir — y cada mensaje de WhatsApp en esa franja disparaba un refresh
+ * on-demand contra GR que no podía mejorar nada.
+ *
+ * El margen no afloja el criterio: lo alinea con la cadencia real, que es lo
+ * mismo que F7 ya había hecho del otro lado.
+ */
+describe('FW2-2 — el carril RÁPIDO también tiene margen sobre su cadencia', () => {
+  it('TTL efectivo del carril rápido = TTL configurado + margen que cubre el batch', () => {
+    // Con el default de producción (60min): efectivo 2h.
+    expect(balanceTtlMinutesForStatus('active', 60)).toBe(120);
+    expect(balanceTtlMinutesForStatus('active', TTL_MINUTES)).toBe(FAST_TTL_EFECTIVO);
+  });
+
+  it('el margen cubre la duración MEDIDA del batch rápido (~43 min sobre 5.582 clientes)', () => {
+    expect(FAST_LANE_BATCH_MARGIN_MINUTES).toBeGreaterThanOrEqual(43);
+  });
+
+  it('el margen se SUMA al TTL configurado, no lo reemplaza (la perilla sigue viva)', () => {
+    // Si alguien reemplazara el TTL por una constante, bajar la perilla no
+    // movería nada — y el `ttlMinutes` inyectado volvería a ser decoración (M5).
+    expect(balanceTtlMinutesForStatus('active', 10)).toBeLessThan(
+      balanceTtlMinutesForStatus('active', 200),
+    );
+  });
+
+  it('el margen NO se le suma al carril lento (ya lo trae adentro: 24h de cadencia + 2h)', () => {
+    expect(balanceTtlMinutesForStatus('baja', TTL_MINUTES)).toBe(SLOW_LANE_BALANCE_TTL_MINUTES);
   });
 });
 
@@ -217,15 +268,15 @@ describe('F7 — el carril del TTL coincide con el carril del sync (anti-deriva)
 
   it('ningún estado del FAST_LANE usa el TTL diario', () => {
     for (const estado of FAST_LANE.estados) {
-      expect(balanceTtlMinutesForStatus(mapStatus(estado), TTL_MINUTES)).toBe(TTL_MINUTES);
+      expect(balanceTtlMinutesForStatus(mapStatus(estado), TTL_MINUTES)).toBe(FAST_TTL_EFECTIVO);
     }
   });
 
   it('status desconocido/ausente cae al carril RÁPIDO (el lado que refresca más seguido)', () => {
     // Basura al valor seguro: equivocarse hacia "refrescar de más" cuesta una
     // llamada a GR; hacia "refrescar de menos" cuesta un saldo viejo dicho como fresco.
-    expect(balanceTtlMinutesForStatus(undefined, TTL_MINUTES)).toBe(TTL_MINUTES);
-    expect(balanceTtlMinutesForStatus(null, TTL_MINUTES)).toBe(TTL_MINUTES);
-    expect(balanceTtlMinutesForStatus('cualquier-cosa', TTL_MINUTES)).toBe(TTL_MINUTES);
+    expect(balanceTtlMinutesForStatus(undefined, TTL_MINUTES)).toBe(FAST_TTL_EFECTIVO);
+    expect(balanceTtlMinutesForStatus(null, TTL_MINUTES)).toBe(FAST_TTL_EFECTIVO);
+    expect(balanceTtlMinutesForStatus('cualquier-cosa', TTL_MINUTES)).toBe(FAST_TTL_EFECTIVO);
   });
 });

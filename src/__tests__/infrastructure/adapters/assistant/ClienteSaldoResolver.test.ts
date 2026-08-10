@@ -27,7 +27,9 @@ import { customerFrom, grBalanceRow, grBalancePayload, FIXED_NOW, type FixtureRo
  */
 
 const FRESH_AT = new Date(FIXED_NOW.getTime() - 10 * 60 * 1000); // 10 min antes — dentro del TTL
-const STALE_AT = new Date(FIXED_NOW.getTime() - 90 * 60 * 1000); // 90 min antes — pasó el TTL (60)
+// FW2-2: 3h, no 90min. El TTL efectivo del carril rápido es el configurado más
+// el margen que cubre la duración del batch (60 + 60 = 2h).
+const STALE_AT = new Date(FIXED_NOW.getTime() - 3 * 60 * 60 * 1000); // 3 h antes — pasó el TTL efectivo
 /** 30h antes — pasó el TTL de los DOS carriles (rápido 60min, lento 26h). */
 const VERY_STALE_AT = new Date(FIXED_NOW.getTime() - 30 * 60 * 60 * 1000);
 

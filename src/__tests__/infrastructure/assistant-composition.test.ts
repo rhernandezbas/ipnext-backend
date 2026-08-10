@@ -224,9 +224,20 @@ describe('composition root — P1: boot REAL de createApp() captura deps.refresh
    *
    * El wrapper YA es el techo de tiempo. Reintentar por detrás no aporta nada
    * que el caller pueda usar: cuando la respuesta llegue, el WhatsApp ya se
-   * contestó. Instancia dedicada con `maxRetries: 0`.
+   * contestó. Instancia dedicada, con los reintentos ACOTADOS.
+   *
+   * ────────────────────────────────────────────────────────────────────────
+   * fix wave 2 (FW2-2) — **`maxRetries: 0` era romo.** Medido: un blip simple de
+   * GR se recupera en ~694ms con UN reintento, que entra holgado en el budget de
+   * 4s del `withTimeout`. Con 0 reintentos ese blip es un handoff instantáneo —
+   * y como el vuelo es single-flight, el fallo se COMPARTE con todos los callers
+   * que estaban esperando ese mismo cliente.
+   *
+   * `1` es el punto medio con las dos propiedades: conserva la recuperación del
+   * blip simple y acota el huérfano a UNA llamada de más (no 3 con backoff, que
+   * era el ~16s del defecto original).
    */
-  it('F6a — el GestionRealClient del REFRESH va con maxRetries 0 (el withTimeout ya es el techo; reintentar por detrás son llamadas huérfanas)', () => {
+  it('FW2-2 — el GestionRealClient del REFRESH va con maxRetries 1 (recupera el blip simple; el huérfano queda acotado a 1)', () => {
     jest.resetModules();
     let capturedDeps: Record<string, unknown> | undefined;
     jest.doMock(ENGINE_MODULE_PATH, () => ({
@@ -257,7 +268,7 @@ describe('composition root — P1: boot REAL de createApp() captura deps.refresh
     // que después no se usa.
     const refresh = capturedDeps?.refreshBalance as { gr: { maxRetries: number; http: { defaults: { timeout: number } } } };
     expect(refresh).toBeDefined();
-    expect(refresh.gr.maxRetries).toBe(0);
+    expect(refresh.gr.maxRetries).toBe(1);
     // Y el timeout del axios es el del refresh (clampeado), no el general.
     expect(refresh.gr.http.defaults.timeout).toBe(3000);
   });

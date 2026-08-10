@@ -1289,13 +1289,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // instancia y sus dos consumidores tienen requisitos opuestos:
     //
     //  · el REFRESH corre dentro de un mensaje de WhatsApp (camino caliente):
-    //    timeout corto, y `maxRetries: 0` porque el `withTimeout` del use case
-    //    hace `Promise.race` y NO aborta el axios — al vencer, el caller sigue
-    //    de largo pero la request queda viva y `postWithRetry` reintenta 3 veces
-    //    con backoff: hasta ~16s de llamadas HUÉRFANAS a GR por mensaje, contra
-    //    un proveedor que justamente se degrada bajo carga. El wrapper ya es el
-    //    techo; reintentar por detrás no le sirve a nadie, porque cuando la
-    //    respuesta llegue el WhatsApp ya se contestó.
+    //    timeout corto, y los reintentos ACOTADOS porque el `withTimeout` del
+    //    use case hace `Promise.race` y NO aborta el axios — al vencer, el
+    //    caller sigue de largo pero la request queda viva y `postWithRetry`
+    //    seguiría reintentando 3 veces con backoff: hasta ~16s de llamadas
+    //    HUÉRFANAS a GR por mensaje, contra un proveedor que justamente se
+    //    degrada bajo carga.
+    //
+    //    fix wave 2 (FW2-2) — pero `maxRetries: 0` era ROMO. Medido: un blip
+    //    simple de GR se recupera en ~694ms con UN reintento, holgado dentro
+    //    del budget de 4s del wrapper. Con cero, ese blip es un handoff
+    //    instantáneo — y como el vuelo es single-flight (F2), el fallo se
+    //    COMPARTE con todos los callers que esperaban ese cliente: un hipo de
+    //    GR se convierte en "un asesor te confirma el saldo" para todos.
+    //    `1` conserva la recuperación del blip y acota el huérfano a UNA
+    //    llamada de más — no las 3 con backoff del defecto original.
     //
     //  · el RECONCILE es un diagnóstico read-only que pagina el universo COMPLETO
     //    de GR: timeout holgado y los reintentos SÍ le sirven (una página que
@@ -1308,7 +1316,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       cuit: config.gestionReal.cuit,
       secret: config.gestionReal.secret,
       timeoutMs: config.gestionReal.balanceRefreshTimeoutMs,
-      maxRetries: 0,
+      maxRetries: 1,
     });
     const grReconcileClient = new GestionRealClient({
       baseUrl: config.gestionReal.baseUrl,
