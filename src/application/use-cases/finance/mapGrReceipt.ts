@@ -8,6 +8,16 @@ import { grDateTimeDatePart, isRealAnnulment } from './financeDates';
 
 export interface MappedGrReceipt {
   receipt: FinancePaymentReceipt;
+  /**
+   * gr-receipt-annulment fix-wave RF5 — the RAW `fecha_anulacion` string GR
+   * sent for this receipt, carried through the mapping UNINTERPRETED. It is
+   * the only value that tells a sentinel-format DRIFT (every row carrying the
+   * same unparseable string) apart from a legitimate annulment spike (varied,
+   * real-looking dates) — the systemic guard prints it in its abort message,
+   * and the per-flip log prints it when a mirrored receipt becomes annulled.
+   * Never persisted: `anulado` is the derived, persistable decision.
+   */
+  rawFechaAnulacion: string | null;
   applications: FinanceReceiptApplication[];
   /** fix-wave-2 R1 — CASH actually received; the base of the "cash collected" metric (spec.md). */
   items: FinanceReceiptItem[];
@@ -74,7 +84,13 @@ export function mapGrReceipt(r: GrReceipt): MappedGrReceipt {
     fecha: parseGrInvoiceDate(ret.fecha),
   }));
 
-  return { receipt, applications, items, retenciones };
+  return {
+    receipt,
+    rawFechaAnulacion: typeof r.fechaAnulacion === 'string' ? r.fechaAnulacion : null,
+    applications,
+    items,
+    retenciones,
+  };
 }
 
 /**

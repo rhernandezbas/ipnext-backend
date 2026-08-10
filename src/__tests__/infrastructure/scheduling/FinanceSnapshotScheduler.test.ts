@@ -3,6 +3,7 @@ import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMe
 import { InMemorySyncStateRepository } from '@infrastructure/adapters/in-memory/InMemorySyncStateRepository';
 import type { BuildFinanceMonthlySnapshot } from '@application/use-cases/finance/BuildFinanceMonthlySnapshot';
 import type { BuildFinanceCohortSnapshot } from '@application/use-cases/finance/BuildFinanceCohortSnapshot';
+import { enqueueSnapshotRebuild, readSnapshotRebuildQueue } from '@application/use-cases/finance/financeSnapshotRebuildQueue';
 
 function fakeBuildMonthly(calls: string[]): BuildFinanceMonthlySnapshot {
   return {
@@ -168,6 +169,96 @@ describe('FinanceSnapshotScheduler — J3: persists its own run status (was: NON
     await scheduler.runOnce();
 
     expect(await state.get('finance-snapshot-job')).toBeNull();
+  });
+
+  // ── gr-receipt-annulment fix-wave RF3 — the nightly horizon
+  // (`[mes anterior, mes corriente]`) is 28-62 days wide, NOT the 35 the
+  // reconcile window was justified against. A receipt annulled inside the
+  // reconcile window but belonging to an older month used to keep its cash in
+  // that month's snapshot forever. The ingest lanes now QUEUE such a month
+  // (`finance-snapshot-rebuild-queue`) and this job is what actually repairs
+  // it.
+  describe('RF3: the out-of-horizon rebuild queue', () => {
+    it('rebuilds the queued months IN ADDITION to the two-month horizon, and clears them once done', async () => {
+      const monthlyCalls: string[] = [];
+      const state = new InMemorySyncStateRepository();
+      await enqueueSnapshotRebuild(state, ['2026-01', '2025-11'], new Date('2026-03-01T15:00:00.000Z'));
+      const scheduler = new FinanceSnapshotScheduler(
+        fakeBuildMonthly(monthlyCalls),
+        fakeBuildCohort([], () => 0),
+        { intervalMs: 999999, cohortLookbackMonths: 0, silent: true },
+        new InMemoryDistributedLock(),
+        () => new Date('2026-03-15T15:00:00.000Z'),
+        state,
+      );
+
+      const summary = await scheduler.runOnce();
+
+      expect(monthlyCalls).toEqual(['2026-02', '2026-03', '2025-11', '2026-01']);
+      expect(summary.monthsComputed).toEqual(['2026-02', '2026-03', '2025-11', '2026-01']);
+      expect(await readSnapshotRebuildQueue(state)).toEqual([]);
+    });
+
+    it('a queued month that is ALSO in the horizon is not rebuilt twice, and is still cleared', async () => {
+      const monthlyCalls: string[] = [];
+      const state = new InMemorySyncStateRepository();
+      await enqueueSnapshotRebuild(state, ['2026-02'], new Date('2026-03-01T15:00:00.000Z'));
+      const scheduler = new FinanceSnapshotScheduler(
+        fakeBuildMonthly(monthlyCalls),
+        fakeBuildCohort([], () => 0),
+        { intervalMs: 999999, cohortLookbackMonths: 0, silent: true },
+        new InMemoryDistributedLock(),
+        () => new Date('2026-03-15T15:00:00.000Z'),
+        state,
+      );
+
+      await scheduler.runOnce();
+
+      expect(monthlyCalls).toEqual(['2026-02', '2026-03']);
+      expect(await readSnapshotRebuildQueue(state)).toEqual([]);
+    });
+
+    it('a queued month whose rebuild FAILS stays queued — the repair is retried the next night, never silently dropped', async () => {
+      const state = new InMemorySyncStateRepository();
+      await enqueueSnapshotRebuild(state, ['2026-01'], new Date('2026-03-01T15:00:00.000Z'));
+      const buildMonthly = {
+        execute: jest.fn(async (ym: string) => {
+          if (ym === '2026-01') throw new Error('boom');
+          return { yearMonth: ym };
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any;
+      const scheduler = new FinanceSnapshotScheduler(
+        buildMonthly,
+        fakeBuildCohort([], () => 0),
+        { intervalMs: 999999, cohortLookbackMonths: 0, silent: true },
+        new InMemoryDistributedLock(),
+        () => new Date('2026-03-15T15:00:00.000Z'),
+        state,
+      );
+
+      const summary = await scheduler.runOnce();
+
+      expect(summary.errors?.join(' ')).toMatch(/2026-01/);
+      expect(await readSnapshotRebuildQueue(state)).toEqual(['2026-01']);
+    });
+
+    it('an empty queue changes nothing — the plain two-month horizon still runs', async () => {
+      const monthlyCalls: string[] = [];
+      const state = new InMemorySyncStateRepository();
+      const scheduler = new FinanceSnapshotScheduler(
+        fakeBuildMonthly(monthlyCalls),
+        fakeBuildCohort([], () => 0),
+        { intervalMs: 999999, cohortLookbackMonths: 0, silent: true },
+        new InMemoryDistributedLock(),
+        () => new Date('2026-03-15T15:00:00.000Z'),
+        state,
+      );
+
+      await scheduler.runOnce();
+
+      expect(monthlyCalls).toEqual(['2026-02', '2026-03']);
+    });
   });
 
   it('runs fine with NO state repo threaded in (optional — existing callers/tests keep working)', async () => {

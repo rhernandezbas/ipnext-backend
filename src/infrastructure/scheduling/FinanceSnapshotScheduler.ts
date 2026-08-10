@@ -42,6 +42,7 @@ import type { BuildFinanceCohortSnapshot } from '@application/use-cases/finance/
 import type { DistributedLock } from '@domain/ports/DistributedLock';
 import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import { arYearMonth, previousYearMonth } from '@application/use-cases/finance/financeDates';
+import { readSnapshotRebuildQueue, clearSnapshotRebuildMonths } from '@application/use-cases/finance/financeSnapshotRebuildQueue';
 
 const LOCK_KEY = 'finance-snapshot-job';
 /** finance-growth Fase 3 rework (J3) — SAME entity key `GetFinanceSyncStatus.SNAPSHOT_JOB_ENTITY` reads from. */
@@ -109,13 +110,36 @@ export class FinanceSnapshotScheduler {
       const currentYearMonth = arYearMonth(this.now());
       const previous = previousYearMonth(currentYearMonth);
 
+      // gr-receipt-annulment fix-wave RF3 — months an ingest carril queued
+      // because an ANNULMENT flipped a receipt belonging OUTSIDE this job's
+      // two-month horizon. Read (not drained) up front: each month is removed
+      // only after ITS OWN rebuild succeeded, so a failure is retried the next
+      // night instead of being silently dropped, and a flip queued WHILE this
+      // run is in flight survives the clear (`clearSnapshotRebuildMonths`
+      // re-reads and subtracts).
+      const queued = this.state ? await readSnapshotRebuildQueue(this.state) : [];
+      const horizon = [previous, currentYearMonth];
+      const extraQueued = queued.filter((ym) => !horizon.includes(ym));
+
       const monthsComputed: string[] = [];
-      for (const ym of [previous, currentYearMonth]) {
+      for (const ym of [...horizon, ...extraQueued]) {
         try {
           await this.buildMonthly.execute(ym);
           monthsComputed.push(ym);
         } catch (err) {
           errors.push(`monthly(${ym}): ${(err as Error).message}`);
+        }
+      }
+
+      if (this.state && queued.length > 0) {
+        // A queued month that ALSO fell inside the horizon was rebuilt by the
+        // horizon pass — it counts as done too.
+        const repaired = queued.filter((ym) => monthsComputed.includes(ym));
+        if (repaired.length > 0) {
+          const remaining = await clearSnapshotRebuildMonths(this.state, repaired, this.now());
+          this.log(
+            `[finance-snapshot] rebuild queue: reconstruidos ${repaired.join(',')} — pendientes ${remaining.join(',') || '(ninguno)'}`,
+          );
         }
       }
 
