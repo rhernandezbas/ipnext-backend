@@ -25,7 +25,13 @@ export interface FinanceReceiptSyncConfig {
   deltaStarvationThreshold: number;
   /** gr-receipt-annulment (design.md Decision 1/2) — runtime kill-switch for the reconcile lane, independent of `enabled`. */
   reconcileEnabled: boolean;
-  /** gr-receipt-annulment (design.md Decision 2/7) — days back the reconcile lane re-scans. Effective floor 35 (see `normalizeFinanceReceiptSyncConfig`). */
+  /**
+   * gr-receipt-annulment (design.md Decision 2/7) — days back the reconcile
+   * lane re-scans, in `[1, 90]` (default 35). fix-wave RF3: this is a COVERAGE
+   * knob (how late a confirmation/annulment can arrive and still be caught),
+   * NOT a correctness invariant — an annulment landing outside the nightly
+   * snapshot horizon queues its month for rebuild regardless of this value.
+   */
   reconcileWindowDays: number;
   /** gr-receipt-annulment (design.md Decision 2/9) — how often (ms) the reconcile lane re-checks whether a fresh sweep is due once idle. */
   reconcileCheckIntervalMs: number;
@@ -63,17 +69,27 @@ export const FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS: FinanceReceiptSyncConfig = {
  * (Prisma + in-memory) in their `get()` — if only Prisma called this, tests
  * would run against different rules than production.
  *
- * `reconcileWindowDays` below `RECONCILE_WINDOW_DAYS_MIN_EFFECTIVE` (35) is
- * REJECTED even though it's inside the nominal `[1, 90]` range — the window
- * MUST be >= the snapshot rebuild window (current + previous month, worst
- * case 35d) or a repaired receipt never reaches the dashboard (finance-growth
- * spec.md scenario 15, "The window-vs-rebuild invariant is enforced").
+ * fix-wave RF3 — the old "effective floor 35" for `reconcileWindowDays` is
+ * GONE. It was justified as "the window MUST be >= the snapshot rebuild
+ * window (current + previous month, worst case 35d)", and the arithmetic
+ * behind it is simply wrong: `[mes anterior, mes corriente]` is 28-62 days
+ * wide, so on the 1st of March it GUARANTEES 28, not 35. The invariant it
+ * claimed to enforce was inverted (a 35-day window does NOT imply the rebuild
+ * sees the repair) and the number invented. Correctness moved to where it can
+ * actually hold: a flip landing on a month outside the nightly horizon queues
+ * that month for an explicit rebuild (`financeSnapshotRebuildQueue`), whatever
+ * the window is. What remains here is the plain nominal range — this knob is
+ * now a coverage/cost trade-off, not a correctness invariant.
  */
 const RECONCILE_WINDOW_DAYS_MIN = 1;
 const RECONCILE_WINDOW_DAYS_MAX = 90;
-/** The dashboard-visibility invariant floor — see docblock above. Coincides with the default on purpose (Decision 7). */
-const RECONCILE_WINDOW_DAYS_MIN_EFFECTIVE = 35;
-const RECONCILE_CHECK_INTERVAL_MS_MIN = 600000;
+/**
+ * fix-wave RF17 — was 600000 (10 min). Measured: at that cadence the reconcile
+ * lane is effectively ALWAYS due (a full sweep is many pages), taking ~71% of
+ * the SHARED GR request budget and starving the backfill. 1 h is the floor
+ * below which the value is treated as basura and the safe 6 h default applies.
+ */
+const RECONCILE_CHECK_INTERVAL_MS_MIN = 3600000;
 const RECONCILE_CHECK_INTERVAL_MS_MAX = 86400000;
 const ANNULMENT_GUARD_MAX_PCT_MIN = 1;
 const ANNULMENT_GUARD_MAX_PCT_MAX = 100;
@@ -92,18 +108,15 @@ function normalizedIntInRange(v: unknown, min: number, max: number, fallback: nu
 export function normalizeFinanceReceiptSyncConfig(raw: Partial<FinanceReceiptSyncConfig>): FinanceReceiptSyncConfig {
   const reconcileEnabled = typeof raw.reconcileEnabled === 'boolean' ? raw.reconcileEnabled : FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.reconcileEnabled;
 
-  // The nominal [1,90] check first, THEN the dashboard-visibility floor — a
-  // value that fails the nominal range falls back to the default (35) same as
-  // any other knob; a value that passes [1,90] but sits BELOW 35 falls back
-  // too (finance-growth spec.md scenario 15), never clamped up to 35.
-  const nominalWindow = normalizedIntInRange(
+  // The nominal [1,90] range, and nothing else (fix-wave RF3 removed the
+  // invented "effective floor 35"): 0/negative/non-integer/>90 is basura and
+  // falls back to the safe default, never clamped.
+  const reconcileWindowDays = normalizedIntInRange(
     raw.reconcileWindowDays,
     RECONCILE_WINDOW_DAYS_MIN,
     RECONCILE_WINDOW_DAYS_MAX,
     FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.reconcileWindowDays,
   );
-  const reconcileWindowDays =
-    nominalWindow < RECONCILE_WINDOW_DAYS_MIN_EFFECTIVE ? FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.reconcileWindowDays : nominalWindow;
 
   const reconcileCheckIntervalMs = normalizedIntInRange(
     raw.reconcileCheckIntervalMs,

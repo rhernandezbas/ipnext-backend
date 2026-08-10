@@ -35,9 +35,18 @@ describe('normalizeFinanceReceiptSyncConfig', () => {
     it('a negative value falls back to 35', () => {
       expect(normalizeFinanceReceiptSyncConfig({ reconcileWindowDays: -5 }).reconcileWindowDays).toBe(35);
     });
-    it('a value INSIDE the nominal [1,90] range but BELOW the dashboard-visibility floor (35) falls back to 35, never accepted as-is', () => {
-      // Task 1.7 / finance-growth scenario 15 — the window-vs-rebuild invariant.
-      expect(normalizeFinanceReceiptSyncConfig({ reconcileWindowDays: 20 }).reconcileWindowDays).toBe(35);
+    // ── fix-wave RF3 — the "effective floor 35" is GONE. It claimed to enforce
+    // `ventana >= ventana de rebuild`, but the nightly rebuild covers
+    // `[mes anterior, mes corriente]` = 28 days guaranteed (1st of March), not
+    // 35: the invariant was INVERTED and the number invented. Correctness now
+    // lives where it belongs — a flip outside the rebuild horizon QUEUES its
+    // month (`financeSnapshotRebuildQueue`) — so this knob is free to be a
+    // pure coverage/cost trade-off inside [1, 90].
+    it('a value inside [1,90] and below the old invented floor (20) IS honored — the window is a coverage knob, not a correctness invariant', () => {
+      expect(normalizeFinanceReceiptSyncConfig({ reconcileWindowDays: 20 }).reconcileWindowDays).toBe(20);
+    });
+    it('1 (the nominal minimum) IS honored', () => {
+      expect(normalizeFinanceReceiptSyncConfig({ reconcileWindowDays: 1 }).reconcileWindowDays).toBe(1);
     });
     it('91 (above the nominal max) falls back to 35', () => {
       expect(normalizeFinanceReceiptSyncConfig({ reconcileWindowDays: 91 }).reconcileWindowDays).toBe(35);
@@ -54,13 +63,25 @@ describe('normalizeFinanceReceiptSyncConfig', () => {
   });
 
   describe('reconcileCheckIntervalMs', () => {
-    it('below the minimum (600000) falls back to the default (21600000)', () => {
+    it('below the minimum falls back to the default (21600000)', () => {
       expect(normalizeFinanceReceiptSyncConfig({ reconcileCheckIntervalMs: 1000 }).reconcileCheckIntervalMs).toBe(21600000);
     });
     it('above the maximum (86400000) falls back to the default', () => {
       expect(normalizeFinanceReceiptSyncConfig({ reconcileCheckIntervalMs: 99999999 }).reconcileCheckIntervalMs).toBe(21600000);
     });
     it('a valid mid-range value is honored', () => {
+      expect(normalizeFinanceReceiptSyncConfig({ reconcileCheckIntervalMs: 7200000 }).reconcileCheckIntervalMs).toBe(7200000);
+    });
+    // ── fix-wave RF17 — the old 600000 (10 min) minimum was measured to hand
+    // the reconcile lane ~71% of the SHARED GR request budget: a full sweep is
+    // many pages, and re-arming it every 10 minutes means the reconcile lane is
+    // effectively always "due", so delta's leftovers all go to it and backfill
+    // starves. The floor is now 1 h — below that, the value is rejected as
+    // basura and the safe default (6 h) applies.
+    it('600000 (the OLD minimum, ~71% of the shared GR budget) is now REJECTED and falls back to the 6h default', () => {
+      expect(normalizeFinanceReceiptSyncConfig({ reconcileCheckIntervalMs: 600000 }).reconcileCheckIntervalMs).toBe(21600000);
+    });
+    it('exactly 3600000 (1 h, the new floor) IS honored', () => {
       expect(normalizeFinanceReceiptSyncConfig({ reconcileCheckIntervalMs: 3600000 }).reconcileCheckIntervalMs).toBe(3600000);
     });
   });
