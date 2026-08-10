@@ -38,11 +38,17 @@ describe('PrismaCustomerRepository mappers', () => {
         login: 'jgarcia',
         createdAt: '2026-01-01T10:00:00.000Z',
         customAttributes: undefined,
-        // Balance fields — active client: 0 balance, not stale
-        balanceDue: 0,
+        // customer-balance-unmask — sin grClienteId (row no lo trae) no hay
+        // ningún carril de GR que haya podido escribir la columna: balanceDue
+        // sale null ("no sabemos"), nunca 0 ("al día") — spec
+        // customer-balance-truth, requirement "no GR link means no verified data".
+        balanceDue: null,
         balanceCurrency: null,
         lastBalanceAt: null,
-        balanceStale: false,
+        // customer-balance-unmask (Fase 2) — balanceStale ahora status-agnóstico:
+        // sin lastBalanceAt (nunca fetcheado) es SIEMPRE stale, sin importar
+        // el status (spec balance-staleness-helper, "never-fetched is always stale").
+        balanceStale: true,
         // client-geolocation: Prominense-owned GPS (null cuando el row no los trae)
         lat: null,
         lng: null,
@@ -82,6 +88,75 @@ describe('PrismaCustomerRepository mappers', () => {
       expect(c.address).toBe('');
       expect(c.city).toBe('');
       expect(c.country).toBe('');
+    });
+
+    // ─── customer-balance-unmask (Fase 1) ──────────────────────────────────
+    // `toCustomer` dejó de tirar `balanceDue` a 0 para cualquier status que no
+    // sea `late` — proposal.md, el bug medido en prod (3.213 clientes "Sin
+    // deuda ✓" que sí debían). spec `customer-balance-truth`.
+
+    it('S1 — active client with real debt: balanceDue no se pisa a 0', () => {
+      const c = toCustomer({
+        id: 'c-active-debt',
+        name: 'Cliente Activo',
+        email: 'activo@example.com',
+        phone: '111',
+        status: 'active',
+        address: null,
+        city: null,
+        country: null,
+        login: 'activo',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        grClienteId: 'GR-100',
+        balanceDue: 45000,
+        balanceCurrency: 'ARS',
+      });
+      expect(c.balanceDue).toBe(45000);
+      expect(c.balanceCurrency).toBe('ARS');
+    });
+
+    it('S2 — late client, unchanged parity: balanceDue sigue viajando igual que antes del change', () => {
+      const c = toCustomer({
+        id: 'c-late',
+        name: 'Cliente Deudor',
+        email: 'deudor@example.com',
+        phone: '222',
+        status: 'late',
+        address: null,
+        city: null,
+        country: null,
+        login: 'deudor',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        grClienteId: 'GR-200',
+        balanceDue: 1000,
+      });
+      expect(c.balanceDue).toBe(1000);
+    });
+
+    it('efecto lateral de Decisión 1 — create() sin grClienteId ni balance seteado produce balanceDue:null (antes: 0)', () => {
+      // Row equivalente al que `prisma.client.create()` devuelve para un alta
+      // manual (mandato 8, tasks.md 1.6): sin `grClienteId`, columnas de
+      // balance nunca escritas por ningún carril de GR todavía.
+      const c = toCustomer({
+        id: 'c-nuevo',
+        name: 'Alta Manual',
+        email: 'alta@example.com',
+        phone: '333',
+        status: 'active',
+        address: null,
+        city: null,
+        country: null,
+        login: 'altamanual',
+        createdAt: '2026-08-10T00:00:00.000Z',
+        grClienteId: null,
+        balanceDue: null,
+        balanceCurrency: null,
+        lastBalanceAt: null,
+      });
+      // balanceStale queda fuera de este assert a propósito: su semántica
+      // status-agnóstica es Fase 2 (helper `isBalanceOlderThanTtl`), no Fase 1.
+      expect(c.balanceDue).toBeNull();
+      expect(c.balanceCurrency).toBeNull();
     });
   });
 

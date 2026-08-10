@@ -22,13 +22,14 @@ export interface Customer {
   createdAt: string;
   customAttributes?: Record<string, string>;
   // GR balance fields
-  /** Outstanding debt amount (ARS). 0 = no debt, null = never fetched. */
+  /** Outstanding debt amount, as reported by GR. 0 = no debt, null = never
+   * fetched (or no grClienteId link) — never a stand-in for "no debt". */
   balanceDue?: number | null;
-  /** Currency code, e.g. "ARS". Null until first fetch. */
+  /** Currency code as GR reports it (e.g. "ARS", "DOL"). Null until first fetch. */
   balanceCurrency?: string | null;
   /** ISO timestamp of the last balance refresh. */
   lastBalanceAt?: string | null;
-  /** True when the balance is older than the TTL or has never been fetched (and client is a debtor). */
+  /** True when the balance is older than the TTL or has never been fetched — status-agnostic. */
   balanceStale?: boolean;
   // client-geolocation — Prominense-owned GPS (NOT from GR). GR sync NEVER writes these.
   lat?: number | null;

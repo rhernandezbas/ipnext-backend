@@ -21,36 +21,38 @@ import { Invoice, InvoiceStatus, LineItem } from '@domain/entities/billing';
 import { PaginatedResult } from '@application/dto/pagination';
 import { ClientNotFoundError } from '@domain/errors';
 import { normalizeGrCurrency } from '@domain/services/normalizeGrCurrency';
+import { isBalanceOlderThanTtl } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { prisma } from '../../database/prisma';
 
 const DEFAULT_BALANCE_TTL_MINUTES = 60;
 
-/**
- * Derive balanceStale: true when the client is a debtor (status=late) AND
- * either lastBalanceAt is null (never fetched) or older than the TTL.
- */
-function isBalanceStale(status: string, lastBalanceAt: Date | null, ttlMinutes: number): boolean {
-  if (status !== 'late') return false; // non-debtors are never stale
-  if (!lastBalanceAt) return true; // never fetched
-  const ageMs = Date.now() - lastBalanceAt.getTime();
-  return ageMs > ttlMinutes * 60 * 1000;
-}
-
-export function toCustomer(row: any, balanceTtlMinutes = DEFAULT_BALANCE_TTL_MINUTES): Customer {
+export function toCustomer(
+  row: any,
+  balanceTtlMinutes = DEFAULT_BALANCE_TTL_MINUTES,
+  now: () => Date = () => new Date(),
+): Customer {
   const status = row.status as CustomerStatus;
-  const isDebtor = status === 'late';
+  // customer-balance-unmask (Decisión 1) — el mapper es un passthrough de la
+  // columna para TODO status; ya no existe `isDebtor` acá. La única guarda que
+  // queda es "sin link GR, no hay dato verificado" (spec `customer-balance-truth`,
+  // requirement "no GR link means no verified data"): ningún carril de sync
+  // toca una fila sin `grClienteId`, así que un valor en la columna sería un
+  // resto/manual, no un dato confiable.
+  const hasGrLink = row.grClienteId !== null && row.grClienteId !== undefined;
 
   // Map Decimal to number (same pattern as toInvoice)
   const balanceDue: number | null = (() => {
-    if (!isDebtor) return 0;
+    if (!hasGrLink) return null;
     if (row.balanceDue === null || row.balanceDue === undefined) return null;
     if (typeof row.balanceDue === 'object' && 'toNumber' in row.balanceDue) {
       return (row.balanceDue as { toNumber(): number }).toNumber();
     }
     return Number(row.balanceDue);
   })();
+  const balanceCurrency = hasGrLink ? (row.balanceCurrency ?? null) : null;
 
   const lastBalanceAt = row.lastBalanceAt instanceof Date ? row.lastBalanceAt : null;
+  const lastBalanceAtIso = lastBalanceAt ? lastBalanceAt.toISOString() : null;
 
   return {
     id: row.id,
@@ -66,9 +68,14 @@ export function toCustomer(row: any, balanceTtlMinutes = DEFAULT_BALANCE_TTL_MIN
     createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
     customAttributes: row.customAttributes ?? undefined,
     balanceDue,
-    balanceCurrency: isDebtor ? (row.balanceCurrency ?? null) : null,
-    lastBalanceAt: lastBalanceAt ? lastBalanceAt.toISOString() : null,
-    balanceStale: isBalanceStale(status, lastBalanceAt, balanceTtlMinutes),
+    balanceCurrency,
+    lastBalanceAt: lastBalanceAtIso,
+    // customer-balance-unmask (Decisión 2) — status-agnóstico: el MISMO
+    // helper y el MISMO criterio que ya usan `RefreshClientBalanceIfStale` y
+    // `GetInboxClientContext` (spec `balance-staleness-helper`). El status
+    // dejó de decidir frescura — antes de este change el guard estaba
+    // cortocircuitado en abierto para todo no-`late`, sin importar la edad.
+    balanceStale: isBalanceOlderThanTtl(lastBalanceAtIso, balanceTtlMinutes, now),
     // client-geolocation — Prominense-owned GPS fields (GR sync NEVER writes these)
     lat: row.lat ?? null,
     lng: row.lng ?? null,
