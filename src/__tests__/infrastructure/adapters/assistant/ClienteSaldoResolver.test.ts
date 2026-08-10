@@ -28,6 +28,8 @@ import { customerFrom, grBalanceRow, grBalancePayload, FIXED_NOW, type FixtureRo
 
 const FRESH_AT = new Date(FIXED_NOW.getTime() - 10 * 60 * 1000); // 10 min antes — dentro del TTL
 const STALE_AT = new Date(FIXED_NOW.getTime() - 90 * 60 * 1000); // 90 min antes — pasó el TTL (60)
+/** 30h antes — pasó el TTL de los DOS carriles (rápido 60min, lento 26h). */
+const VERY_STALE_AT = new Date(FIXED_NOW.getTime() - 30 * 60 * 60 * 1000);
 
 const CUSTOMER_ROW: Partial<FixtureRow> = {
   id: 'client-1',
@@ -270,7 +272,40 @@ describe('ClienteSaldoResolver', () => {
     await expect(resolver.resolve(ctx)).resolves.toMatchObject({
       motivo: 'saldo_desactualizado',
     });
-    expect(execute).toHaveBeenCalledWith({ grClienteId: 'GR1', lastBalanceAt: STALE_AT.toISOString() });
+    expect(execute).toHaveBeenCalledWith({ grClienteId: 'GR1', lastBalanceAt: STALE_AT.toISOString(), status: 'active' });
+  });
+
+  /**
+   * fix wave 2 (FW2-3) — **el CUARTO call site del refresh.**
+   *
+   * F7 metió el `status` en `RefreshInput` para que el TTL saliera del CARRIL, y
+   * lo cableó en la ficha y en el inbox... pero no acá. El bot pedía el refresh
+   * sin status ⇒ carril RÁPIDO siempre, incluso para una `baja` cuyo dato ya es
+   * todo lo fresco que su carril (1×/día) permite: el gate visible (`balanceStale`
+   * del mapper, que SÍ es por carril) y el gate real discrepando en silencio, que
+   * es exactamente el defecto que F7 nombró y cerró en las otras dos superficies.
+   *
+   * Hoy es inerte por ACCIDENTE: el `if` de afuera exige `customer.balanceStale`,
+   * que el mapper ya calculó con el TTL del carril, así que una `baja` fresca
+   * nunca llega hasta acá. Apoyarse en eso es apoyarse en que dos gates
+   * independientes coincidan para siempre — el hermano del defecto, no su ausencia.
+   */
+  it('FW2-3 — el refresh recibe el status del cliente (el carril del TTL vale también para el bot)', async () => {
+    const execute = jest.fn().mockResolvedValue(false);
+    // ⚠️ 30h, no 90min: una `baja` de 90min NO es stale (TTL del carril lento =
+    // 26h), así que el `if` de afuera ni siquiera llegaría al refresh. Esa es la
+    // "inercia por accidente" en vivo — y por eso la fila tiene que ser stale en
+    // los DOS carriles para que este test ejercite el paso del status.
+    const baja = customerFrom({ ...CUSTOMER_ROW, status: 'baja', lastBalanceAt: VERY_STALE_AT });
+    expect(baja.balanceStale).toBe(true);
+
+    await new ClienteSaldoResolver(repoOf(baja), { execute } as never).resolve(ctx);
+
+    expect(execute).toHaveBeenCalledWith({
+      grClienteId: 'GR1',
+      lastBalanceAt: VERY_STALE_AT.toISOString(),
+      status: 'baja',
+    });
   });
 
   /**

@@ -62,6 +62,13 @@ export class ClienteSaldoResolver implements AssistantDataSourceResolver {
       const refreshed = await this.refreshBalance.execute({
         grClienteId: customer.grClienteId,
         lastBalanceAt: customer.lastBalanceAt ?? null,
+        // fix wave 2 (FW2-3) — el CUARTO call site del refresh. F7 cableó el
+        // status en la ficha y en el inbox y se olvidó de éste: el bot pedía el
+        // refresh sin carril ⇒ TTL rápido para todos, incluidas las bajas.
+        // Hoy sería inerte por accidente (el `if` de arriba exige el
+        // `balanceStale` del mapper, que YA es por carril), pero eso es apoyarse
+        // en que dos gates independientes coincidan para siempre.
+        status: customer.status,
       });
       if (refreshed) {
         customer = await this.customers.findById(ctx.clientId);
