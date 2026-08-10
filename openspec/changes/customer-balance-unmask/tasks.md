@@ -173,8 +173,16 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
       probe temporal `__probe_counterfactual.test.ts`, borrado después) y confirmar que FALLA —
       CONFIRMADO: `saldo:0, tieneDeuda:false` (el bug, reproducido).
 - [x] 6.2 Revert-probe M-A "volver a enmascarar": reinsertado `if (status !== 'late') return 0;`
-      en `toCustomer` ⇒ mató 3 tests, incluido el de la tarea 1.1 (S1, "active client with real
-      debt"). Restaurado, verde.
+      en `toCustomer` ⇒ **mató 22 tests en 5 suites** (medido en la fix wave corriendo la suite
+      COMPLETA bajo el mutante: 22 failed / 12.259 passed / 1.208 suites), incluido el de la
+      tarea 1.1 (S1, "active client with real debt"). Restaurado, verde.
+      - ⚠️ **Corrección de reporte (fix wave, F11d).** Acá decía "mató 3 tests" — sub-reportado
+        por un factor de 7. El 3 salía de correr sólo las suites que uno *espera* que caigan;
+        el radio real se mide corriendo TODO. No es un detalle de prolijidad: el radio de un
+        mutante es la medida de cuánta red hay tendida abajo del fix, y sub-reportarlo hace
+        parecer frágil una protección que en realidad es ancha. Si el número se reporta, se mide.
+      - Suites que caen: `CustomerBalanceMapper`, `GetClientDetail`, `GetInboxClientContext`,
+        `PrismaCustomerRepository.mappers`, `ClienteSaldoResolver`.
 - [x] 6.3 Revert-probe M-B "el bot emite stale": neutralizado el guard de `balanceStale` en
       `ClienteSaldoResolver` ⇒ mató S18 (tarea 4.2) y "P3" (assert de invocación, tarea 4.8).
       Restaurado, verde.
