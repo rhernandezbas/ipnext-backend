@@ -1152,4 +1152,57 @@ describe('FinanceReceiptIngestScheduler', () => {
       }
     });
   });
+
+  // ── gr-receipt-annulment (design.md Wiring, "el pin del composition root")
+  // — THREE layers, in order of strength. This describe block pins the first
+  // two (type + runtime); the third (text-slice pin of the REAL
+  // bootstrap wiring) lives in `finance-growth-composition-root.test.ts`.
+  describe('gr-receipt-annulment: syncReconcile wiring pins (design.md Wiring)', () => {
+    // Layer 1 (strongest): the TYPE SYSTEM. A bootstrap that drops
+    // `syncReconcile` must fail to COMPILE. If someone loosens the
+    // constructor's 6th parameter back to optional, this `@ts-expect-error`
+    // becomes UNUSED — and an unused `@ts-expect-error` is itself a
+    // TypeScript compile error, so this whole test FILE fails to build,
+    // catching the regression before any test even runs.
+    it('aridity pin — constructing WITHOUT syncReconcile is a TYPE ERROR', () => {
+      const state = new InMemorySyncStateRepository();
+      const lock = new InMemoryDistributedLock();
+      const cfg = new InMemoryFinanceReceiptSyncConfigRepository();
+      const delta = fakeDelta();
+      const backfill = fakeBackfill();
+      expect(() => {
+        // @ts-expect-error — syncReconcile es OBLIGATORIO (design.md Wiring): si esto
+        // deja de dar error de tipos, alguien lo volvió opcional y un wiring
+        // perdido pasa a ser silencioso (F13/R9, el mismo patrón que itemRepo/retencionRepo).
+        return new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, cfg);
+      }).toThrow();
+    });
+
+    // Layer 2: RUNTIME. Catches the JS-without-types case the type layer can't.
+    it('runtime pin — the constructor THROWS when syncReconcile is falsy, even bypassing the type system', () => {
+      const state = new InMemorySyncStateRepository();
+      const lock = new InMemoryDistributedLock();
+      const cfg = new InMemoryFinanceReceiptSyncConfigRepository();
+      const delta = fakeDelta();
+      const backfill = fakeBackfill();
+
+      expect(() => new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, cfg, undefined as never)).toThrow(
+        /syncReconcile is REQUIRED/,
+      );
+      expect(() => new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, cfg, null as never)).toThrow(
+        /syncReconcile is REQUIRED/,
+      );
+    });
+
+    it('does NOT throw when syncReconcile is provided', () => {
+      const state = new InMemorySyncStateRepository();
+      const lock = new InMemoryDistributedLock();
+      const cfg = new InMemoryFinanceReceiptSyncConfigRepository();
+      const delta = fakeDelta();
+      const backfill = fakeBackfill();
+      const reconcile = fakeReconcile();
+
+      expect(() => new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, cfg, reconcile as never)).not.toThrow();
+    });
+  });
 });

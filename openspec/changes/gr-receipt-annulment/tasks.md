@@ -159,19 +159,22 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 6 — Wiring + pin del composition root
 
-- [ ] 6.1 `bootstrapFinanceReceiptsIngest.ts` — construir `SyncGrReceiptsReconcileWindow` con los MISMOS
-      repos Prisma + `syncConfig`, pasarlo al scheduler.
-- [ ] 6.2 `FinanceReceiptIngestScheduler` constructor — nuevo parámetro `syncReconcile` POSICIONAL y
-      OBLIGATORIO (nunca opcional-trailing) + throw en el constructor si es falsy.
-- [ ] 6.3 RED test de aridad con `@ts-expect-error` — pinea que
+- [x] 6.1 `bootstrapFinanceReceiptsIngest.ts` — construir `SyncGrReceiptsReconcileWindow` con los MISMOS
+      repos Prisma + `syncConfig`, pasarlo al scheduler. **Hecho en Fase 5** (acoplado a la arbitración).
+- [x] 6.2 `FinanceReceiptIngestScheduler` constructor — nuevo parámetro `syncReconcile` POSICIONAL y
+      OBLIGATORIO (nunca opcional-trailing) + throw en el constructor si es falsy. **Hecho en Fase 5**.
+- [x] 6.3 RED test de aridad con `@ts-expect-error` — pinea que
       `new FinanceReceiptIngestScheduler(delta, backfill, state, lock, cfg)` (sin `syncReconcile`) da
-      error de TIPOS. Si el `@ts-expect-error` queda sin usar, el test falla.
-- [ ] 6.4 RED test runtime — el constructor tira si `syncReconcile` es falsy (caza el JS sin tipos).
-- [ ] 6.5 RED `finance-growth-composition-root.test.ts` — slice desde
+      error de TIPOS. Si el `@ts-expect-error` queda sin usar, el test falla. **Verificado con
+      contrafáctico**: se aflojó `syncReconcile` a opcional manualmente, `tsc` reportó
+      `TS2578: Unused '@ts-expect-error' directive` (el pin es real, no decorativo), se revirtió.
+- [x] 6.4 RED test runtime — el constructor tira si `syncReconcile` es falsy (caza el JS sin tipos).
+- [x] 6.5 RED `finance-growth-composition-root.test.ts` — slice desde
       `new SyncGrReceiptsReconcileWindow(` hasta su `);` de cierre (NUNCA una ventana de N caracteres
       mágica) — verificar que aparecen `itemRepo`, `retencionRepo`, `syncConfig`; y que la llamada
       `new FinanceReceiptIngestScheduler(` menciona la variable `syncReconcile`.
-- [ ] 6.6 GREEN de 6.1 a 6.5; `app.ts`/`main.ts` sin cambios (ya propagan la instancia del scheduler).
+- [x] 6.6 GREEN de 6.1 a 6.5; `app.ts`/`main.ts` sin cambios (ya propagan la instancia del scheduler,
+      confirmado — no se tocaron).
 
 ## Fase 7 — Filtros del dashboard + gemelos in-memory
 

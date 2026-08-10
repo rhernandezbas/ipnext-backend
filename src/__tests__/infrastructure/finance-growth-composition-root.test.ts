@@ -198,4 +198,36 @@ describe('finance-growth composition root — Fase 1 receipt-ingest wiring', () 
       expect(call).toMatch(/\bretencionRepo\b/);
     });
   });
+
+  // ── gr-receipt-annulment (design.md Wiring, "el pin del composition root")
+  // — text pin as the THIRD, weakest layer, complementing the type pin
+  // (`@ts-expect-error` aridity test, FinanceReceiptIngestScheduler.test.ts)
+  // and the runtime pin (constructor throw). Slices to the call's OWN closing
+  // `);`, never a fixed-N-character window — fix-wave-2's own lesson, a
+  // comment inserted inside the call must never blind these assertions.
+  describe('gr-receipt-annulment: bootstrapFinanceReceiptsIngest wires the reconcile lane (design.md Decision 8, Wiring)', () => {
+    it('imports SyncGrReceiptsReconcileWindow', () => {
+      expect(bootstrapSrc).toContain("from '@application/use-cases/finance/SyncGrReceiptsReconcileWindow'");
+    });
+
+    it('SyncGrReceiptsReconcileWindow is constructed with itemRepo, retencionRepo, AND syncConfig', () => {
+      const start = bootstrapSrc.indexOf('new SyncGrReceiptsReconcileWindow(');
+      expect(start).toBeGreaterThan(-1);
+      const end = bootstrapSrc.indexOf(');', start);
+      expect(end).toBeGreaterThan(start);
+      const call = bootstrapSrc.slice(start, end);
+      expect(call).toMatch(/\bitemRepo\b/);
+      expect(call).toMatch(/\bretencionRepo\b/);
+      expect(call).toMatch(/\bsyncConfig\b/);
+    });
+
+    it('new FinanceReceiptIngestScheduler( is constructed with the syncReconcile variable', () => {
+      const start = bootstrapSrc.indexOf('new FinanceReceiptIngestScheduler(');
+      expect(start).toBeGreaterThan(-1);
+      const end = bootstrapSrc.indexOf(');', start);
+      expect(end).toBeGreaterThan(start);
+      const call = bootstrapSrc.slice(start, end);
+      expect(call).toMatch(/\bsyncReconcile\b/);
+    });
+  });
 });
