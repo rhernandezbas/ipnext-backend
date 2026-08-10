@@ -394,6 +394,14 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 | 19 | Residuo no parseable marca solo esa fila | 2.2, 3.1, 4.10 |
 | 20 | Corrida normal con 0/pocos anulados persiste normal | 3.1 |
 | 21 | Drift del centinela satura la página y aborta sin escribir | 3.1, 4.10 |
+| 30 | An annulment on a closed month repairs that month's snapshot | RF3 (`financeReceiptPageIngest.test.ts` + `FinanceSnapshotScheduler.test.ts`) |
+| 31 | A flip near the month boundary is queued regardless of the nightly horizon | RFX1 (`financeReceiptPageIngest.test.ts`) |
+| 32 | A flip on the CURRENT month queues nothing | RFX1 (`financeReceiptPageIngest.test.ts`) |
+| 33 | A failed rebuild keeps the month queued | RF3 (`FinanceSnapshotScheduler.test.ts`) |
+| 34 | A mirrored receipt flips to annulled | RF1 (`PrismaFinancePaymentReceiptRepository.test.ts` + seam S2) |
+| 35 | GR blanking fecha_anulacion never un-annuls the mirror | RF1 latch (`InMemoryFinancePaymentReceiptRepository.test.ts` + adapter) |
+| 36 | Three consecutive guard aborts abandon the sweep | RF4 (`SyncGrReceiptsReconcileWindow.test.ts` + delta) |
+| 37 | The abort counter survives an unrelated error in between | RFX3 (`SyncGrReceiptsReconcileWindow.test.ts` + delta) |
 
 ### `finance-dashboard-annulment-filter` (5 scenarios)
 

@@ -70,17 +70,13 @@ describe('financeDates', () => {
     // deleted here ("genuinely unparseable garbage is NOT proof" / "out-of-
     // range non-zero date is NOT proof") pinned the OLD fail-open behavior —
     // superseded below, not silently dropped.
-    // ── sdd-verify NOTE (spec/design conflict, resolved per design.md) ──
-    // `specs/finance-growth/spec.md`'s "ISO-formatted fecha_anulacion..."
-    // scenario says `THEN devuelve false`, but its OWN "(Previously: ...
-    // isRealAnnulment('2026-06-15 10:00:00') devolvía false)" note describes
-    // that EXACT SAME return value as the bug being fixed — i.e. the spec
-    // scenario, read literally, asserts NO behavior change at all. design.md
-    // Decision 5's table is explicit and internally consistent: this ISO row
-    // is marked `Hoy: false ⚠️ | Nuevo: true` and is one of the "tres filas
-    // marcadas ⚠️ son las que hoy contarían plata anulada como cobrada en
-    // silencio" — the whole point of the fix. Implemented per design.md
-    // (true = genuinely annulled); flagged for sdd-verify to fix the spec text.
+    // ── HISTORIA (conflicto spec/design, YA RESUELTO por RF14) ──
+    // El texto original del scenario ISO decía `THEN devuelve false`,
+    // contradiciendo su propia nota "(Previously: ... devolvía false)" y la
+    // tabla de design.md Decision 5 (`Hoy: false ⚠️ | Nuevo: true` — una de
+    // las filas que contaban plata anulada como cobrada en silencio). La
+    // fix wave RF14 corrigió el TEXTO del spec: hoy dice `true` y calca lo
+    // implementado acá. Se conserva la nota como historia del porqué.
     describe('gr-receipt-annulment: ISO accepted as a second valid annulment-date format (design.md Decision 5 — see spec-conflict note above)', () => {
       it('a real ISO annulment date with a time component is recognized as annulled, WITHOUT a warning', () => {
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
