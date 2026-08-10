@@ -1082,11 +1082,17 @@ describe('FinanceReceiptIngestScheduler', () => {
       });
 
       it("reconcile's failure streak does NOT feed delta's own F4 counter, and vice versa — independent circuit breakers", async () => {
-        const { state, delta, scheduler, syncConfig } = makeHarness();
+        // Fixed clock — same "reloj vivo" hazard already fixed elsewhere in
+        // this file (pinning `lastRunAt` to a literal timestamp while `now`
+        // stays on the REAL wall clock made this flaky under the full suite,
+        // where wall-clock drift/contention can push `now - lastRunAt` past
+        // `deltaCheckIntervalMs`, making delta unexpectedly "due").
+        const now = new Date('2026-08-10T14:00:00Z');
+        const { state, delta, scheduler, syncConfig } = makeHarness({ now: () => now });
         await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
         // Delta is NOT due (plain cursor, interval fresh) so every tick goes to reconcile.
         await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T13:59:00Z'), lastResult: 'ok', itemsSynced: 1 });
-        await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: new Date('2026-08-10T13:59:00Z'), lastResult: 'error: GR down', itemsSynced: 0 });
+        await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: now, lastResult: 'error: GR down', itemsSynced: 0 });
         (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = fakeReconcile(new Error('GR down')) as never;
 
         for (let i = 0; i < 5; i++) await scheduler.tick();

@@ -272,16 +272,25 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 9 — Gate: lo existente pasa SIN TOCARSE
 
-- [ ] 9.1 Correr sin modificar: `SyncGrReceiptsDelta.test.ts`, `SyncGrReceiptsBackfillBatch.test.ts`,
+- [x] 9.1 Correr sin modificar: `SyncGrReceiptsDelta.test.ts`, `SyncGrReceiptsBackfillBatch.test.ts`,
       `finance-receipts-ingest-seam.test.ts` (casos R1/F4/F5/F12/F14) tras el refactor de la Fase 3.5 —
       deben quedar en VERDE. Si hay que tocar alguno, PARAR y reportar (el refactor cambió
       comportamiento). Cubre también scenarios 5 (page failure no aborta), 9, 10, 11 (backfill/delta
-      preexistentes, sin cambios).
-- [ ] 9.2 Confirmar y anotar en la matriz qué test PREEXISTENTE (sin cambios) cubre scenarios 2
+      preexistentes, sin cambios). **Confirmado**: `SyncGrReceiptsDelta.test.ts`/`SyncGrReceiptsBackfillBatch.test.ts`
+      son byte-idénticos a `ade93a38` (`git diff` vacío) — 53 tests en verde.
+- [x] 9.2 Confirmar y anotar en la matriz qué test PREEXISTENTE (sin cambios) cubre scenarios 2
       (dict-keyed nodes normalizados, `GestionRealClient.receipts.test.ts` F11/F12), 3 (aplicaciones
-      1-a-N) y 4 (items+retenciones en sus tablas) — no se tocan, se listan como gate.
-- [ ] 9.3 `npm test` — suite completa en verde.
-- [ ] 9.4 `tsc --noEmit` — sin errores de tipos (valida en particular el pin de aridad de 6.3).
+      1-a-N) y 4 (items+retenciones en sus tablas) — no se tocan, se listan como gate. Confirmado en la
+      matriz del apéndice (ya escrita por sdd-tasks).
+- [x] 9.3 `npm test` — suite completa en verde. **1206/1212 suites (6 skipped, preexistentes/ajenos al
+      change), 12328/12416 tests (88 skipped), 0 failed.** Primera corrida completa encontró 1 test
+      flaky real (mismo patrón "reloj vivo" ya visto en Fase 5: `lastRunAt` fijo + `now()` del reloj
+      real del sistema — bajo la contención de la suite completa el drift alcanzó a superar
+      `deltaCheckIntervalMs`) en
+      "reconcile's failure streak does NOT feed delta's own F4 counter" — corregido con `now` fijo,
+      confirmado en la segunda corrida completa.
+- [x] 9.4 `tsc --noEmit` — sin errores de tipos (valida en particular el pin de aridad de 6.3). Limpio,
+      0 errores.
 
 ## Fase 10 — Verificación FE + rollout/runbook
 
