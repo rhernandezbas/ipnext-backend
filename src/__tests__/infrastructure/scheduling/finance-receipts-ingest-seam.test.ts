@@ -112,6 +112,7 @@ describe('finance-receipts-ingest seam — raw payload → REAL parser → REAL 
     const invoiceTypes = new InMemoryFinanceInvoiceTypeClassificationRepository();
     const uc = new SyncGrReceiptsDelta(
       gr, state, receiptRepo, applicationRepo, invoiceTypes,
+      new InMemoryFinanceReceiptSyncConfigRepository(),
       new InMemoryFinanceReceiptItemRepository(),
       new InMemoryFinanceReceiptRetencionRepository(),
       { now: () => new Date('2026-07-15T14:00:00Z') },
@@ -159,6 +160,7 @@ describe('finance-receipts-ingest seam — raw payload → REAL parser → REAL 
     const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
     const uc = new SyncGrReceiptsDelta(
       gr, state, receiptRepo, applicationRepo, invoiceTypes,
+      new InMemoryFinanceReceiptSyncConfigRepository(),
       itemRepo, retencionRepo,
       { now: () => new Date('2026-07-15T14:00:00Z') },
     );
@@ -200,6 +202,7 @@ describe('finance-receipts-ingest seam — raw payload → REAL parser → REAL 
     const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
     const uc = new SyncGrReceiptsDelta(
       gr, state, receiptRepo, applicationRepo, invoiceTypes,
+      new InMemoryFinanceReceiptSyncConfigRepository(),
       itemRepo, retencionRepo,
       { now: () => new Date('2026-07-15T14:00:00Z') },
     );
@@ -223,6 +226,7 @@ describe('finance-receipts-ingest seam — raw payload → REAL parser → REAL 
       new InMemoryFinancePaymentReceiptRepository(),
       new InMemoryFinanceReceiptApplicationRepository(),
       new InMemoryFinanceInvoiceTypeClassificationRepository(),
+      new InMemoryFinanceReceiptSyncConfigRepository(),
       new InMemoryFinanceReceiptItemRepository(),
       new InMemoryFinanceReceiptRetencionRepository(),
       { now: () => new Date('2026-07-15T14:00:00Z') },
@@ -288,7 +292,7 @@ describe('finance-receipts-ingest seam — F4 anti-starvation with the REAL use 
     const now = () => new Date('2026-07-15T14:00:00Z');
     const itemRepo = new InMemoryFinanceReceiptItemRepository();
     const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
-    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo, { now });
+    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
     const syncBackfill = new SyncGrReceiptsBackfillBatch(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
     const noopReconcile = { execute: async () => ({ pageProcessed: 0, sweepInProgress: false, windowFrom: null, windowTo: null }) };
 
@@ -427,20 +431,61 @@ describe('finance-receipts-ingest seam — SyncGrReceiptsReconcileWindow (S1-S5,
     expect(receiptRepo.rows.get('9003')?.fechaRecibo?.toISOString()).toBe('2026-08-05T03:00:00.000Z');
   });
 
-  it('re-sweeping the same window twice does not duplicate rows in any of the four tables (scenario 14)', async () => {
+  // ── fix-wave RF12 — as written, this test was satisfied by a second sweep
+  // that wrote NOTHING AT ALL (a lane that silently no-ops trivially "does not
+  // duplicate rows"). Scenario 14 is about idempotence of a real re-write, so
+  // the second sweep now carries an OBSERVABLY DIFFERENT payload: the
+  // assertion is "the row was rewritten AND there is still exactly one".
+  it('re-sweeping the same window twice REWRITES the same rows without duplicating them in any of the four tables (scenario 14)', async () => {
     const now = { v: new Date('2026-08-10T14:00:00Z') };
     const { gr, receiptRepo, applicationRepo, itemRepo, syncConfig, uc } = makeReconcileHarness(100, () => now.v);
     await syncConfig.update({ reconcileWindowDays: 35 });
 
     gr.rawResponses.push(rawReciboPayload('9004', '100044', 100, '05-08-2026'));
     await uc.execute();
-    now.v = new Date('2026-08-10T21:00:00Z');
-    gr.rawResponses.push(rawReciboPayload('9004', '100044', 100, '05-08-2026'));
-    await uc.execute();
+    expect(receiptRepo.rows.get('9004')?.recaudador).toBe('mercadopago');
 
+    now.v = new Date('2026-08-10T21:00:00Z');
+    const second = rawReciboPayload('9004', '100044', 100, '05-08-2026');
+    (second.recibos['9004'] as Record<string, unknown>).recaudador = 'rapipago'; // GR corrected the collector
+    gr.rawResponses.push(second);
+    const result = await uc.execute();
+
+    // The second sweep ACTUALLY WROTE (this is what a no-op lane fails).
+    expect(result.pageProcessed).toBe(1);
+    expect(receiptRepo.rows.get('9004')?.recaudador).toBe('rapipago');
+    // ...and wrote over the SAME rows.
     expect(receiptRepo.rows.size).toBe(1);
     expect(applicationRepo.rows.size).toBe(1);
     expect(itemRepo.rows.size).toBe(1);
+  });
+
+  // ── fix-wave RF1 — the inverse of S2, and the reason the flip is a LATCH.
+  // GR blanking `fecha_anulacion` on a re-consulted receipt (format drift,
+  // partial response) must NEVER de-annul the mirror: mass de-annulment is
+  // indistinguishable from healthy data downstream, so nothing else in the
+  // system could catch it.
+  it('S2-latch — an already-annulled receipt reported HEALTHY on a later sweep stays anulado:true (no automatic un-annulment)', async () => {
+    const now = { v: new Date('2026-08-10T14:00:00Z') };
+    const { gr, receiptRepo, syncConfig, uc } = makeReconcileHarness(100, () => now.v);
+    await syncConfig.update({ reconcileWindowDays: 35 });
+
+    const voided = rawReciboPayload('9006', '100066', 700, '05-08-2026');
+    (voided.recibos['9006'] as Record<string, unknown>).fecha_anulacion = '09-08-2026 10:00:00';
+    gr.rawResponses.push(voided);
+    await uc.execute();
+    expect(receiptRepo.rows.get('9006')?.anulado).toBe(true);
+
+    // Sweep 2: GR now reports the sentinel (no annulment) for the SAME receipt.
+    now.v = new Date('2026-08-10T21:00:00Z');
+    const healthyAgain = rawReciboPayload('9006', '100066', 700, '05-08-2026');
+    (healthyAgain.recibos['9006'] as Record<string, unknown>).recaudador = 'rapipago';
+    gr.rawResponses.push(healthyAgain);
+    await uc.execute();
+
+    // The rest of the row IS refreshed — the latch is scoped to `anulado`.
+    expect(receiptRepo.rows.get('9006')?.recaudador).toBe('rapipago');
+    expect(receiptRepo.rows.get('9006')?.anulado).toBe(true);
   });
 
   it('a GR error envelope during reconcile propagates as a thrown error — zero writes, cursor untouched (scenario 16, mismo criterio que delta/backfill)', async () => {
@@ -466,7 +511,7 @@ describe('finance-receipts-ingest seam — SyncGrReceiptsReconcileWindow (S1-S5,
     expect(applicationRepo.rows.size).toBe(0);
     const saved = await state.get(RECONCILE_ENTITY);
     expect(saved?.lastResult).toMatch(/^error:/);
-    expect(saved?.cursor).toBe('07-07-2026:10-08-2026:0'); // sin avanzar — la misma página se reintenta
+    expect(saved?.cursor).toBe('06-07-2026:09-08-2026:0'); // sin avanzar — la misma página se reintenta
   });
 });
 
@@ -515,7 +560,7 @@ describe('finance-receipts-ingest seam — S6: THREE real use cases + REAL sched
     const now = () => new Date('2026-08-10T14:00:00Z');
     const itemRepo = new InMemoryFinanceReceiptItemRepository();
     const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
-    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo, { now });
+    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
     const syncBackfill = new SyncGrReceiptsBackfillBatch(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
     const syncReconcile = new SyncGrReceiptsReconcileWindow(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
 
@@ -584,7 +629,7 @@ describe('finance-receipts-ingest seam — S6: THREE real use cases + REAL sched
     const now = () => new Date('2026-08-10T14:00:00Z');
     const itemRepo = new InMemoryFinanceReceiptItemRepository();
     const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
-    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo, { now });
+    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
     const syncBackfill = new SyncGrReceiptsBackfillBatch(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
     const syncReconcile = new SyncGrReceiptsReconcileWindow(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
 

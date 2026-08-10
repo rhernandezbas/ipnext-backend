@@ -37,8 +37,15 @@ export class PrismaFinancePaymentReceiptRepository implements FinancePaymentRece
           recaudador: r.recaudador,
           fechaRecibo: r.fechaRecibo,
           fechaConfirmacion: r.fechaConfirmacion,
-          anulado: r.anulado,
           observaciones: r.observaciones,
+          // gr-receipt-annulment fix-wave RF1 — ONE-WAY LATCH (see the port's
+          // `upsertBatch` docblock for the full rationale). `anulado: true`
+          // is written; `false` is OMITTED so an already-annulled row is
+          // never silently un-annulled by a GR page that stopped reporting
+          // `fecha_anulacion`. Before this fix the field was omitted in BOTH
+          // directions — the reconcile lane could not flip anything, which is
+          // its entire reason to exist.
+          ...(r.anulado ? { anulado: true } : {}),
         },
       }),
     );
@@ -48,6 +55,15 @@ export class PrismaFinancePaymentReceiptRepository implements FinancePaymentRece
   async exists(grReceiptId: string): Promise<boolean> {
     const row = await this.table.findUnique({ where: { grReceiptId }, select: { grReceiptId: true } });
     return !!row;
+  }
+
+  async annulmentStateOf(grReceiptIds: string[]): Promise<Map<string, boolean>> {
+    if (grReceiptIds.length === 0) return new Map();
+    const rows: Array<{ grReceiptId: string; anulado: boolean }> = await this.table.findMany({
+      where: { grReceiptId: { in: grReceiptIds } },
+      select: { grReceiptId: true, anulado: true },
+    });
+    return new Map(rows.map((r) => [r.grReceiptId, r.anulado]));
   }
 
   async existingIds(grReceiptIds: string[]): Promise<Set<string>> {
