@@ -43,10 +43,14 @@ describe('finance-growth composition root — Fase 1 receipt-ingest wiring', () 
     expect(appSrc).toContain('createFinanceGrowthRouter(');
   });
 
+  // fix-wave RF18 — this assertion still used the FIXED 1000-char window the
+  // comment right below documents as the exact bug fix-wave-2 had to fix
+  // (a comment inserted inside the call silently blinds it, and the test then
+  // fails — or worse, passes — for reasons unrelated to the wiring). It now
+  // uses the same `financeRouterCall()` helper as its siblings, which slices
+  // to the call's own closing `}));`.
   it('wires REAL Prisma repos into the invoice-type use cases (not a fixture)', () => {
-    const callIdx = appSrc.indexOf('createFinanceGrowthRouter(');
-    expect(callIdx).toBeGreaterThan(-1);
-    const callWindow = appSrc.slice(callIdx, callIdx + 1000);
+    const callWindow = financeRouterCall();
     expect(callWindow).toContain('new ListFinanceInvoiceTypes(financeInvoiceTypesRepo)');
     expect(callWindow).toContain('new ReclassifyFinanceInvoiceType(financeInvoiceTypesRepo)');
     expect(callWindow).toContain('new GetFinanceSyncStatus(financeSyncStateRepo)');
@@ -172,6 +176,20 @@ describe('finance-growth composition root — Fase 1 receipt-ingest wiring', () 
       expect(start).toBeGreaterThan(-1);
       expect(snapshotBootstrapSrc).toContain('new PgAdvisoryLock()');
     });
+
+    // fix-wave RF3 — the nightly job reads the out-of-horizon rebuild queue
+    // through its `SyncStateRepository`. That collaborator is OPTIONAL on the
+    // constructor (pre-existing, for tests that never assert persistence), so
+    // dropping it here would silently disable the whole repair path with every
+    // test still green — exactly the "feature sin perilla" shape.
+    it('threads the REAL SyncStateRepository in — without it the out-of-horizon rebuild queue is never read (RF3)', () => {
+      const start = snapshotBootstrapSrc.indexOf('new FinanceSnapshotScheduler(');
+      expect(start).toBeGreaterThan(-1);
+      const end = snapshotBootstrapSrc.indexOf(');', start);
+      expect(end).toBeGreaterThan(start);
+      expect(snapshotBootstrapSrc.slice(start, end)).toMatch(/\bsyncStateRepo\b/);
+      expect(snapshotBootstrapSrc).toContain('new PrismaSyncStateRepository()');
+    });
   });
 
   describe('R9: bootstrapFinanceReceiptsIngest wires itemRepo/retencionRepo into BOTH use cases', () => {
@@ -219,6 +237,18 @@ describe('finance-growth composition root — Fase 1 receipt-ingest wiring', () 
       expect(call).toMatch(/\bitemRepo\b/);
       expect(call).toMatch(/\bretencionRepo\b/);
       expect(call).toMatch(/\bsyncConfig\b/);
+    });
+
+    // fix-wave RF2 — the delta lane is the third consumer of the SAME live
+    // config. A text pin here is the cheap third layer under the executed
+    // bootstrap test (`bootstrapFinanceReceiptsIngest.test.ts`), which is what
+    // actually proves the INSTANCE is shared.
+    it('SyncGrReceiptsDelta is constructed with syncConfig (RF2 — the guard knob is live on the hottest lane too)', () => {
+      const start = bootstrapSrc.indexOf('new SyncGrReceiptsDelta(');
+      expect(start).toBeGreaterThan(-1);
+      const end = bootstrapSrc.indexOf(');', start);
+      expect(end).toBeGreaterThan(start);
+      expect(bootstrapSrc.slice(start, end)).toMatch(/\bsyncConfig\b/);
     });
 
     it('new FinanceReceiptIngestScheduler( is constructed with the syncReconcile variable', () => {

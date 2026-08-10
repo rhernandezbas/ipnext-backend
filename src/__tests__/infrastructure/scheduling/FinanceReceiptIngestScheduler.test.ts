@@ -971,11 +971,23 @@ describe('FinanceReceiptIngestScheduler', () => {
   // R4's lesson applied to the new lane: a shared counter lets one lane's
   // recovery mask another's sustained failure.
   describe('gr-receipt-annulment: reconcile lane arbitration (delta > reconcile > backfill)', () => {
-    it('scenario 6 — delta claims the tick over reconcile and backfill, even when both have work', async () => {
-      const { state, delta, backfill, reconcile, scheduler, syncConfig } = makeHarness();
+    // ── fix-wave RF6 — this test USED to say "reconcile is due by default
+    // (never ran)". It was not: `makeHarness()` pre-seeds RECONCILE_ENTITY as
+    // a CLOSED sweep that JUST RAN, so reconcile had no work at all and delta
+    // won by default. The test therefore passed with the priority INVERTED
+    // (reconcile checked before delta) — it certified nothing about the
+    // ordering it is named after. The fixture is now overridden explicitly so
+    // BOTH lanes genuinely compete for the tick.
+    it('scenario 6 — delta claims the tick over reconcile and backfill, even when ALL THREE genuinely have work', async () => {
+      const now = new Date('2026-08-10T12:05:00Z');
+      const { state, delta, backfill, reconcile, scheduler, syncConfig } = makeHarness({ now: () => now });
       await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
-      await state.save({ entity: DELTA_ENTITY, cursor: '10-07-2026:15-07-2026:20', lastRunAt: new Date(), lastResult: 'page ok', itemsSynced: 20 });
-      // reconcile is due by default (never ran) — same "also has work" shape as backfill.
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-07-2026:15-07-2026:20', lastRunAt: now, lastResult: 'page ok', itemsSynced: 20 });
+      // Reconcile made DUE on purpose: a sweep with pending pages is due
+      // regardless of cadence. Without this, the harness default (closed sweep,
+      // just ran) makes reconcile ineligible and the assertion below is
+      // satisfied by an inverted arbiter just as happily as by a correct one.
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '06-07-2026:09-08-2026:100', lastRunAt: now, lastResult: 'page ok @100', itemsSynced: 100 });
 
       const result = await scheduler.tick();
 
@@ -1032,17 +1044,40 @@ describe('FinanceReceiptIngestScheduler', () => {
       expect(result.lane).toBe('reconcile');
     });
 
-    it('reconcileEnabled: false means reconcile is never due — backfill gets the turn instead (delta already satisfied)', async () => {
-      const { state, backfill, reconcile, scheduler, syncConfig } = makeHarness();
+    // ── fix-wave RF6 — same fixture trap as scenario 6: with the harness
+    // default (reconcile closed and just-run) reconcile is ineligible ANYWAY,
+    // so this test passed with the `cfg.reconcileEnabled &&` kill-switch
+    // DELETED from the arbiter. Reconcile is now seeded as unambiguously DUE
+    // (pending pages), so the ONLY thing that can keep it out of the tick is
+    // the kill-switch itself.
+    it('reconcileEnabled: false keeps a DUE reconcile out of the tick — backfill gets the turn instead (delta already satisfied)', async () => {
+      const now = new Date('2026-08-10T12:05:00Z');
+      const { state, backfill, reconcile, scheduler, syncConfig } = makeHarness({ now: () => now });
       await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
       await syncConfig.update({ reconcileEnabled: false });
-      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date(), lastResult: 'ok', itemsSynced: 1 }); // delta NOT due
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: now, lastResult: 'ok', itemsSynced: 1 }); // delta NOT due
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '06-07-2026:09-08-2026:100', lastRunAt: now, lastResult: 'page ok @100', itemsSynced: 100 }); // reconcile IS due
 
       const result = await scheduler.tick();
 
       expect(backfill.execute).toHaveBeenCalledTimes(1);
       expect(reconcile.execute).not.toHaveBeenCalled();
       expect(result.lane).toBe('backfill');
+    });
+
+    it('the SAME due reconcile DOES claim the tick once the kill-switch is back on — proof the previous test is about the switch, not about eligibility', async () => {
+      const now = new Date('2026-08-10T12:05:00Z');
+      const { state, backfill, reconcile, scheduler, syncConfig } = makeHarness({ now: () => now });
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+      await syncConfig.update({ reconcileEnabled: true });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: now, lastResult: 'ok', itemsSynced: 1 });
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '06-07-2026:09-08-2026:100', lastRunAt: now, lastResult: 'page ok @100', itemsSynced: 100 });
+
+      const result = await scheduler.tick();
+
+      expect(reconcile.execute).toHaveBeenCalledTimes(1);
+      expect(backfill.execute).not.toHaveBeenCalled();
+      expect(result.lane).toBe('reconcile');
     });
 
     it('activeLane reports "reconcile" while it holds the turn', async () => {
@@ -1079,6 +1114,70 @@ describe('FinanceReceiptIngestScheduler', () => {
 
         expect(backfillRanAtLeastOnce).toBe(true);
         void reconcile;
+      });
+
+      // ── fix-wave RF7 — the counters must be independent in BOTH directions,
+      // and the direction nothing pinned was the RESET: a successful reconcile
+      // tick clearing `deltaConsecutiveFailures` (or vice versa). The existing
+      // tests only ever observe which LANE ran, and the alternation pattern
+      // looks the same either way; `degraded` is what actually lies. This is
+      // R4's own lesson ("one lane's recovery must not erase the other's
+      // failure signal") applied to the pair R4 never covered.
+      it("a SUCCESSFUL reconcile tick never clears delta's failure streak — /sync/status stays degraded through every reconcile success", async () => {
+        const now = new Date('2026-08-10T14:00:00Z');
+        const { state, scheduler, syncConfig } = makeHarness({ now: () => now });
+        await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+        // Delta ALWAYS due (pending pages) and always failing.
+        await state.save({ entity: DELTA_ENTITY, cursor: '10-07-2026:15-07-2026:0', lastRunAt: now, lastResult: 'error: GR down', itemsSynced: 0 });
+        // Reconcile ALWAYS due (pending pages) and always succeeding — it takes
+        // the turns delta cedes once delta is starved.
+        await state.save({ entity: RECONCILE_ENTITY, cursor: '06-07-2026:09-08-2026:0', lastRunAt: now, lastResult: 'page ok', itemsSynced: 0 });
+        (scheduler as unknown as { syncDelta: { execute: jest.Mock } }).syncDelta = fakeDelta(new Error('GR down')) as never;
+        (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = fakeReconcile({
+          pageProcessed: 5,
+          sweepInProgress: true,
+          windowFrom: '06-07-2026',
+          windowTo: '09-08-2026',
+        }) as never;
+
+        let sawReconcileSucceedWhileNotDegraded = false;
+        let sawReconcileRun = false;
+        for (let i = 0; i < 12; i++) {
+          const r = await scheduler.tick();
+          if (r.lane === 'reconcile') {
+            sawReconcileRun = true;
+            if (!scheduler.status.degraded) sawReconcileSucceedWhileNotDegraded = true;
+          }
+        }
+
+        expect(sawReconcileRun).toBe(true); // the scenario actually happened
+        expect(sawReconcileSucceedWhileNotDegraded).toBe(false);
+        expect(scheduler.status.degraded).toBe(true);
+        expect(scheduler.status.consecutiveFailures).toBeGreaterThanOrEqual(5);
+      });
+
+      it("a SUCCESSFUL delta tick never clears reconcile's failure streak — the mirror image, same assertion", async () => {
+        const now = new Date('2026-08-10T14:00:00Z');
+        const { state, scheduler, syncConfig } = makeHarness({ now: () => now });
+        // deltaCheckIntervalMs=0 ⇒ delta is due on EVERY tick and succeeds,
+        // interleaving with a permanently-failing reconcile.
+        await seedConfig(syncConfig, { deltaCheckIntervalMs: 0, deltaStarvationThreshold: 100 });
+        await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: now, lastResult: 'ok', itemsSynced: 1 });
+        await state.save({ entity: RECONCILE_ENTITY, cursor: '06-07-2026:09-08-2026:0', lastRunAt: now, lastResult: 'error: GR down', itemsSynced: 0 });
+        (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = fakeReconcile(new Error('GR down')) as never;
+
+        // Reconcile fails 3 times first (delta not due yet on these ticks).
+        await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000, deltaStarvationThreshold: 100 });
+        for (let i = 0; i < 3; i++) await scheduler.tick();
+        expect(scheduler.status.consecutiveFailures).toBe(3);
+
+        // Now let delta run and SUCCEED — it must not touch reconcile's streak.
+        await seedConfig(syncConfig, { deltaCheckIntervalMs: 0, deltaStarvationThreshold: 100 });
+        const r = await scheduler.tick();
+
+        expect(r.lane).toBe('delta');
+        expect(scheduler.status.degraded).toBe(true);
+        expect(scheduler.status.consecutiveFailures).toBe(3); // reconcile's streak, intact
       });
 
       it("reconcile's failure streak does NOT feed delta's own F4 counter, and vice versa — independent circuit breakers", async () => {
