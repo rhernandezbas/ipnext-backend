@@ -361,19 +361,44 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
    * count===0 → perdimos (o la tarea no existe) — releemos para reportar quién ganó.
    */
   async closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult> {
-    const { count } = await (prisma.scheduledTask as any).updateMany({
-      where: { id, generalStatus: { not: 'closed' } },
-      data: {
-        generalStatus: 'closed',
-        isClosed: true,
-        closureOrigin: input.origin,
-        closureResultCode: input.resultCode ?? null,
-        closedAt: new Date(),
-        closedByUserId: input.closedByUserId ?? null,
-      },
+    // FIX-5 (fix wave W1a) — the guard and the re-read are ONE unit of work.
+    //
+    // They used to be two independent round-trips, i.e. potentially two pool
+    // connections with an arbitrary gap between them. The guard itself was always
+    // atomic, but the REPORT was not: on a WIN the UPDATE committed immediately and a
+    // third writer could reopen + re-close the task before our re-read landed — the
+    // method would then answer `closed: true` while returning SOMEBODY ELSE'S
+    // closureOrigin/closedAt, attributing another origin's closure to this caller.
+    //
+    // An interactive `$transaction` pins both statements to one connection and holds
+    // the row lock the UPDATE took until commit, so on a win the re-read is guaranteed
+    // to observe exactly our own write.
+    //
+    // Chosen over `UPDATE ... RETURNING` via `$queryRaw`: RETURNING would force us to
+    // hand-write the column list AND re-implement the `INCLUDE` JOINs that `toTask`
+    // needs (stage / customer / contract / assignee / watchers / checklist), duplicating
+    // the mapping and rotting silently on the next schema change.
+    //
+    // Residual, on purpose: in the LOSING case our UPDATE matched no row and so took no
+    // lock, meaning the winner we report is still a plain READ COMMITTED read. That is
+    // inherent — there is no write of ours to pin it to — and harmless: we report the
+    // most recent winner, which is exactly what the conflict log wants.
+    const { count, row } = await (prisma as any).$transaction(async (tx: any) => {
+      const { count } = await tx.scheduledTask.updateMany({
+        where: { id, generalStatus: { not: 'closed' } },
+        data: {
+          generalStatus: 'closed',
+          isClosed: true,
+          closureOrigin: input.origin,
+          closureResultCode: input.resultCode ?? null,
+          closedAt: new Date(),
+          closedByUserId: input.closedByUserId ?? null,
+        },
+      });
+      const row = await tx.scheduledTask.findUnique({ where: { id }, include: INCLUDE });
+      return { count, row };
     });
 
-    const row = await (prisma.scheduledTask as any).findUnique({ where: { id }, include: INCLUDE });
     if (!row) {
       return { closed: false, task: null, existingOrigin: null, existingResultCode: null };
     }
@@ -744,7 +769,26 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     // #41 — generalStatus is the truth; isClosed is synced for ops tooling only.
     // generalStatus wins over isClosed when both present (precedence D4).
     const gs = data.generalStatus ?? (data.isClosed !== undefined ? (data.isClosed ? 'closed' : 'open') : undefined);
-    if (gs !== undefined) { update['generalStatus'] = gs; update['isClosed'] = gs === 'closed'; }
+    if (gs !== undefined) {
+      update['generalStatus'] = gs;
+      update['isClosed'] = gs === 'closed';
+      // FIX-1 (fix wave W1a) — REOPEN CLEARS THE CLOSURE STAMP. Any transition to a
+      // generalStatus that is NOT 'closed' (open, dismissed — including the legacy
+      // `isClosed:false` compat path, already folded into `gs`) wipes the four closure
+      // columns. Otherwise a reopened task keeps advertising who closed it and when,
+      // contradicting the spec ("closureOrigin MUST be null unless generalStatus ===
+      // 'closed'") and leaving closeTaskIfOpen's conflict check comparing against a
+      // stale winner. It lives HERE — the single place the update is translated — so
+      // every writer inherits it (both the plain and the $transaction/watchers branch).
+      // NOT written when generalStatus is absent from the patch: the FE resubmits the
+      // full body on every save, so an unconditional null would wipe legitimate stamps.
+      if (gs !== 'closed') {
+        update['closureOrigin'] = null;
+        update['closureResultCode'] = null;
+        update['closedAt'] = null;
+        update['closedByUserId'] = null;
+      }
+    }
     if (data.reviewedByInventory !== undefined) update['reviewedByInventory'] = data.reviewedByInventory;
     if (data.ticketId !== undefined) update['ticketId'] = data.ticketId;
     // #54 — locality snapshot

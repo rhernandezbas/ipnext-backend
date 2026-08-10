@@ -382,11 +382,24 @@ export class IngestClosedServiceOrders {
       // and — when a DIFFERENT origin got there first with a DIFFERENT resultCode —
       // applyTaskClosure logs the discrepancy instead of silently staying quiet.
       if (moved?.stageCategory === 'hecho') {
+        // FIX-4(d) (fix wave W1a) — the discrepancy is reported ONLY on the SO's FIRST
+        // transition into closed. IClass bumps `iclassUpdatedAt` on already-ENCERRADO
+        // orders (approval, an edited commentary, a billing tweak); each bump escapes
+        // the idempotency shortcut above and re-runs this whole block. Without the gate,
+        // a task the staff won with a different result would emit a BRAND NEW
+        // `closure_conflict` on every single tick — turning a queryable discrepancy into
+        // queryable spam. The discriminator needs no extra query: `this.closed.upsert`
+        // only runs AFTER the `statusCode !== TERMINAL_STATUS` guard, so the mere
+        // EXISTENCE of a mirror row (`existing`) proves this SO was already ingested
+        // while closed. `existing === null` ⇔ this run IS the transition.
+        // The CLOSE itself is NOT gated: it stays idempotent + atomic, so a task an
+        // operator reopened still gets re-closed by a later run, exactly as before.
         const closeResult = await applyTaskClosure(this.scheduling, this.recorder, {
           taskId: task.id,
           origin: 'iclass',
           resultCode: s.resultCodeName ?? null,
           closedByUserId: null,
+          reportConflict: existing === null,
         });
         if (closeResult.closed && this.recorder) {
           await this.recorder.record(task.id, 'status_changed', {

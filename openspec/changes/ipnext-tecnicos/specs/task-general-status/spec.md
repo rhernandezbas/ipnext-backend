@@ -26,7 +26,7 @@ interface ScheduledTask {
 }
 ```
 
-A nivel de columna (`schema.prisma`), `closureOrigin` es `String` — NO un enum de Prisma — con default a nivel de schema, siguiendo el mismo criterio que `generalStatus`/`priority`/`category` (catálogos que pueden crecer; un cuarto origen como `'gr'` es plausible a futuro). El tipo CERRADO (`'app' | 'iclass' | 'staff'`) vive en TypeScript, que es donde el compilador lo exige. Las tareas cerradas ANTES de esta migración quedan con `closureOrigin=null` — no hay backfill retroactivo (rellenar con un origen inventado falsearía la auditoría).
+A nivel de columna (`schema.prisma`), `closureOrigin` es `String?` — NO un enum de Prisma — **nullable y SIN default a nivel de schema** (`closureOrigin String?`), siguiendo el mismo criterio que `generalStatus`/`priority`/`category` para el tipo (catálogos que pueden crecer; un cuarto origen como `'gr'` es plausible a futuro). Un default de columna sería incorrecto: le pondría un origen a toda tarea insertada, incluidas las abiertas, violando el propio invariante de esta sección. La escribe únicamente la escritura atómica (`closeTaskIfOpen`), y toda transición a un `generalStatus` distinto de `'closed'` la vuelve a `null`. El tipo CERRADO (`'app' | 'iclass' | 'staff'`) vive en TypeScript, que es donde el compilador lo exige. Las tareas cerradas ANTES de esta migración quedan con `closureOrigin=null` — no hay backfill retroactivo (rellenar con un origen inventado falsearía la auditoría).
 
 (Previously: shape no incluía `closureOrigin` — no existía forma de saber QUIÉN cerró una tarea.)
 
@@ -80,6 +80,14 @@ Cuando dos orígenes distintos aportan un resultado de cierre para la MISMA tare
 2. Un `ScheduledTaskActivity` tipo `closure_conflict` (tabla append-only ya existente) con `metadata: { winnerOrigin, winnerResultCode, loserOrigin, loserResultCode }` — así la discrepancia queda CONSULTABLE, no solo un log que rota.
 
 Ambos se emiten ÚNICAMENTE cuando el `resultCode` del perdedor DIFIERE del ganador — un cierre duplicado con el MISMO resultado no es una discrepancia, es idempotencia, y no genera ni log ni activity.
+
+Precisión de "DIFIERE" (fix wave, FIX-4 — sin esto la regla generaba ruido que enterraba las discrepancias reales):
+
+- Si el PERDEDOR no aporta `resultCode` (`null`), NO hay discrepancia. No trajo un resultado que pueda contradecir a nadie; es el caso cotidiano del staff cerrando a mano desde el panel (los dos caminos de staff siempre pasan `null`).
+- Con AMBOS `resultCode` no nulos, la comparación es NORMALIZADA (trim + minúsculas + puntuación final + espacios internos colapsados: el mismo `normalizeResultCode` que ya usa el resolver de códigos del ingest). IClass devuelve el mismo código con variaciones cosméticas y eso NO es una discrepancia.
+- Si la tarea NO EXISTE, no hay ni log ni activity: no hay ganador cuyo resultado contradecir.
+- Un perdedor CON código sobre un ganador SIN código SÍ es discrepancia.
+- El ingest la registra sólo en la PRIMERA transición de la OS a cerrada; los reprocesos por bump de `iclassUpdatedAt` sobre una OS ya espejada no la repiten.
 
 #### Scenario: Later IClass result differs from the app's — logged and recorded as an activity, not applied
 - GIVEN `t-1` fue cerrada por `app` con `resultCode='INSTALACION_OK'` (`closureOrigin='app'`)

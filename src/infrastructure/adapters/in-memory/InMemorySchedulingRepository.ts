@@ -157,6 +157,19 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     this.beforeCloseWrite = hook;
   }
 
+  /**
+   * Test-only reader for the closure side table (`closureResultCode`/`closedAt`/
+   * `closedByUserId`). These three are real COLUMNS in Postgres but are NOT part of
+   * the public `ScheduledTask` DTO, so in-memory they live off-entity. Without this
+   * accessor a test can only observe `closureOrigin` — which is exactly how the
+   * "closedAt is never set" / "a writer stopped passing closedByUserId" mutants
+   * survived the suite. Returns null when the task was never closed (or was reopened).
+   */
+  getClosureDetails(taskId: string): { resultCode: string | null; closedByUserId: string | null; closedAt: string } | null {
+    const d = this.closureDetails.get(taskId);
+    return d ? { ...d } : null;
+  }
+
   constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository, statusCatalog?: IClassStatusCatalogRepository) {
     this.stageRepo = stageRepo;
     this.templateRepo = templateRepo;
@@ -527,6 +540,17 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     // isClosed when both present (precedence D4). Omitted → preserve current.
     const gs = data.generalStatus ?? (data.isClosed !== undefined ? (data.isClosed ? 'closed' : 'open') : undefined);
 
+    // FIX-1 (fix wave W1a) — REOPEN CLEARS THE CLOSURE STAMP. Any transition to a
+    // generalStatus that is NOT 'closed' (open, dismissed — via `generalStatus` or via
+    // the legacy `isClosed:false` compat path, both already folded into `gs` above)
+    // must wipe closureOrigin/closureResultCode/closedAt/closedByUserId. Otherwise a
+    // reopened task keeps advertising who closed it and when, which contradicts the
+    // spec ("closureOrigin MUST be null unless generalStatus === 'closed'") and would
+    // make the next closeTaskIfOpen conflict-check compare against a stale winner.
+    // It lives HERE — where the update is translated — so every writer inherits it.
+    const reopening = gs !== undefined && gs !== 'closed';
+    if (reopening) this.closureDetails.delete(id);
+
     this.tasks[index] = {
       ...current,
       ...(data.title !== undefined && { title: data.title }),
@@ -552,6 +576,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.travelTimeTo !== undefined && { travelTimeTo: data.travelTimeTo }),
       ...(data.travelTimeFrom !== undefined && { travelTimeFrom: data.travelTimeFrom }),
       ...(gs !== undefined && { generalStatus: gs, isClosed: gs === 'closed' }),
+      ...(reopening && { closureOrigin: null }),
       ...(data.reviewedByInventory !== undefined && { reviewedByInventory: data.reviewedByInventory }),
       // #54 — locality snapshot
       ...((data as { iclassCityCode?: string | null }).iclassCityCode !== undefined && { iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode }),
@@ -727,6 +752,19 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...overrides,
     } as Omit<ScheduledTask, 'stageCategory' | 'createdAt' | 'updatedAt'> & { stageId: string });
     this.tasks.push(task);
+    // FIX-6 / LOW-3 (fix wave W1a) — a task seeded ALREADY closed must carry closure
+    // details, exactly like one closed through closeTaskIfOpen. Otherwise the fixture
+    // is a trap: `generalStatus: 'closed'` with `getClosureDetails() === null` is a state
+    // Postgres can never hold, and a future test asserting "closing stamps closedAt"
+    // would read null and be "fixed" by weakening the assertion instead of the code.
+    // resultCode stays null (the seed did not claim one) unless the caller pins it.
+    if (task.generalStatus === 'closed') {
+      this.closureDetails.set(task.id, {
+        resultCode: null,
+        closedByUserId: null,
+        closedAt: task.updatedAt,
+      });
+    }
     return { ...task };
   }
 
@@ -791,6 +829,11 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     const index = this.tasks.findIndex(t => t.id === id);
     if (index === -1) return false;
     this.tasks.splice(index, 1);
+    // FIX-6 / LOW-3 (fix wave W1a) — the side table must die with the row. In Postgres
+    // these are COLUMNS of ScheduledTask and the DELETE takes them along; leaving the
+    // Map entry behind means a test that reuses the id inherits the previous task's
+    // closure and passes for the wrong reason.
+    this.closureDetails.delete(id);
     return true;
   }
 

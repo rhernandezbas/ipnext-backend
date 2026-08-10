@@ -18,10 +18,13 @@ import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFla
 import { StageReturnSuggestions } from '@application/use-cases/StageReturnSuggestions';
 import { PrismaReturnSuggestionRepository } from '../adapters/prisma/PrismaReturnSuggestionRepository';
 import { PrismaInventoryAssetRepository } from '../adapters/prisma/PrismaInventoryAssetRepository';
+import { DefaultTaskActivityRecorder } from '../services/DefaultTaskActivityRecorder';
+import { RecordTaskActivity } from '@application/use-cases/RecordTaskActivity';
+import { PrismaTaskActivityRepository } from '../adapters/prisma/PrismaTaskActivityRepository';
 
 type SideEffects = Pick<
   IngestClosedOptions,
-  'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation' | 'suggestions' | 'stageReturns' | 'featureFlags'
+  'portal' | 'postComment' | 'buildSuggestions' | 'extractOcr' | 'auditInstallation' | 'suggestions' | 'stageReturns' | 'featureFlags' | 'recorder'
 >;
 
 /**
@@ -44,6 +47,20 @@ export function buildClosureSideEffects(): SideEffects {
       new PrismaInventoryAssetRepository(),
     ),
     featureFlags: new PrismaFeatureFlagRepository(),
+    // FIX-2 (fix wave W1a) — the ACTIVITY RECORDER, wired HERE and not in each of the
+    // three composition roots (bootstrapIClassClosure / bootstrapTaskAutocomplete /
+    // bootstrapBackfill), which is the whole point: one place, three jobs, no
+    // "arreglé la instancia y me olvidé del hermano".
+    //
+    // Without it the cron's IngestClosedServiceOrders ran with `recorder: undefined`,
+    // so `applyTaskClosure` could log `[task-closure-conflict]` but NEVER persist the
+    // `closure_conflict` ScheduledTaskActivity the spec requires ("así la discrepancia
+    // queda CONSULTABLE, no solo un log que rota"). It also silently disabled the #41
+    // `status_changed` event on the ingest's own closures. Same instance shape as
+    // app.ts (DefaultTaskActivityRecorder → RecordTaskActivity → Prisma repo), and
+    // best-effort by contract: DefaultTaskActivityRecorder swallows its own failures,
+    // so a recorder error can never abort a closure the cron already committed.
+    recorder: new DefaultTaskActivityRecorder(new RecordTaskActivity(new PrismaTaskActivityRepository())),
   };
 
   const portal = config.iclassPortal;

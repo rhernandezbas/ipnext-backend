@@ -38,9 +38,17 @@ export interface CloseIClassServiceOrderInput {
  * 8. Close locally via applyTaskClosure(origin='staff') + record 'status_changed' on a WIN.
  *    wave-1a (cierre atómico): step 4's `generalStatus === 'open'` check is NOT the
  *    idempotency fence anymore — a concurrent closer (e.g. the ingest cron) can still
- *    win between step 4 and here. The atomic guard inside applyTaskClosure closes that
- *    window; losing it after already pushing to IClass does NOT throw (the push is a
- *    separate, best-effort external concern — AD-2).
+ *    win between step 4 and here.
+ *
+ *    FIX-9(b) — SCOPE, honestly: the atomic guard closes the LOCAL window only. It
+ *    guarantees that our `generalStatus`/`closureOrigin` write cannot clobber a
+ *    concurrent closer's, nothing more. The PUSH to IClass in step 7 has NO fence: it
+ *    already happened by the time we get here, and two operators racing this endpoint
+ *    can both push a close to IClass with different result codes. That is accepted by
+ *    AD-2 (the port is a dumb transport; IClass is the system of record for its own SO
+ *    and answers 409/rejection on its side). Losing the LOCAL race after having pushed
+ *    does NOT throw — the discrepancy is recorded as a `closure_conflict` activity by
+ *    applyTaskClosure and reconciled by the operator, not by this use case.
  * 9. Return updated task DTO
  */
 export class CloseIClassServiceOrder {

@@ -174,10 +174,33 @@ export class UpdateTask {
     // close would be a silent data-loss regression, not a fix. `diffData` is what the
     // activity diff engine sees: on a LOST race this writer's status never actually
     // changed, so generalStatus/isClosed are stripped to avoid a phantom status_changed.
+    //
+    // FIX-3 (fix wave W1a) — ORDER MATTERS, and it is REST FIRST, CLOSE LAST.
+    // The first cut did the opposite: it closed the task and THEN wrote the rest. When
+    // the rest failed (an invalid `stageId` → the Prisma adapter catches the FK error
+    // and returns null), the use case returned null and the route answered 404 "task
+    // not found" — with the task ALREADY CLOSED in the database. An irreversible write
+    // hidden behind an error response. Inverting it makes both outcomes honest:
+    //   - rest fails  → nothing was closed, the task is untouched, the error is true;
+    //   - rest succeeds → the atomic close runs last and is the only thing that can
+    //     still "fail", and its failure mode is benign (it lost the race; the task is
+    //     closed either way, just by someone else).
+    // ACCEPTED CONSEQUENCE, documented on purpose: when the close LOSES the race, the
+    // rest fields of this patch are ALREADY applied and STAY applied. That is the right
+    // trade — those fields are the operator's edit (notes, assignee, dates) and are
+    // orthogonal to who won the closure; rolling them back would need a transaction
+    // spanning two ports and would throw away work the operator did.
     let updated: ScheduledTask | null;
     let diffData: UpdateTaskInput = data;
     if (isClosingPatch && prev && prev.generalStatus !== 'closed') {
       const { generalStatus: _gs, isClosed: _ic, ...restData } = data;
+      const hasRest = Object.keys(restData).length > 0;
+
+      // 1) The write that CAN fail. Bail before closing anything if it did.
+      const restUpdated = hasRest ? await this.repo.updateTask(id, restData) : null;
+      if (hasRest && !restUpdated) return null;
+
+      // 2) The atomic, irreversible close — last.
       const closeResult = await applyTaskClosure(this.repo, this.recorder, {
         taskId: id,
         origin: 'staff',
@@ -189,9 +212,9 @@ export class UpdateTask {
         diffData = restData;
       }
 
-      updated = Object.keys(restData).length > 0
-        ? await this.repo.updateTask(id, restData)
-        : (closeResult.task ?? await this.repo.getTask(id));
+      // closeResult.task is the freshest read (post-close, and post-rest since the rest
+      // ran first); fall back to the rest write when the task vanished mid-flight.
+      updated = closeResult.task ?? restUpdated ?? await this.repo.getTask(id);
     } else {
       updated = await this.repo.updateTask(id, data);
     }

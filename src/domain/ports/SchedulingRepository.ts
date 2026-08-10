@@ -87,6 +87,25 @@ export interface SchedulingRepository {
    * una tarea (staff, iclass, app) DEBE pasar por acá — es el único chokepoint que
    * arregla la race preexistente entre los escritores de generalStatus='closed'.
    * Molde: `moveTaskToStageIfForward`, mismo patrón de retorno `{ ...boolean-ish }`.
+   *
+   * ALCANCE DEL PREDICADO (FIX-8, decisión explícita): cierra CUALQUIER estado que no
+   * sea `'closed'`, **INCLUIDO `'dismissed'`**. No es un descuido: cerrar a mano una
+   * tarea descartada es una operación legítima del staff, y los cuatro escritores
+   * actuales que NO deben tocar dismissed ya la filtran ANTES de llegar acá (los guards
+   * G1/G2 de IngestClosedServiceOrders, el `generalStatus === 'open'` del step 4 de
+   * CloseIClassServiceOrder). **El caller que necesite excluir dismissed DEBE
+   * pre-chequearlo él mismo** — este método no lo va a hacer por él. En particular
+   * `CloseTaskFromField` (app técnico, wave 1b) tiene que bailar en dismissed ANTES de
+   * invocar el guard, o su 409 `TASK_ALREADY_CLOSED` no dispara nunca.
+   *
+   * DEPENDENCIA DEL FENCE: `generalStatus` es **NOT NULL** en el schema
+   * (`String @default("open")`). El fence descansa en eso: en SQL, `generalStatus <>
+   * 'closed'` es UNKNOWN — y por lo tanto NO matchea — cuando el valor es NULL. Si
+   * alguna vez se hiciera la columna nullable, una fila con NULL dejaría de ser
+   * cerrable por este método (y, del otro lado, Prisma traduce `{ not: 'closed' }`
+   * incluyendo los NULL, con lo que el comportamiento entre el SQL crudo y el ORM
+   * divergiría). O sea: hacer nullable a `generalStatus` ROMPE este guard. No lo hagas
+   * sin rediseñar el predicado.
    */
   closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult>;
   /**
