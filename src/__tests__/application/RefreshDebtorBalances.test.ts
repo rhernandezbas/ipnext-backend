@@ -244,7 +244,7 @@ describe('RefreshDebtorBalances', () => {
   // Comportamiento preexistente — se conserva intacto en el carril rapido
   // ---------------------------------------------------------------------------
 
-  it('upserts balance data via updateClientBalance', async () => {
+  it('upserts balance data via updateBalanceAndInvoices', async () => {
     gr.clients = [makeDebtor('D1')];
     gr.balancesByClient['D1'] = makeBalance('D1', 65722.07);
 

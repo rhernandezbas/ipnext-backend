@@ -3,6 +3,7 @@ import type {
   AssistantDataSourceResolver,
   AssistantSubjectContext,
 } from '@domain/ports/AssistantDataSourceRegistry';
+import { motivoNoDisponible } from './assistantMotivoGuia';
 
 /**
  * ai-assistant-multiagent — fuente `os.abiertas`.
@@ -22,7 +23,7 @@ export class OsAbiertasResolver implements AssistantDataSourceResolver {
   constructor(private readonly listTasks: ListTasks) {}
 
   async resolve(ctx: AssistantSubjectContext): Promise<Record<string, unknown>> {
-    if (!ctx.clientId) return { disponible: false, motivo: 'cliente_no_identificado' };
+    if (!ctx.clientId) return motivoNoDisponible('cliente_no_identificado');
 
     const tasks = await this.listTasks.execute({ customerId: ctx.clientId, status: 'open' });
 

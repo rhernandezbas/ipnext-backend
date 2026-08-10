@@ -1285,18 +1285,51 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // Read-only reconcile diagnostic — only wired when GR is configured (else route 503s).
   let reconcileGrClients: ReconcileGrClients | undefined;
   if (config.gestionReal.enabled && config.gestionReal.cuit && config.gestionReal.secret) {
-    const grClient = new GestionRealClient({
+    // fix wave F6 — DOS clientes GR, no uno compartido. Antes había una sola
+    // instancia y sus dos consumidores tienen requisitos opuestos:
+    //
+    //  · el REFRESH corre dentro de un mensaje de WhatsApp (camino caliente):
+    //    timeout corto, y los reintentos ACOTADOS porque el `withTimeout` del
+    //    use case hace `Promise.race` y NO aborta el axios — al vencer, el
+    //    caller sigue de largo pero la request queda viva y `postWithRetry`
+    //    seguiría reintentando 3 veces con backoff: hasta ~16s de llamadas
+    //    HUÉRFANAS a GR por mensaje, contra un proveedor que justamente se
+    //    degrada bajo carga.
+    //
+    //    fix wave 2 (FW2-2) — pero `maxRetries: 0` era ROMO. Medido: un blip
+    //    simple de GR se recupera en ~694ms con UN reintento, holgado dentro
+    //    del budget de 4s del wrapper. Con cero, ese blip es un handoff
+    //    instantáneo — y como el vuelo es single-flight (F2), el fallo se
+    //    COMPARTE con todos los callers que esperaban ese cliente: un hipo de
+    //    GR se convierte en "un asesor te confirma el saldo" para todos.
+    //    `1` conserva la recuperación del blip y acota el huérfano a UNA
+    //    llamada de más — no las 3 con backoff del defecto original.
+    //
+    //  · el RECONCILE es un diagnóstico read-only que pagina el universo COMPLETO
+    //    de GR: timeout holgado y los reintentos SÍ le sirven (una página que
+    //    falla arruina el conteo entero).
+    //
+    // Compartir la instancia hacía que bajar el techo por el bot le pusiera al
+    // reconcile 4s por página. Pineado por `assistant-composition.test.ts` (F6a).
+    const grRefreshClient = new GestionRealClient({
       baseUrl: config.gestionReal.baseUrl,
       cuit: config.gestionReal.cuit,
       secret: config.gestionReal.secret,
       timeoutMs: config.gestionReal.balanceRefreshTimeoutMs,
+      maxRetries: 1,
+    });
+    const grReconcileClient = new GestionRealClient({
+      baseUrl: config.gestionReal.baseUrl,
+      cuit: config.gestionReal.cuit,
+      secret: config.gestionReal.secret,
+      timeoutMs: config.gestionReal.requestTimeoutMs,
     });
     const mirrorRepo = new PrismaClientMirrorRepository();
-    balanceRefresh = new RefreshClientBalanceIfStale(grClient, mirrorRepo, {
+    balanceRefresh = new RefreshClientBalanceIfStale(grRefreshClient, mirrorRepo, {
       ttlMinutes: config.gestionReal.balanceStaleTtlMinutes,
       timeoutMs: config.gestionReal.balanceRefreshTimeoutMs,
     });
-    reconcileGrClients = new ReconcileGrClients(grClient, new PrismaClientMirrorReadRepository());
+    reconcileGrClients = new ReconcileGrClients(grReconcileClient, new PrismaClientMirrorReadRepository());
   }
 
   // Wire up use cases
@@ -3264,6 +3297,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // ⚠️ Sin esta línea, el motor existiría pero NADIE lo llamaría — exactamente el bug W6
     // del EPIC #38 (rutas cableadas, hook nunca inyectado, CI verde, feature muerta en prod).
     // Pineado por `assistant-composition.test.ts`.
+    //
+    // customer-balance-unmask (D3/R2) — `refreshBalance: balanceRefresh` (ya en scope,
+    // línea ~1284/3235: es la MISMA instancia que ya usa `getInboxClientContext`). Antes
+    // de esta línea la rama de refresco de `ClienteSaldoResolver` era código MUERTO en
+    // prod — el bot podía citar un saldo stale sin intentar refrescarlo primero.
+    // Pineado por P1 (`assistant-composition.test.ts`, boot real de `createApp()`).
     const assistantEngine = composeAssistantEngine({
       conversationRepo,
       customerRepo: customerAdapter,
@@ -3274,6 +3313,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       listTasks,
       threadReader: new ChatMessageThreadReader(chatMessageRepo),
       clientResolver: new CustomerAssistantClientResolver(customerAdapter, customerAdapter),
+      refreshBalance: balanceRefresh,
     });
 
     app.use('/api/messaging', createMessagingRouter(

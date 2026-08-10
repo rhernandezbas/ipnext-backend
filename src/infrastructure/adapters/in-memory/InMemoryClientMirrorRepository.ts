@@ -1,4 +1,8 @@
-import { ClientMirrorRepository, UpsertResult } from '@domain/ports/ClientMirrorRepository';
+import {
+  ClientMirrorRepository,
+  UpdateBalanceAndInvoicesParams,
+  UpsertResult,
+} from '@domain/ports/ClientMirrorRepository';
 import { GrClient, GrContract, GrInvoice } from '@domain/entities/gestionReal';
 import { mapGrInvoice, MappedGrInvoice } from '@application/use-cases/mapGrInvoice';
 
@@ -47,9 +51,31 @@ export class InMemoryClientMirrorRepository implements ClientMirrorRepository {
     return { created };
   }
 
-  async updateClientBalance(grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
-    // No-op for unknown clients (don't throw)
-    this.balances.set(grClienteId, { amount, currency, lastBalanceAt: at });
+  /**
+   * fix wave F3 — gemelo del método atómico de Prisma: **todo o nada.**
+   *
+   * El twin tiene que fallar IGUAL que el original, o los tests certifican una
+   * atomicidad que sólo existe en memoria. Se toma un snapshot antes y se
+   * restaura si cualquiera de las dos escrituras revienta — que es lo que hace
+   * el rollback de Postgres, visto desde afuera.
+   */
+  async updateBalanceAndInvoices(params: UpdateBalanceAndInvoicesParams): Promise<void> {
+    const { grClienteId, amount, currency, invoices, at } = params;
+    const balancesBefore = new Map(this.balances);
+    const invoicesBefore = [...this.invoices];
+
+    try {
+      // Escritura del saldo (no-op para clientes desconocidos: no tira).
+      // FW2-4 — inline: ya no hay un método público que la haga suelta.
+      this.balances.set(grClienteId, { amount, currency, lastBalanceAt: at });
+      if (invoices !== null) {
+        await this.upsertInvoices(grClienteId, invoices, at);
+      }
+    } catch (err) {
+      this.balances = balancesBefore;
+      this.invoices = invoicesBefore;
+      throw err;
+    }
   }
 
   async upsertInvoices(grClienteId: string, invoices: GrInvoice[], at: Date): Promise<void> {

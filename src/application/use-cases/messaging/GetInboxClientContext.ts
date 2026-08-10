@@ -24,6 +24,7 @@ import {
   DEFAULT_BALANCE_STALE_TTL_MINUTES,
   RefreshClientBalanceIfStale,
   isBalanceOlderThanTtl,
+  balanceTtlMinutesForStatus,
 } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { GetClientContextByPhone } from './GetClientContextByPhone';
 import { toWhatsAppE164 } from './toWhatsAppE164';
@@ -183,6 +184,7 @@ export class GetInboxClientContext {
       const refreshed = await this.refreshBalance.execute({
         grClienteId: customer.grClienteId,
         lastBalanceAt: customer.lastBalanceAt,
+        status: customer.status,
       });
       if (refreshed) {
         customer = await this.customerRepo.findById(clientId);
@@ -190,7 +192,15 @@ export class GetInboxClientContext {
     }
 
     const due = customer.balanceDue ?? null;
-    const stale = isBalanceOlderThanTtl(customer.lastBalanceAt, this.ttlMinutes, this.now);
+    // fix wave F7 — TTL por CARRIL: la MISMA regla de edad, pero el ttl sale del
+    // status. Sin esto el inbox discrepaba del mapper para toda `baja` (la ficha
+    // decía fresco, el inbox decía stale sobre el MISMO dato) — justo la deriva
+    // entre call sites que la spec `balance-staleness-helper` existe para cerrar.
+    const stale = isBalanceOlderThanTtl(
+      customer.lastBalanceAt,
+      balanceTtlMinutesForStatus(customer.status, this.ttlMinutes),
+      this.now,
+    );
 
     // RICH-2 — fan-out via Promise.all: a slow collaborator never serializes the
     // rest (spec scenario "un colaborador lento no serializa a los demas").

@@ -40,7 +40,10 @@ describe('RefreshClientBalanceIfStale', () => {
   });
 
   it('fetches balance when older than TTL (stale)', async () => {
-    const staleAt = new Date(now.getTime() - 90 * 60 * 1000); // 90 min ago
+    // FW3 mató el margen del carril rápido: el gate interno usa
+    // `balanceTtlMinutesForStatus`, cuyo efectivo rápido ES el TTL configurado
+    // (60min), sin margen. 3h es simplemente "bien pasado el TTL".
+    const staleAt = new Date(now.getTime() - 3 * 60 * 60 * 1000); // 3 h ago
     gr.balancesByClient['100011'] = makeBalance('100011', 1000);
 
     await uc.execute({ grClienteId: '100011', lastBalanceAt: staleAt.toISOString() });
@@ -126,6 +129,151 @@ describe('RefreshClientBalanceIfStale', () => {
     expect(refreshed).toBe(false);
     // Balance not stored (GR failed)
     expect(mirror.balances.has('100011')).toBe(false);
+  });
+});
+
+/**
+ * fix wave F3 — **saldo y facturas, una sola escritura atómica.**
+ *
+ * El split-brain que esto cierra: `updateClientBalance` commiteaba, y si
+ * `upsertInvoices` fallaba después, `execute()` devolvía `false` (el caller cree
+ * que no pasó nada) con el saldo NUEVO ya en la base y las facturas VIEJAS. Y
+ * con `lastBalanceAt` fresco encima, así que nadie lo veía stale.
+ */
+describe('RefreshClientBalanceIfStale — escritura atómica (F3)', () => {
+  const now = new Date('2026-05-27T12:00:00Z');
+
+  it('F3 — si la parte de facturas falla, el saldo NO queda escrito (rollback)', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balancesByClient['100011'] = {
+      ...makeBalance('100011', 65722.07),
+      invoices: [makeGrInvoice('0001')],
+    };
+    // Falla inyectada EN LA PARTE DE FACTURAS (la segunda escritura).
+    mirror.upsertInvoices = async () => {
+      throw new Error('deadlock en Invoice');
+    };
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: 60 });
+
+    const refreshed = await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+
+    expect(refreshed).toBe(false);
+    // ⚠️ EL PIN: antes de F3 el saldo quedaba commiteado igual.
+    expect(mirror.balances.has('100011')).toBe(false);
+  });
+
+  it('F3 — el camino feliz sigue escribiendo saldo Y facturas', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balancesByClient['100011'] = {
+      ...makeBalance('100011', 1234),
+      invoices: [makeGrInvoice('0001')],
+    };
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: 60 });
+
+    expect(await uc.execute({ grClienteId: '100011', lastBalanceAt: null })).toBe(true);
+    expect(mirror.balances.get('100011')?.amount).toBe(1234);
+    expect(mirror.invoices).toHaveLength(1);
+  });
+});
+
+/**
+ * fix wave F2 — **single-flight por `grClienteId`.**
+ *
+ * La carrera real medida en el review: la ficha (`GetClientDetail`) y el bot
+ * (`ClienteSaldoResolver`) comparten LA MISMA instancia de este colaborador
+ * (pineado por `assistant-composition.test.ts`), y pueden entrar a la vez sobre
+ * el mismo cliente — un agente abre la ficha mientras llega el WhatsApp. Sin
+ * dedup eran DOS llamadas a GR y DOS escrituras: el último en escribir gana, así
+ * que un snapshot VIEJO podía pisar al nuevo y quedar sellado con `lastBalanceAt`
+ * fresco. Un saldo viejo con timbre de fresco es exactamente el modo de falla que
+ * este change existe para evitar — y encima invisible (nadie lo ve stale).
+ *
+ * El gate de staleness queda ANTES del dedup, a propósito: es local, barato y
+ * per-caller. Lo que se dedupe es el VUELO (fetch + escritura), que es lo caro y
+ * lo que puede invertirse. Deploy single-process ⇒ un mapa en memoria alcanza.
+ */
+describe('RefreshClientBalanceIfStale — single-flight (F2)', () => {
+  const now = new Date('2026-05-27T12:00:00Z');
+  const TTL = 60;
+
+  /** GR con latencia CONTROLADA: el vuelo no termina hasta que el test lo suelta. */
+  function deferredGr() {
+    const calls: string[] = [];
+    let release!: (b: GrClientBalance) => void;
+    const gr = {
+      fetchClientBalance: async (grClienteId: string) => {
+        calls.push(grClienteId);
+        return new Promise<GrClientBalance>((resolve) => {
+          release = resolve;
+        });
+      },
+    } as unknown as InMemoryGestionRealPort;
+    return { gr, calls, release: (b: GrClientBalance) => release(b) };
+  }
+
+  it('F2 — dos execute() concurrentes del MISMO cliente: UNA sola llamada a GR y UNA sola escritura; ambos callers reciben true', async () => {
+    const { gr, calls, release } = deferredGr();
+    const mirror = new InMemoryClientMirrorRepository();
+    const writes: number[] = [];
+    // FW2-4: se espía la escritura ATÓMICA — ya no hay una suelta que espiar.
+    const originalUpdate = mirror.updateBalanceAndInvoices.bind(mirror);
+    mirror.updateBalanceAndInvoices = async (params) => {
+      writes.push(params.amount);
+      return originalUpdate(params);
+    };
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    const p1 = uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    const p2 = uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    release(makeBalance('100011', 5000));
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(calls).toEqual(['100011']); // ← el pin: UNA llamada, no dos
+    expect(writes).toEqual([5000]); // ← una sola escritura ⇒ no hay orden que invertir
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+    expect(mirror.balances.get('100011')?.amount).toBe(5000);
+  });
+
+  it('F2 — clientes DISTINTOS no se deduplican entre sí (la clave es el grClienteId, no un lock global)', async () => {
+    const { gr, calls, release } = deferredGr();
+    const mirror = new InMemoryClientMirrorRepository();
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    const p1 = uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    const p2 = uc.execute({ grClienteId: '100022', lastBalanceAt: null });
+    release(makeBalance('x', 1));
+    await Promise.all([p1, p2]);
+
+    expect(calls).toEqual(['100011', '100022']);
+  });
+
+  it('F2 — el slot se libera al terminar el vuelo: un execute() POSTERIOR vuelve a llamar a GR', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balancesByClient['100011'] = makeBalance('100011', 1000);
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+
+    expect(gr.balanceCalls).toEqual(['100011', '100011']);
+  });
+
+  it('F2 — un vuelo que FALLA tampoco deja el slot colgado (el próximo caller reintenta)', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balanceError = new Error('GR caido');
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    expect(await uc.execute({ grClienteId: '100011', lastBalanceAt: null })).toBe(false);
+    gr.balanceError = undefined;
+    gr.balancesByClient['100011'] = makeBalance('100011', 777);
+
+    expect(await uc.execute({ grClienteId: '100011', lastBalanceAt: null })).toBe(true);
+    expect(mirror.balances.get('100011')?.amount).toBe(777);
   });
 });
 

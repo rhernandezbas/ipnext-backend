@@ -63,6 +63,11 @@ export interface ScheduledTask {
   // Flag: task is closed (soft-close, not deleted). Derived: generalStatus === 'closed'.
   isClosed: boolean;
 
+  // wave-1a (cierre atómico first-writer-wins) — quién cerró la tarea. NULL mientras
+  // generalStatus !== 'closed' Y también NULL en tareas cerradas ANTES de esta wave
+  // (histórico, sin backfill inventado — ese dato no existe).
+  closureOrigin: 'app' | 'iclass' | 'staff' | null;
+
   // RV — Revisado por Inventario: inventory team review flag. Default false.
   reviewedByInventory:         boolean;
   reviewedByInventoryAt:       string | null;   // ISO 8601

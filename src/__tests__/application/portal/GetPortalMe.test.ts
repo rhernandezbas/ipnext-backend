@@ -298,6 +298,27 @@ describe('GetPortalMe — customer-portal-api Fase 4.1 (saldo por moneda, fix/po
     expect(sumByCurrency.get('USD')).toBe(10);
   });
 
+  // customer-balance-unmask (Fase 3, tarea 3.11) — spec customer-balance-truth,
+  // requirement "portal self-service balance is untouched". Antes del unmask,
+  // un `Customer.balanceDue:99999` en un cliente `active` sin `late` era
+  // IMPOSIBLE de producir (el mapper lo pisaba a 0) — post-unmask es un
+  // resultado normal para cualquier cliente con deuda real. Este pin prueba
+  // que, sea cual sea el valor de `Client.balanceDue` en la fila, GetPortalMe
+  // JAMÁS lo filtra al portal: solo lee `name`/`status` del Customer
+  // (GetPortalMe.ts:38-39) — los campos de plata SIEMPRE salen de
+  // `getPortalBalanceSummary` (facturas), nunca de `toCustomer`.
+  it('pin post-unmask: findById devuelve balanceDue:99999 (producible ahora) pero getPortalBalanceSummary da null — balances sigue null, el 99999 NUNCA se filtra', async () => {
+    const repo = new FakeCustomerRepository();
+    repo.seed(makeCustomer({ id: 'client-a', status: 'active', balanceDue: 99999, balanceCurrency: 'ARS' }));
+    // sin seedInvoices — getPortalBalanceSummary da null ("sin facturas espejadas").
+    const useCase = new GetPortalMe(repo as unknown as CustomerRepository);
+
+    const result = await useCase.execute('client-a');
+
+    expect(result.balances).toBeNull();
+    expect(JSON.stringify(result)).not.toContain('99999');
+  });
+
   // anti-IDOR (spec 4.5): dos clientes seedeados, cada llamada ve SOLO el
   // balance calculado sobre SUS PROPIAS facturas.
   it('anti-IDOR: dos clientes seedeados, cada balance ve SOLO sus propias facturas', async () => {

@@ -200,4 +200,37 @@ describe('CloseIClassServiceOrder', () => {
       .rejects.toBeInstanceOf(IClassTaskNotOpenError);
     expect(iclass.getCloseCalls()).toHaveLength(0);
   });
+
+  // wave-1a (cierre atómico) — closure routed through the atomic guard (origin=staff).
+  it('wave-1a: happy path sets closureOrigin=staff on the closed task', async () => {
+    const { schedulingRepo, iclass, resultCodeRepo, flagRepo } = await makeRepos();
+    const uc = new CloseIClassServiceOrder(schedulingRepo, iclass, resultCodeRepo, flagRepo);
+
+    const result = await uc.execute({ taskId: TASK_ID, resultCode: RESULT_CODE, commentary: 'x', actorId: 'u1' });
+
+    expect(result.closureOrigin).toBe('staff');
+  });
+
+  // wave-1a — closes the gap between step 4's `generalStatus === 'open'` check (line ~70)
+  // and the local write (line ~101): a concurrent closer (e.g. the ingest cron) can win
+  // the race in that window. This call already pushed the close to IClass (best-effort,
+  // external system of record); losing the LOCAL race must not throw — it returns
+  // whatever the atomic guard decided, same as every other writer in this wave.
+  it('wave-1a: loses the local race to a concurrent iclass close AFTER already pushing to IClass — returns the winner, no throw', async () => {
+    const { schedulingRepo, iclass, resultCodeRepo, flagRepo } = await makeRepos();
+    const uc = new CloseIClassServiceOrder(schedulingRepo, iclass, resultCodeRepo, flagRepo);
+
+    schedulingRepo.setBeforeCloseWriteHook(async () => {
+      schedulingRepo.setBeforeCloseWriteHook(undefined);
+      await schedulingRepo.closeTaskIfOpen(TASK_ID, { origin: 'iclass', resultCode: 'REAGENDADO' });
+    });
+
+    const result = await uc.execute({ taskId: TASK_ID, resultCode: RESULT_CODE, commentary: 'x', actorId: 'u1' });
+
+    // The push to IClass still happened — it is a separate, external concern.
+    expect(iclass.getCloseCalls()).toHaveLength(1);
+    // But the LOCAL state reflects whoever actually won the atomic race.
+    expect(result.generalStatus).toBe('closed');
+    expect(result.closureOrigin).toBe('iclass');
+  });
 });

@@ -22,7 +22,10 @@ const BASE_ROW = {
 
 const TTL_MINUTES = 60;
 const FRESH_AT = new Date(Date.now() - 10 * 60 * 1000); // 10 min ago (within TTL)
-const STALE_AT = new Date(Date.now() - 90 * 60 * 1000); // 90 min ago (past TTL)
+// FW3 mató el margen del carril rápido: el TTL efectivo ES el configurado
+// (60min), sin margen de batch. 3h es simplemente "bien pasado el TTL" — el
+// valor no depende de si hubo margen o no.
+const STALE_AT = new Date(Date.now() - 3 * 60 * 60 * 1000); // 3 h ago (past the configured TTL)
 
 describe('toCustomer — balance fields', () => {
   it('maps balanceDue from Prisma Decimal to number', () => {
@@ -50,11 +53,54 @@ describe('toCustomer — balance fields', () => {
     expect(c.balanceStale).toBe(true);
   });
 
-  it('balanceStale=false and balanceDue=0 for a non-debtor (active)', () => {
-    const row = { ...BASE_ROW, status: 'active', balanceDue: null, balanceCurrency: null, lastBalanceAt: null };
+  // customer-balance-unmask (Fase 1) — este test LOCKEABA el bug original
+  // ("balanceStale=false and balanceDue=0 for a non-debtor (active)"): un
+  // cliente `active` con deuda real terminaba mostrando `balanceDue:0` porque
+  // `toCustomer` pisaba a 0 todo status distinto de `late`. Reescrito contra
+  // la verdad nueva (spec `customer-balance-truth`, requirement "no GR link
+  // means no verified data"). La prueba del revert: reinsertar
+  // `if (status !== 'late') return 0;` en `toCustomer` pone este test en rojo
+  // (revert-probe M-A, design.md Decisión 9).
+  it('S3 — unlinked client with a stray column value: grClienteId:null ⇒ balanceDue:null (nunca 500, nunca 0), sin importar el valor de la columna', () => {
+    const row = { ...BASE_ROW, status: 'active', grClienteId: null, balanceDue: dec(500), balanceCurrency: 'ARS' };
     const c = toCustomer(row, TTL_MINUTES);
-    expect(c.balanceDue).toBe(0);
-    expect(c.balanceStale).toBe(false);
+    expect(c.balanceDue).toBeNull();
+    expect(c.balanceCurrency).toBeNull();
+  });
+
+  it('S4 — linked client, normal path: grClienteId set + row.balanceDue:500 ⇒ balanceDue:500', () => {
+    const row = { ...BASE_ROW, status: 'active', grClienteId: 'GR123', balanceDue: dec(500), balanceCurrency: 'ARS' };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceDue).toBe(500);
+  });
+
+  /**
+   * fix wave F12(c) — `hasGrLink` compara contra `null`/`undefined` EXPLÍCITOS,
+   * nunca truthiness. Un revisor vio una mutación transitoria a
+   * `Boolean(row.grClienteId)`; esto la deja pineada.
+   *
+   * La diferencia importa: `grClienteId: ''` es un dato SUCIO, no "sin link".
+   * Anularle el balance sería inventar una regla que nadie escribió — y con la
+   * misma forma que el bug original: el mapper decidiendo por su cuenta que un
+   * número real no vale.
+   */
+  it('F12c — grClienteId:"" (string vacío, dato sucio) NO es "sin link": el balance pasa (comparación explícita, no truthiness)', () => {
+    const row = { ...BASE_ROW, status: 'active', grClienteId: '', balanceDue: dec(500), balanceCurrency: 'ARS' };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceDue).toBe(500);
+    expect(c.balanceCurrency).toBe('ARS');
+  });
+
+  it('F12c — grClienteId:undefined (columna ausente) SÍ es "sin link"', () => {
+    const row = { ...BASE_ROW, status: 'active', grClienteId: undefined, balanceDue: dec(500), balanceCurrency: 'ARS' };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceDue).toBeNull();
+  });
+
+  it('S7 — non-ARS currency survives: row.balanceCurrency:"DOL" ⇒ balanceCurrency:"DOL" (nunca default a ARS)', () => {
+    const row = { ...BASE_ROW, status: 'active', grClienteId: 'GR123', balanceDue: dec(15), balanceCurrency: 'DOL' };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceCurrency).toBe('DOL');
   });
 
   it('lastBalanceAt is serialized as ISO string when present', () => {
@@ -82,5 +128,32 @@ describe('toCustomer — balance fields', () => {
     expect(c.id).toBe('c-1');
     expect(c.name).toBe('Test Client');
     expect(c.login).toBe('test');
+  });
+});
+
+// ─── customer-balance-unmask (Fase 2) — balanceStale status-agnóstico ───────
+// spec `balance-staleness-helper`: retira el `isBalanceStale` privado
+// (status-aware, `status !== 'late' → false`) y pasa a `isBalanceOlderThanTtl`
+// — el MISMO helper que ya usan `RefreshClientBalanceIfStale`/
+// `GetInboxClientContext`. `S6` es el discriminante real: hoy un `active` con
+// `lastBalanceAt:null` da `balanceStale:false` (el guard está cortocircuitado
+// en abierto — proposal.md, "Por qué esto NO repite el FIX-6", punto 1).
+describe('toCustomer — balanceStale status-agnóstico (Fase 2)', () => {
+  it('S5 — fresh active client: lastBalanceAt=10min, ttl=60 ⇒ balanceStale:false', () => {
+    const row = { ...BASE_ROW, status: 'active', balanceDue: dec(1000), balanceCurrency: 'ARS', lastBalanceAt: FRESH_AT };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceStale).toBe(false);
+  });
+
+  it('S6 — never fetched, ANY status (incl. active): lastBalanceAt:null ⇒ balanceStale:true', () => {
+    const row = { ...BASE_ROW, status: 'active', balanceDue: null, balanceCurrency: null, lastBalanceAt: null };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceStale).toBe(true);
+  });
+
+  it('triangulación — active client, lastBalanceAt older than TTL ⇒ balanceStale:true (el guard hoy está cortocircuitado en abierto)', () => {
+    const row = { ...BASE_ROW, status: 'active', balanceDue: dec(1000), balanceCurrency: 'ARS', lastBalanceAt: STALE_AT };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceStale).toBe(true);
   });
 });

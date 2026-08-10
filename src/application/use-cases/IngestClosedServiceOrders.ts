@@ -24,6 +24,7 @@ import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestion
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { TaskActivityRecorder } from '@domain/ports/TaskActivityRecorder';
 import { SYSTEM_ACTOR } from './taskActivityActor';
+import { applyTaskClosure } from './applyTaskClosure';
 import {
   ClosedServiceOrder,
   ClosedServiceOrderSummary,
@@ -374,11 +375,60 @@ export class IngestClosedServiceOrders {
       // set generalStatus='closed' + emit a System `status_changed`. Tied to THIS move
       // event (not "task is in hecho stage"), so a later reconcile of an UNCHANGED order
       // never re-closes a task the operator reopened (that path never re-invokes this).
-      // Guarded by `task.generalStatus !== 'closed'` to stay idempotent (D8) — a no-op
-      // move into hecho when already closed emits nothing.
-      if (moved?.stageCategory === 'hecho' && task.generalStatus !== 'closed') {
-        await this.scheduling.updateTask(task.id, { generalStatus: 'closed' });
-        if (this.recorder) {
+      // wave-1a (cierre atómico) — routed through applyTaskClosure(origin='iclass')
+      // instead of a bare `task.generalStatus !== 'closed'` + updateTask: that TOCTOU
+      // guard was exactly the preexisting staff↔ingest race (design C1/C2). The atomic
+      // guard is idempotent by construction (closed:false, no-op when already closed),
+      // and — when a DIFFERENT origin got there first with a DIFFERENT resultCode —
+      // applyTaskClosure logs the discrepancy instead of silently staying quiet.
+      if (moved?.stageCategory === 'hecho') {
+        // FIX-4(d) (fix wave W1a) — the discrepancy is reported ONLY on the SO's FIRST
+        // ATTEMPT to close. IClass bumps `iclassUpdatedAt` on already-ENCERRADO orders
+        // (approval, an edited commentary, a billing tweak); each bump escapes the
+        // idempotency shortcut above and re-runs this whole block. Without the gate, a
+        // task the staff won with a different result would emit a BRAND NEW
+        // `closure_conflict` on every single tick — turning a queryable discrepancy into
+        // queryable spam.
+        //
+        // FIX-B (fix wave 2 W1a) — the DISCRIMINATOR changed; the rule did not. It used
+        // to be `existing === null` ("this SO had never been mirrored"), justified by
+        // "the mirror is only written after the terminal-status guard". True but
+        // insufficient: the mirror is upserted ABOVE two bails that skip the close
+        // entirely — a dismissed task, and a result code with no mapped stage. The
+        // second one is the ordinary configuration flow (the operator maps the code
+        // afterwards), and it meant the FIRST run wrote the mirror without ever
+        // attempting to close, so the run that finally DID attempt found
+        // `existing !== null` and dropped the one and only discrepancy in silence.
+        // Now the gate hangs off the attempt itself: `closureAttemptedAt`, stamped on
+        // the mirror right after this call, read in the SAME query as the watermark
+        // (zero extra round-trips). null ⇔ never attempted ⇔ report.
+        // The CLOSE itself is NOT gated: it stays idempotent + atomic, so a task an
+        // operator reopened still gets re-closed by a later run, exactly as before.
+        const alreadyAttempted = existing?.closureAttemptedAt != null;
+        const closeResult = await applyTaskClosure(this.scheduling, this.recorder, {
+          taskId: task.id,
+          origin: 'iclass',
+          resultCode: s.resultCodeName ?? null,
+          closedByUserId: null,
+          reportConflict: !alreadyAttempted,
+        });
+        // Sellar DESPUÉS del intento y sólo la primera vez (el adapter lo hace
+        // condicional). Va acá y no en el upsert porque lo que marca es el INTENTO, no
+        // el espejo: si esta línea se moviera arriba de los bails, el bug vuelve.
+        //
+        // LOW-1 (fix wave 3 W1a) — y sólo cuando el intento fue EVALUABLE-REPORTABLE.
+        // El sello se estampaba también cuando FIX-A había callado por FILA LEGACY, y ahí
+        // no se juzgó nada: no había sello contra el cual contrastar. Gastar el único
+        // disparo del gate en ese no-evento dejaba suprimido PARA SIEMPRE el conflicto
+        // real posterior (el operador reabre → alguien re-cierra post-migración con otro
+        // código → IClass bumpea → el ingest pierde de verdad y no puede reportarlo).
+        // Sí consumen el disparo: el cierre GANADO y la derrota contra un ganador
+        // post-migración — se haya reportado o se haya silenciado por código igual /
+        // por perdedor sin código —, porque en los dos casos hubo evaluación.
+        if (!alreadyAttempted && !closeResult.legacySuppressed) {
+          await this.closed.markClosureAttempted(s.iclassId);
+        }
+        if (closeResult.closed && this.recorder) {
           await this.recorder.record(task.id, 'status_changed', {
             actor: SYSTEM_ACTOR,
             fromValue: task.generalStatus,

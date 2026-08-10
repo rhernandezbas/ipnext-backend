@@ -8,6 +8,8 @@ import { IClassAutoAssigner } from '@domain/ports/IClassAutoAssigner';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 import { normalizeOnuSerial } from '@domain/services/fiberProvisioning';
+import { applyTaskClosure } from './applyTaskClosure';
+import { readClearedClosureStamp, effectiveGeneralStatus } from './reopenClosureStamp';
 
 export class UpdateTask {
   constructor(
@@ -159,12 +161,77 @@ export class UpdateTask {
       }
     }
 
-    // Snapshot the prior state for the diff BEFORE mutating (#10 / D.2).
-    // Also used by the auto-assigner guard (load when needed even if recorder is absent).
-    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined));
+    // Snapshot the prior state for the diff BEFORE mutating (#10 / D.2). wave-1a: also
+    // needed whenever this patch CLOSES the task, to know if it's a real open→closed
+    // transition (route through the atomic guard) or a no-op on an already-closed one.
+    const isClosingPatch = data.generalStatus === 'closed';
+    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined) || isClosingPatch);
     const prev = needsPrev ? await this.repo.getTask(id) : null;
 
-    const updated = await this.repo.updateTask(id, data);
+    // FIX-C (fix wave 2 W1a) — si este patch REABRE la tarea, el sello de cierre se lee
+    // ANTES del write que lo borra (FIX-1 limpia las cuatro columnas). Cubre las dos
+    // vías: `generalStatus` y el legacy `isClosed:false`. Sin recorder no hay a dónde
+    // guardarlo → no se hace la query.
+    const clearedClosure = this.recorder && prev
+      ? await readClearedClosureStamp(
+          this.repo,
+          id,
+          prev.generalStatus,
+          effectiveGeneralStatus(data.generalStatus, data.isClosed),
+        )
+      : null;
+
+    // wave-1a (cierre atómico) — a patch that CLOSES the task routes the closure
+    // itself through the atomic guard (origin=staff); every OTHER field in the same
+    // patch still applies via the normal updateTask path — the FE resubmits the full
+    // body on every save (#40/#53/#54 precedent), so dropping bundled fields here on a
+    // close would be a silent data-loss regression, not a fix. `diffData` is what the
+    // activity diff engine sees: on a LOST race this writer's status never actually
+    // changed, so generalStatus/isClosed are stripped to avoid a phantom status_changed.
+    //
+    // FIX-3 (fix wave W1a) — ORDER MATTERS, and it is REST FIRST, CLOSE LAST.
+    // The first cut did the opposite: it closed the task and THEN wrote the rest. When
+    // the rest failed (an invalid `stageId` → the Prisma adapter catches the FK error
+    // and returns null), the use case returned null and the route answered 404 "task
+    // not found" — with the task ALREADY CLOSED in the database. An irreversible write
+    // hidden behind an error response. Inverting it makes both outcomes honest:
+    //   - rest fails  → nothing was closed, the task is untouched, the error is true;
+    //   - rest succeeds → the atomic close runs last and is the only thing that can
+    //     still "fail", and its failure mode is benign (it lost the race; the task is
+    //     closed either way, just by someone else).
+    // ACCEPTED CONSEQUENCE, documented on purpose: when the close LOSES the race, the
+    // rest fields of this patch are ALREADY applied and STAY applied. That is the right
+    // trade — those fields are the operator's edit (notes, assignee, dates) and are
+    // orthogonal to who won the closure; rolling them back would need a transaction
+    // spanning two ports and would throw away work the operator did.
+    let updated: ScheduledTask | null;
+    let diffData: UpdateTaskInput = data;
+    if (isClosingPatch && prev && prev.generalStatus !== 'closed') {
+      const { generalStatus: _gs, isClosed: _ic, ...restData } = data;
+      const hasRest = Object.keys(restData).length > 0;
+
+      // 1) The write that CAN fail. Bail before closing anything if it did.
+      const restUpdated = hasRest ? await this.repo.updateTask(id, restData) : null;
+      if (hasRest && !restUpdated) return null;
+
+      // 2) The atomic, irreversible close — last.
+      const closeResult = await applyTaskClosure(this.repo, this.recorder, {
+        taskId: id,
+        origin: 'staff',
+        resultCode: null,
+        closedByUserId: actor?.actorId ?? null,
+      });
+
+      if (!closeResult.closed) {
+        diffData = restData;
+      }
+
+      // closeResult.task is the freshest read (post-close, and post-rest since the rest
+      // ran first); fall back to the rest write when the task vanished mid-flight.
+      updated = closeResult.task ?? restUpdated ?? await this.repo.getTask(id);
+    } else {
+      updated = await this.repo.updateTask(id, data);
+    }
 
     if (this.recorder && prev && updated) {
       // Resolve watcher names for the diff (#17): only the ids that actually
@@ -186,7 +253,7 @@ export class UpdateTask {
           }
         }
       }
-      const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR, updated, watcherNames);
+      const events = computeUpdateTaskActivities(prev, diffData, actor ?? SYSTEM_ACTOR, updated, watcherNames, clearedClosure);
       if (events.length > 0) {
         await this.recorder.recordMany(id, events);
       }
