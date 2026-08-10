@@ -4,6 +4,7 @@ import type {
   AssistantSubjectContext,
 } from '@domain/ports/AssistantDataSourceRegistry';
 import type { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
+import { motivoNoDisponible } from './assistantMotivoGuia';
 
 /**
  * ai-assistant-multiagent — fuente `cliente.saldo`.
@@ -50,7 +51,7 @@ export class ClienteSaldoResolver implements AssistantDataSourceResolver {
 
   async resolve(ctx: AssistantSubjectContext): Promise<Record<string, unknown>> {
     // Conversación sin cliente matcheado (teléfono desconocido): no hay nada que aportar.
-    if (!ctx.clientId) return { disponible: false, motivo: 'cliente_no_identificado' };
+    if (!ctx.clientId) return motivoNoDisponible('cliente_no_identificado');
 
     let customer = await this.customers.findById(ctx.clientId);
 
@@ -65,11 +66,11 @@ export class ClienteSaldoResolver implements AssistantDataSourceResolver {
     }
 
     if (customer.balanceDue === null || customer.balanceDue === undefined) {
-      return { disponible: false, motivo: 'saldo_nunca_consultado' };
+      return motivoNoDisponible('saldo_nunca_consultado');
     }
     if (customer.balanceStale) {
       // Se sabe el número, pero no se confía en él. No se emite.
-      return { disponible: false, motivo: 'saldo_desactualizado' };
+      return motivoNoDisponible('saldo_desactualizado');
     }
 
     // fix wave F1 — **la moneda sólo se exige cuando hay un monto POSITIVO que
@@ -102,7 +103,7 @@ export class ClienteSaldoResolver implements AssistantDataSourceResolver {
     // change existe para evitar: un número "real" pero equivocado, dicho con
     // seguridad.
     if (customer.balanceCurrency === null || customer.balanceCurrency === undefined) {
-      return { disponible: false, motivo: 'moneda_no_confirmada' };
+      return motivoNoDisponible('moneda_no_confirmada');
     }
 
     return {

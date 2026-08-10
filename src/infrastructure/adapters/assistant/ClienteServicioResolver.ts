@@ -3,6 +3,7 @@ import type {
   AssistantDataSourceResolver,
   AssistantSubjectContext,
 } from '@domain/ports/AssistantDataSourceRegistry';
+import { motivoNoDisponible } from './assistantMotivoGuia';
 
 /**
  * ai-assistant-multiagent — fuente `cliente.servicio`.
@@ -21,7 +22,7 @@ export class ClienteServicioResolver implements AssistantDataSourceResolver {
   constructor(private readonly customers: CustomerRepository) {}
 
   async resolve(ctx: AssistantSubjectContext): Promise<Record<string, unknown>> {
-    if (!ctx.clientId) return { disponible: false, motivo: 'cliente_no_identificado' };
+    if (!ctx.clientId) return motivoNoDisponible('cliente_no_identificado');
 
     const [customer, contracts] = await Promise.all([
       this.customers.findById(ctx.clientId),

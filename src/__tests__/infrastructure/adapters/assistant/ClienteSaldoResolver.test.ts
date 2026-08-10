@@ -3,6 +3,7 @@ import { assertFactsArePiiFree } from '@application/use-cases/assistant/assistan
 import type { Customer } from '@domain/entities/customer';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { AssistantSubjectContext } from '@domain/ports/AssistantDataSourceRegistry';
+import { MOTIVO_GUIA, type AssistantMotivo } from '@infrastructure/adapters/assistant/assistantMotivoGuia';
 import { customerFrom, grBalanceRow, FIXED_NOW, type FixtureRow } from '../../../helpers/customerFixture';
 
 /**
@@ -108,7 +109,7 @@ describe('ClienteSaldoResolver', () => {
 
     const facts = await resolver.resolve(ctx);
 
-    expect(facts).toEqual({ disponible: false, motivo: 'saldo_desactualizado' });
+    expect(facts).toEqual({ disponible: false, motivo: 'saldo_desactualizado', guia: MOTIVO_GUIA.saldo_desactualizado });
     expect(JSON.stringify(facts)).not.toContain('45000');
   });
 
@@ -119,6 +120,7 @@ describe('ClienteSaldoResolver', () => {
     await expect(resolver.resolve(ctx)).resolves.toEqual({
       disponible: false,
       motivo: 'saldo_nunca_consultado',
+      guia: MOTIVO_GUIA.saldo_nunca_consultado,
     });
   });
 
@@ -155,6 +157,7 @@ describe('ClienteSaldoResolver', () => {
     await expect(resolver.resolve({ ...ctx, clientId: null })).resolves.toEqual({
       disponible: false,
       motivo: 'cliente_no_identificado',
+      guia: MOTIVO_GUIA.cliente_no_identificado,
     });
   });
 
@@ -192,8 +195,64 @@ describe('ClienteSaldoResolver', () => {
 
     const facts = await resolver.resolve(ctx);
 
-    expect(facts).toEqual({ disponible: false, motivo: 'moneda_no_confirmada' });
+    expect(facts).toEqual({ disponible: false, motivo: 'moneda_no_confirmada', guia: MOTIVO_GUIA.moneda_no_confirmada });
     expect(JSON.stringify(facts)).not.toContain('ARS');
+  });
+
+  /**
+   * fix wave F5 — el `motivo` es un identificador interno en snake_case. Suelto
+   * en el prompt, el modelo improvisa: puede leer "saldo_desactualizado" como
+   * "el cliente no pagó", o citar igual un número del hilo. Cada
+   * `disponible:false` tiene que llevar el copy EXACTO que el bot debe usar.
+   *
+   * Exhaustivo sobre los CUATRO caminos de negativa del resolver, no sobre uno
+   * de muestra: la lección "fix-wave-buscar-el-hermano" en formato test.
+   */
+  describe('F5 — todo disponible:false lleva su guía', () => {
+    const casos: Array<{ motivo: AssistantMotivo; resolver: () => ClienteSaldoResolver; ctx: AssistantSubjectContext }> = [
+      {
+        motivo: 'cliente_no_identificado',
+        resolver: () => new ClienteSaldoResolver(repoOf(CUSTOMER_BASE)),
+        ctx: { ...ctx, clientId: null },
+      },
+      {
+        motivo: 'saldo_nunca_consultado',
+        resolver: () => new ClienteSaldoResolver(repoOf(customerFrom({ ...CUSTOMER_ROW, grClienteId: null }))),
+        ctx,
+      },
+      {
+        motivo: 'saldo_desactualizado',
+        resolver: () => new ClienteSaldoResolver(repoOf(customerFrom({ ...CUSTOMER_ROW, lastBalanceAt: STALE_AT }))),
+        ctx,
+      },
+      {
+        motivo: 'moneda_no_confirmada',
+        resolver: () => new ClienteSaldoResolver(repoOf(customerFrom({ ...CUSTOMER_ROW, balanceCurrency: null }))),
+        ctx,
+      },
+    ];
+
+    it.each(casos)('$motivo sale con su guía, nunca crudo', async ({ motivo, resolver, ctx: caseCtx }) => {
+      const facts = await resolver().resolve(caseCtx);
+
+      expect(facts).toEqual({ disponible: false, motivo, guia: MOTIVO_GUIA[motivo] });
+      expect(String(facts.guia).length).toBeGreaterThan(20);
+    });
+
+    it('la guía no rompe la barrera de PII', async () => {
+      const facts = await new ClienteSaldoResolver(
+        repoOf(customerFrom({ ...CUSTOMER_ROW, lastBalanceAt: STALE_AT })),
+      ).resolve(ctx);
+
+      expect(() =>
+        assertFactsArePiiFree(facts, [
+          CUSTOMER_BASE.name,
+          CUSTOMER_BASE.email,
+          CUSTOMER_BASE.phone,
+          CUSTOMER_BASE.address,
+        ]),
+      ).not.toThrow();
+    });
   });
 
   it('S22 — regression: confirmed currency still emits normally', async () => {

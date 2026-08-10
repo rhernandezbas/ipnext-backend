@@ -3,6 +3,7 @@ import { OsAbiertasResolver } from '@infrastructure/adapters/assistant/OsAbierta
 import { ASSISTANT_DATA_SOURCE_SEED } from '@domain/ports/AssistantCatalogRepository';
 import type { ListTasks } from '@application/use-cases/ListTasks';
 import type { ScheduledTask } from '@domain/entities/scheduling';
+import { MOTIVO_GUIA } from '@infrastructure/adapters/assistant/assistantMotivoGuia';
 import type {
   AssistantDataSourceResolver,
   AssistantSubjectContext,
@@ -112,6 +113,7 @@ describe('OsAbiertasResolver', () => {
     await expect(resolver.resolve({ ...ctx, clientId: null })).resolves.toEqual({
       disponible: false,
       motivo: 'cliente_no_identificado',
+      guia: MOTIVO_GUIA.cliente_no_identificado,
     });
   });
 });
