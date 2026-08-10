@@ -1,7 +1,7 @@
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
-import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping, ClosureOrigin, CloseTaskIfOpenInput, CloseTaskResult, ClosureStamp } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
@@ -76,6 +76,8 @@ const NEW_FIELDS_DEFAULTS = {
   // #41 — generalStatus is the truth; isClosed derived. Both default consistently.
   generalStatus: 'open' as 'open' | 'closed' | 'dismissed',
   isClosed: false,
+  // wave-1a (cierre atómico) — null hasta que closeTaskIfOpen (o un seed explícito) lo setee.
+  closureOrigin: null as 'app' | 'iclass' | 'staff' | null,
   reviewedByInventory: false,
   reviewedByInventoryAt: null,
   reviewedByInventoryUserName: null,
@@ -133,6 +135,40 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   // RbacUser name lookup — seeded by tests via seedRbacUserName(). Used to resolve
   // reviewedByInventoryUserName from an actorId (in-memory cannot JOIN).
   private rbacUserNames: Map<string, string> = new Map();
+
+  // wave-1a (cierre atómico) — closureResultCode/closedAt/closedByUserId are NOT part
+  // of the public ScheduledTask DTO (only closureOrigin is, per the spec's response
+  // shape), so they live in a side table keyed by taskId. closeTaskIfOpen is the only
+  // reader/writer.
+  private closureDetails: Map<string, { resultCode: string | null; closedByUserId: string | null; closedAt: string }> = new Map();
+
+  // TEST-ONLY hook — fires at the exact point where the real Postgres adapter takes
+  // the row lock (right before the read-decide-write of closeTaskIfOpen). Without it,
+  // single-threaded JS never produces a genuine TOCTOU race: an async function with no
+  // internal `await` between its read and its write runs that whole section atomically
+  // by construction, so a concurrency test would pass vacuously. The hook forces both
+  // concurrent callers to suspend at the SAME point, then resumes them in call order —
+  // exactly what lets InMemorySchedulingRepository.closeTaskIfOpen.test.ts prove
+  // "exactly one writer wins" instead of asserting it by accident.
+  private beforeCloseWrite?: () => Promise<void> | void;
+
+  /** Test-only setter — call in test setup to interleave two closeTaskIfOpen calls. */
+  setBeforeCloseWriteHook(hook?: () => Promise<void> | void): void {
+    this.beforeCloseWrite = hook;
+  }
+
+  /**
+   * Test-only reader for the closure side table (`closureResultCode`/`closedAt`/
+   * `closedByUserId`). These three are real COLUMNS in Postgres but are NOT part of
+   * the public `ScheduledTask` DTO, so in-memory they live off-entity. Without this
+   * accessor a test can only observe `closureOrigin` — which is exactly how the
+   * "closedAt is never set" / "a writer stopped passing closedByUserId" mutants
+   * survived the suite. Returns null when the task was never closed (or was reopened).
+   */
+  getClosureDetails(taskId: string): { resultCode: string | null; closedByUserId: string | null; closedAt: string } | null {
+    const d = this.closureDetails.get(taskId);
+    return d ? { ...d } : null;
+  }
 
   constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository, statusCatalog?: IClassStatusCatalogRepository) {
     this.stageRepo = stageRepo;
@@ -444,6 +480,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       // #41 — new tasks are always born open; isClosed derived consistently.
       generalStatus: 'open',
       isClosed: false,
+      // wave-1a — a freshly-created task is never closed; closeTaskIfOpen sets this.
+      closureOrigin: null,
       reviewedByInventory: false,
       reviewedByInventoryAt: null,
       reviewedByInventoryUserName: null,
@@ -502,6 +540,17 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     // isClosed when both present (precedence D4). Omitted → preserve current.
     const gs = data.generalStatus ?? (data.isClosed !== undefined ? (data.isClosed ? 'closed' : 'open') : undefined);
 
+    // FIX-1 (fix wave W1a) — REOPEN CLEARS THE CLOSURE STAMP. Any transition to a
+    // generalStatus that is NOT 'closed' (open, dismissed — via `generalStatus` or via
+    // the legacy `isClosed:false` compat path, both already folded into `gs` above)
+    // must wipe closureOrigin/closureResultCode/closedAt/closedByUserId. Otherwise a
+    // reopened task keeps advertising who closed it and when, which contradicts the
+    // spec ("closureOrigin MUST be null unless generalStatus === 'closed'") and would
+    // make the next closeTaskIfOpen conflict-check compare against a stale winner.
+    // It lives HERE — where the update is translated — so every writer inherits it.
+    const reopening = gs !== undefined && gs !== 'closed';
+    if (reopening) this.closureDetails.delete(id);
+
     this.tasks[index] = {
       ...current,
       ...(data.title !== undefined && { title: data.title }),
@@ -527,6 +576,7 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...(data.travelTimeTo !== undefined && { travelTimeTo: data.travelTimeTo }),
       ...(data.travelTimeFrom !== undefined && { travelTimeFrom: data.travelTimeFrom }),
       ...(gs !== undefined && { generalStatus: gs, isClosed: gs === 'closed' }),
+      ...(reopening && { closureOrigin: null }),
       ...(data.reviewedByInventory !== undefined && { reviewedByInventory: data.reviewedByInventory }),
       // #54 — locality snapshot
       ...((data as { iclassCityCode?: string | null }).iclassCityCode !== undefined && { iclassCityCode: (data as { iclassCityCode?: string | null }).iclassCityCode }),
@@ -682,8 +732,21 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return true;
   }
 
-  /** Test helper: seed a fully-formed task (lets tests set derived JOIN fields). */
-  seedTask(overrides: Partial<ScheduledTask> & Pick<ScheduledTask, 'id'>): ScheduledTask {
+  /**
+   * Test helper: seed a fully-formed task (lets tests set derived JOIN fields).
+   *
+   * MEDIUM-1 (fix wave 3 W1a) — `opts.legacyClosure` seeds the OTHER closed state that
+   * Postgres really holds: the PRE-migration row, `generalStatus='closed'` with the four
+   * closure columns in NULL (columnas nuevas, sin backfill). Sin esta opción el in-memory
+   * NO PODÍA exhibirla — el default de abajo siempre puebla `closedAt` — y un test sobre
+   * "la fila legacy no tiene sello" quedaba como fixture degenerado: verde por no poder
+   * construir el estado que quiere probar. El default NO cambia (otros tests dependen de
+   * que una tarea sembrada cerrada traiga su `closedAt`).
+   */
+  seedTask(
+    overrides: Partial<ScheduledTask> & Pick<ScheduledTask, 'id'>,
+    opts: { legacyClosure?: boolean } = {},
+  ): ScheduledTask {
     const task = makeTask({
       sequenceNumber: nextSequenceNumber++,
       title: overrides.title ?? 'Seeded task',
@@ -702,6 +765,20 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       ...overrides,
     } as Omit<ScheduledTask, 'stageCategory' | 'createdAt' | 'updatedAt'> & { stageId: string });
     this.tasks.push(task);
+    // FIX-6 / LOW-3 (fix wave W1a) — a task seeded ALREADY closed must carry closure
+    // details, exactly like one closed through closeTaskIfOpen. Otherwise the fixture
+    // is a trap: `generalStatus: 'closed'` with `getClosureDetails() === null` is a state
+    // Postgres can never hold, and a future test asserting "closing stamps closedAt"
+    // would read null and be "fixed" by weakening the assertion instead of the code.
+    // resultCode stays null (the seed did not claim one) unless the caller pins it.
+    // MEDIUM-1 — salvo `legacyClosure`, que es justamente la fila SIN sello.
+    if (task.generalStatus === 'closed' && !opts.legacyClosure) {
+      this.closureDetails.set(task.id, {
+        resultCode: null,
+        closedByUserId: null,
+        closedAt: task.updatedAt,
+      });
+    }
     return { ...task };
   }
 
@@ -717,10 +794,77 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return { ...this.tasks[index]! };
   }
 
+  /**
+   * wave-1a (cierre atómico first-writer-wins) — molde de `moveTaskToStageIfForward`.
+   * The `beforeCloseWrite` hook fires BEFORE the read that decides the outcome (mirrors
+   * the row lock the real `updateMany({ where: { generalStatus: { not: 'closed' } } })`
+   * takes in Postgres). Everything from the hook onward is synchronous JS with no
+   * further `await` — that is what makes the read-decide-write atomic in a
+   * single-threaded runtime: once a caller resumes past the hook it runs to
+   * completion (including the write) before the event loop can hand control to a
+   * second suspended caller.
+   */
+  async closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult> {
+    if (this.beforeCloseWrite) await this.beforeCloseWrite();
+
+    const index = this.tasks.findIndex(t => t.id === id);
+    if (index === -1) {
+      return { closed: false, task: null, existingOrigin: null, existingResultCode: null };
+    }
+
+    const current = this.tasks[index]!;
+    if (current.generalStatus === 'closed') {
+      // Lost (or arrived after) the race — report who actually won, never our own input.
+      const details = this.closureDetails.get(id);
+      return {
+        closed: false,
+        task: { ...current },
+        existingOrigin: (current.closureOrigin as ClosureOrigin | null) ?? null,
+        existingResultCode: details?.resultCode ?? null,
+      };
+    }
+
+    const closedAt = new Date().toISOString();
+    this.closureDetails.set(id, {
+      resultCode: input.resultCode ?? null,
+      closedByUserId: input.closedByUserId ?? null,
+      closedAt,
+    });
+    this.tasks[index] = {
+      ...current,
+      generalStatus: 'closed',
+      isClosed: true,
+      closureOrigin: input.origin,
+    };
+    return { closed: true, task: { ...this.tasks[index] }, existingOrigin: null, existingResultCode: null };
+  }
+
+  /**
+   * FIX-C (fix wave 2 W1a) — sello de cierre COMPLETO. En Postgres son cuatro columnas
+   * de la fila; acá, `closureOrigin` vive en la tarea y las otras tres en la side table.
+   * null cuando la tarea no existe o no está cerrada — el mismo contrato que el Prisma.
+   */
+  async getClosureStamp(taskId: string): Promise<ClosureStamp | null> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task || task.generalStatus !== 'closed') return null;
+    const details = this.closureDetails.get(taskId);
+    return {
+      closureOrigin: (task.closureOrigin as ClosureOrigin | null) ?? null,
+      closureResultCode: details?.resultCode ?? null,
+      closedAt: details?.closedAt ?? null,
+      closedByUserId: details?.closedByUserId ?? null,
+    };
+  }
+
   async deleteTask(id: string): Promise<boolean> {
     const index = this.tasks.findIndex(t => t.id === id);
     if (index === -1) return false;
     this.tasks.splice(index, 1);
+    // FIX-6 / LOW-3 (fix wave W1a) — the side table must die with the row. In Postgres
+    // these are COLUMNS of ScheduledTask and the DELETE takes them along; leaving the
+    // Map entry behind means a test that reuses the id inherits the previous task's
+    // closure and passes for the wrong reason.
+    this.closureDetails.delete(id);
     return true;
   }
 

@@ -5,6 +5,7 @@ import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskNotFoundError } from '@domain/errors/scheduling';
+import { applyTaskClosure } from './applyTaskClosure';
 import {
   IClassActionDisabledError,
   IClassTaskNotOpenError,
@@ -34,9 +35,20 @@ export interface CloseIClassServiceOrderInput {
  *    - null → IClassNoServiceOrderError (422)
  *    - statusCode === '7' → IClassAlreadyClosedError (409)
  * 7. closeServiceOrder — IClassRejectedError (422) | IClassUnavailableError (502) propagate
- * 8. setGeneralStatus='closed' locally + record 'status_changed'
- *    Guard: task.generalStatus === 'open' is already enforced at step 4; no extra
- *    guard needed here (the check at step 4 is the idempotency fence — AD-6).
+ * 8. Close locally via applyTaskClosure(origin='staff') + record 'status_changed' on a WIN.
+ *    wave-1a (cierre atómico): step 4's `generalStatus === 'open'` check is NOT the
+ *    idempotency fence anymore — a concurrent closer (e.g. the ingest cron) can still
+ *    win between step 4 and here.
+ *
+ *    FIX-9(b) — SCOPE, honestly: the atomic guard closes the LOCAL window only. It
+ *    guarantees that our `generalStatus`/`closureOrigin` write cannot clobber a
+ *    concurrent closer's, nothing more. The PUSH to IClass in step 7 has NO fence: it
+ *    already happened by the time we get here, and two operators racing this endpoint
+ *    can both push a close to IClass with different result codes. That is accepted by
+ *    AD-2 (the port is a dumb transport; IClass is the system of record for its own SO
+ *    and answers 409/rejection on its side). Losing the LOCAL race after having pushed
+ *    does NOT throw — the discrepancy is recorded as a `closure_conflict` activity by
+ *    applyTaskClosure and reconciled by the operator, not by this use case.
  * 9. Return updated task DTO
  */
 export class CloseIClassServiceOrder {
@@ -95,11 +107,16 @@ export class CloseIClassServiceOrder {
     };
     await this.iclass.closeServiceOrder(closeInput);
 
-    // Step 8: Set generalStatus='closed' locally
-    // Note: task.generalStatus is 'open' at this point (verified at step 4)
+    // Step 8: Close locally via the atomic guard (origin=staff).
     const actor: ActorContext = { actorId, actorName: actorId ?? 'System' };
-    const updated = await this.schedulingRepo.updateTask(taskId, { generalStatus: 'closed' });
-    if (updated && this.recorder) {
+    const closeResult = await applyTaskClosure(this.schedulingRepo, this.recorder, {
+      taskId,
+      origin: 'staff',
+      resultCode,
+      closedByUserId: actorId,
+    });
+    const updated = closeResult.task ?? await this.schedulingRepo.getTask(taskId);
+    if (closeResult.closed && this.recorder) {
       await this.recorder.record(taskId, 'status_changed', {
         actor,
         fromValue: task.generalStatus,

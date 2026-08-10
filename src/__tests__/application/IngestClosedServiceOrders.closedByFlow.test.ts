@@ -123,6 +123,41 @@ describe('IngestClosedServiceOrders — closure flow maps to generalStatus=close
     expect(after).toBe(before); // no new status_changed emitted
   });
 
+  // wave-1a (cierre atómico) — the preexisting staff↔ingest race: this exact site
+  // (IngestClosedServiceOrders.ts, moving into a 'hecho'-category stage) used to do
+  // `task.generalStatus !== 'closed'` (TOCTOU) + a plain updateTask, the same bug the
+  // whole wave fixes. Now it MUST route through the atomic guard.
+  it('wave-1a: staff already closed the task with a DIFFERENT resultCode moments before this ingest run — cron does NOT overwrite, logs closure_conflict', async () => {
+    const { scheduling, iclass, resultCodes, recorder, useCase } = setup();
+    scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+    iclass.serviceOrders = [summary({ iclassId: '900', iclassCodigo: '4013', resultCodeName: 'Instalacion Completa Fibra' })];
+    iclass.historyByOrder['900'] = HISTORY_CLOSED;
+    await mapResultCode(resultCodes, 'Instalacion Completa Fibra', INSTALADO.id);
+
+    // Staff closes the SAME task from the panel with a DIFFERENT result, winning the race.
+    await scheduling.closeTaskIfOpen('t1', { origin: 'staff', resultCode: 'CANCELADO_CLIENTE' });
+
+    await useCase.execute();
+
+    const task = await scheduling.getTask('t1');
+    expect(task!.generalStatus).toBe('closed');
+    // First-writer-wins: staff's closure is NEVER overwritten by the cron.
+    expect(task!.closureOrigin).toBe('staff');
+
+    const conflict = recorder.calls.find(c => c.type === 'closure_conflict');
+    expect(conflict).toBeDefined();
+    expect(conflict!.taskId).toBe('t1');
+    expect(conflict!.payload.metadata).toEqual({
+      winnerOrigin: 'staff',
+      winnerResultCode: 'CANCELADO_CLIENTE',
+      loserOrigin: 'iclass',
+      loserResultCode: 'Instalacion Completa Fibra',
+    });
+
+    // The cron never emits its OWN status_changed on a lost race.
+    expect(recorder.calls.some(c => c.type === 'status_changed')).toBe(false);
+  });
+
   it('dismissed task mapping to hecho stage → stays dismissed (guard ordering)', async () => {
     const { scheduling, iclass, resultCodes, recorder, useCase } = setup();
     scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, generalStatus: 'dismissed', isClosed: false });
