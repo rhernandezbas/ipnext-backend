@@ -27,9 +27,10 @@ import { customerFrom, grBalanceRow, grBalancePayload, FIXED_NOW, type FixtureRo
  */
 
 const FRESH_AT = new Date(FIXED_NOW.getTime() - 10 * 60 * 1000); // 10 min antes — dentro del TTL
-// FW2-2: 3h, no 90min. El TTL efectivo del carril rápido es el configurado más
-// el margen que cubre la duración del batch (60 + 60 = 2h).
-const STALE_AT = new Date(FIXED_NOW.getTime() - 3 * 60 * 60 * 1000); // 3 h antes — pasó el TTL efectivo
+// FW3 mató el margen del carril rápido: el TTL efectivo ES el configurado
+// (60min), sin +60 de batch. 3h es simplemente "bien pasado el TTL" — el valor
+// no depende de si hubo margen o no, por eso sigue sirviendo tras el revert.
+const STALE_AT = new Date(FIXED_NOW.getTime() - 3 * 60 * 60 * 1000); // 3 h antes — pasó el TTL configurado
 /** 30h antes — pasó el TTL de los DOS carriles (rápido 60min, lento 26h). */
 const VERY_STALE_AT = new Date(FIXED_NOW.getTime() - 30 * 60 * 60 * 1000);
 
@@ -534,6 +535,54 @@ describe('ClienteSaldoResolver', () => {
     const facts = await new ClienteSaldoResolver(repo, refresh).resolve(ctx);
 
     // (1) le preguntó a GR — el refresh SÍ podía mejorar el dato del batch.
+    expect(gr.balanceCalls).toEqual(['GR1']);
+    expect(mirror.balances.get('GR1')?.amount).toBe(0);
+    // (2) y por lo tanto no le reclama plata al que ya pagó.
+    expect(facts).toMatchObject({ disponible: true, tieneDeuda: false, saldo: 0 });
+    expect(JSON.stringify(facts)).not.toContain('45000');
+  });
+
+  /**
+   * ⚠️ **FIX WAVE 4 (re-review 3, FIX 1) — el probe de arriba no discrimina
+   * márgenes chicos.**
+   *
+   * El probe FW3 usa un sello de 90min contra un TTL de 60: el hueco entre
+   * "stale" y "sellado" es de 30min. Un margen reintroducido MENOR a esos 30min
+   * (por ejemplo un `+ 25` metido directo en `isStale`) sigue dejando 90min por
+   * ENCIMA del TTL efectivo (85min), así que el probe de arriba sigue viendo el
+   * refresh y queda VERDE — no lo caza.
+   *
+   * Este test hermano usa el BORDE real: un sello de 61min sobre TTL 60, un
+   * minuto pasado el TTL configurado. Cualquier margen ≥ 2min alcanza para que
+   * el gate deje de ver esto como stale y NO refresque — sirviendo los $45.000
+   * viejos al cliente que ya pagó. Sin margen (mundo actual, post-FW3), 61 > 60
+   * y refresca.
+   */
+  it('FW4 — el cliente pagó hace 30min sobre un sello de 61min (1min pasado el TTL): el bot REFRESCA (ningún margen sobrevive al borde)', async () => {
+    const selloDe61Min = new Date(FIXED_NOW.getTime() - 61 * 60 * 1000);
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    // GR EN VIVO ya sabe que pagó: deuda 0, sin facturas.
+    gr.balancesByClient.GR1 = parseClientBalanceResponse('GR1', grBalancePayload('0.00', { grClienteId: 'GR1' }));
+
+    const refresh = new RefreshClientBalanceIfStale(gr, mirror, {
+      now: () => FIXED_NOW,
+      ttlMinutes: 60, // el default de producción
+    });
+    // Primer findById: el espejo con la deuda vieja. Segundo (post-refresh): al día.
+    const conDeudaVieja = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('45000.00', selloDe61Min) });
+    const alDia = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('0.00', FIXED_NOW) });
+    // Premisa: con TTL 60 sin margen, 61min YA es stale — es el borde real, no
+    // el caso cómodo (90min) del probe de arriba.
+    expect(conDeudaVieja.balanceDue).toBe(45000);
+    expect(conDeudaVieja.balanceStale).toBe(true);
+
+    let call = 0;
+    const repo = { findById: async () => (call++ === 0 ? conDeudaVieja : alDia) } as unknown as CustomerRepository;
+
+    const facts = await new ClienteSaldoResolver(repo, refresh).resolve(ctx);
+
+    // (1) le preguntó a GR — el gate del refresh vio 61min como stale.
     expect(gr.balanceCalls).toEqual(['GR1']);
     expect(mirror.balances.get('GR1')?.amount).toBe(0);
     // (2) y por lo tanto no le reclama plata al que ya pagó.

@@ -348,10 +348,11 @@ describe('GetInboxClientContext', () => {
     expect(customerRepo.listLogs).toHaveBeenCalledWith({ clientId: 'c1', page: 1, limit: 5 });
   });
 
-  // FW2-2: 4h, no 2h. El TTL efectivo del carril rápido es "configurado (60) +
-  // margen del batch (60)" = 2h, así que 2h justas ya no son stale — el margen
-  // existe porque el batch tarda ~43min en tocar a cada cliente.
-  it('#8 sin refresh, lastBalanceAt de hace 4h (>TTL efectivo del carril rápido) — stale true, cero invocaciones a refreshBalance', async () => {
+  // FW3 mató el margen del carril rápido: el TTL efectivo ES el configurado
+  // (60min), sin margen de batch. 4h sobra de margen para estar stale con o sin
+  // esa política — lo que este test certifica de verdad es el modo SIN refresh:
+  // nunca invoca `refreshBalance`, sea cual sea la edad del balance.
+  it('#8 sin refresh, lastBalanceAt de hace 4h (largamente stale) — stale true, cero invocaciones a refreshBalance (modo sin refresh nunca llama)', async () => {
     const customer = makeCustomer({
       id: 'c1',
       name: 'Juan',

@@ -40,8 +40,9 @@ describe('RefreshClientBalanceIfStale', () => {
   });
 
   it('fetches balance when older than TTL (stale)', async () => {
-    // FW2-2: 3h. El gate interno usa `balanceTtlMinutesForStatus`, cuyo efectivo
-    // rápido es TTL configurado + margen del batch (60 + 60 = 2h).
+    // FW3 mató el margen del carril rápido: el gate interno usa
+    // `balanceTtlMinutesForStatus`, cuyo efectivo rápido ES el TTL configurado
+    // (60min), sin margen. 3h es simplemente "bien pasado el TTL".
     const staleAt = new Date(now.getTime() - 3 * 60 * 60 * 1000); // 3 h ago
     gr.balancesByClient['100011'] = makeBalance('100011', 1000);
 

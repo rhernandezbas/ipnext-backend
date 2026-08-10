@@ -48,9 +48,9 @@ describe('customerFrom', () => {
       { now: () => later, ttlMinutes: 60 },
     );
 
-    // FW2-2: 4h despues del lastBalanceAt. El TTL efectivo del carril rapido es
-    // el configurado (60) + el margen que cubre el batch (60) = 2h, asi que con
-    // 2h justas ya no alcanzaba para ser stale.
+    // FW3 mato el margen del carril rapido: el TTL efectivo ES el configurado
+    // (60min), sin margen de batch. 4h esta bien pasado ese TTL, con o sin
+    // margen.
     expect(c.balanceStale).toBe(true);
   });
 

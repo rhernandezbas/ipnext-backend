@@ -310,9 +310,10 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
 | assistant-balance-guard | up-to-date client (exactly zero) carries no credit guidance | 8.1 |
 | assistant-balance-guard | the ficha still shows the credit to a human | 8.1 |
 | assistant-balance-guard | (contra) resolver emits the raw negative again | 8.5 |
-| balance-staleness-helper | fast lane's effective TTL includes the batch margin | 8.2 |
 | balance-staleness-helper | the knob still moves the effective TTL | 8.2 |
-| balance-staleness-helper | slow lane does NOT get the margin added twice | 8.2 |
+| balance-staleness-helper | the fast lane's effective TTL is the configured TTL | 9.1 |
+| balance-staleness-helper | the slow lane keeps its own margin | 9.1 |
+| balance-staleness-helper | (contra) the gate must stay open for a client who just paid | 9.2 |
 | client-detail-balance | active client with real debt | 3.1 |
 | client-detail-balance | stale client, refresh succeeds | 3.2 |
 | client-detail-balance | refresh fails or times out | 3.3 |

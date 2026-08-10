@@ -22,11 +22,10 @@ const BASE_ROW = {
 
 const TTL_MINUTES = 60;
 const FRESH_AT = new Date(Date.now() - 10 * 60 * 1000); // 10 min ago (within TTL)
-// FW2-2: 3h, no 90min. El TTL efectivo del carril rápido es el configurado + el
-// margen que cubre la duración del batch (60 + 60 = 2h), así que 90min quedaron
-// DENTRO de la ventana: el sello `lastBalanceAt` se pone cuando el batch toca a
-// cada cliente, no cuando la ventana arranca.
-const STALE_AT = new Date(Date.now() - 3 * 60 * 60 * 1000); // 3 h ago (past the effective TTL)
+// FW3 mató el margen del carril rápido: el TTL efectivo ES el configurado
+// (60min), sin margen de batch. 3h es simplemente "bien pasado el TTL" — el
+// valor no depende de si hubo margen o no.
+const STALE_AT = new Date(Date.now() - 3 * 60 * 60 * 1000); // 3 h ago (past the configured TTL)
 
 describe('toCustomer — balance fields', () => {
   it('maps balanceDue from Prisma Decimal to number', () => {
