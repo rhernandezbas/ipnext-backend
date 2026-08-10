@@ -974,6 +974,14 @@ model IClassServiceOrder {
   // the processInventoryReturns side-effect stages return suggestions ONLY when false,
   // and sets it true after staging. Re-mirror/re-closure never re-stages.
   inventoryReturnsProcessed Boolean @default(false)
+  // FIX-B (fix wave 2 W1a) — cuándo el ingest intentó por PRIMERA vez cerrar la tarea
+  // ligada a esta OS (ganara o perdiera la carrera). null = nunca se intentó. Es el
+  // discriminador del reporte de discrepancia: el espejo se upsertea ANTES de dos bails
+  // que se saltean el cierre (tarea dismissed / result-code sin mapear), así que "la
+  // fila existe" NO prueba que se haya intentado cerrar. Nullable y sin default: las
+  // OS espejadas antes de esta migración quedan en null y, si alguna vez llegan al
+  // cierre, reportan su discrepancia una vez — que es exactamente lo correcto.
+  closureAttemptedAt DateTime?
 
   history          IClassSoStatusHistory[]
   checklists       IClassSoChecklist[]

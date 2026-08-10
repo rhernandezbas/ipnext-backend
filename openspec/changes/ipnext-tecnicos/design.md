@@ -64,7 +64,7 @@ closeTaskIfOpen(id: string, input: {
 }): Promise<CloseTaskResult>;
 ```
 
-Implementación Prisma — **una sola sentencia atómica**, sin read-then-write:
+Implementación Prisma — el **cierre** es una sola sentencia condicional (el predicado va en el `WHERE`, no hay read-then-write), envuelta junto con la relectura en una **transacción corta de dos sentencias**:
 
 ```ts
 // FIX-5: guard + relectura en UNA unidad de trabajo (una conexión, un commit).
@@ -77,9 +77,11 @@ const { count, row } = await prisma.$transaction(async (tx) => {
   });
   const row = await tx.scheduledTask.findUnique({ where: { id }, include: INCLUDE });
   return { count, row };
-});
+}, { maxWait: 2_000, timeout: 5_000 });
 // count===1 → ganamos. count===0 → perdimos (o no existe): la relectura dice cuál.
 ```
+
+> Corrección de la fix wave 2 (FIX-D): una versión anterior de este párrafo — y el docstring del método — decían "**una sola sentencia atómica, sin read-then-write**" justo encima de un `$transaction` de dos sentencias. Texto heredado de la versión pre-FIX-5, cuando efectivamente eran dos round-trips sueltos. Lo atómico por el `WHERE` es el **guard**; la transacción existe para que lo sea también el **reporte** (ver FIX-5 abajo). Los `maxWait`/`timeout` van **explícitos** en vez de heredar los defaults implícitos de Prisma: son dos sentencias sobre una fila ya lockeada, así que si tardan más el problema no se arregla esperando — el `timeout` corto libera la conexión y el row lock rápido, y el `maxWait` corto hace que un pool saturado falle visible en vez de encolar cierres.
 
 Y la operación **inversa** (FIX-1): toda transición de `generalStatus` a un valor **distinto de `'closed'`** (`open`, `dismissed`, o la vía legacy `isClosed:false`) **limpia las cuatro columnas de cierre** a `null`. Vive en el único punto donde se traduce el update (`_buildUpdateData` en Prisma y su gemelo in-memory), no en un use case, así que la heredan todos los escritores. Sin esto, una tarea reabierta seguía anunciando quién la cerró y cuándo — violando el invariante del spec y dejando al chequeo de discrepancia comparando contra un ganador fantasma.
 
@@ -111,8 +113,12 @@ Además emite un `ScheduledTaskActivity` tipo `closure_conflict` (tabla append-o
 - El **perdedor sin `resultCode`** (`null`) **NO** es discrepancia: no aportó ningún resultado. Es el caso cotidiano del staff cerrando a mano (`SetTaskGeneralStatus` / `UpdateTask` siempre pasan `null`); reportarlo inundaba la auditoría de `loserResultCode: null`.
 - Con **ambos `resultCode` no nulos**, la comparación es **normalizada** (`normalizeResultCode`), no byte a byte: IClass devuelve el mismo código con variaciones cosméticas (`"instalacion completa fibra."`), y el resolver del propio ingest ya normaliza — comparar más estricto acá sería contradecirlo.
 - Con la **tarea inexistente** (`task: null`) no hay ni log ni activity: `existingResultCode` es null por ausencia de fila, no por un ganador sin resultado.
-- El **perdedor con código sobre un ganador sin código** SÍ es discrepancia (divergencia real).
-- **Una sola vez por OS**: el ingest reporta la discrepancia únicamente en la **primera** transición de la OS a cerrada (discriminador: la existencia previa del espejo `IClassServiceOrder`, que sólo se escribe después del guard de estado terminal). Los bumps de `iclassUpdatedAt` sobre una OS ya cerrada re-ejecutan el cierre (idempotente) pero **no** re-reportan.
+- El **perdedor con código sobre un ganador sin código** SÍ es discrepancia (divergencia real) — **excepto la FILA LEGACY** (fix wave 2, FIX-A): si el ganador vuelve con `closureOrigin` **y** `closureResultCode` en null, eso es "no hay dato" (columnas nuevas, sin backfill), no "cerró sin resultado". Sin esta excepción el backfill histórico emitía un `closure_conflict` inventado por cada OS vieja, contra un ganador que nunca existió. El discriminador es `closureOrigin` porque lo escribe la misma sentencia que el resultado y lo limpia el mismo reopen: `!== null` ⇒ el sello es post-migración y su resultado nulo es real.
+- **Una sola vez por OS**: el ingest reporta la discrepancia únicamente en el **primer INTENTO DE CIERRE**. Los bumps de `iclassUpdatedAt` sobre una OS ya cerrada re-ejecutan el cierre (idempotente) pero **no** re-reportan.
+
+> Corrección de la fix wave 2 (FIX-B): el discriminador ERA "la existencia previa del espejo `IClassServiceOrder`", justificado con "sólo se escribe después del guard de estado terminal". Cierto pero **insuficiente**: el espejo se upsertea **antes** de dos bails que se saltean el cierre entero — la tarea `dismissed` (#41 G2) y el **result-code sin stage mapeado**. Ese segundo caso es el flujo normal de configuración (el operador mapea el código después), así que la primera corrida dejaba el espejo escrito **sin haber intentado cerrar**, y la corrida que por fin intentaba veía `existing !== null` y descartaba en silencio la primera y única discrepancia. Ahora el gate cuelga del intento: **`IClassServiceOrder.closureAttemptedAt`** (`DateTime?`, aditiva, nullable, sin default), leída en la MISMA query que el watermark (`findSyncStateByIclassId` — cero round-trips extra, es la lectura que el ingest ya hace una línea antes de decidir) y sellada **después** del intento con una escritura condicional `WHERE closureAttemptedAt IS NULL`, mismo patrón de guard que `closeTaskIfOpen`: si el sello se pudiera mover hacia adelante, "reportá una sola vez" volvería a ser "reportá siempre".
+
+**Reopen: el sello se preserva en la activity** (fix wave 2, FIX-C). FIX-1 limpia las cuatro columnas de cierre al reabrir — correcto — pero las borraba **sin dejar rastro**: quién cerró, cuándo y con qué resultado desaparecía del sistema justo en el evento más auditable. Ahora el `status_changed` de esa transición lleva `metadata.clearedClosure = {closureOrigin, closureResultCode, closedAt, closedByUserId}` con los valores previos; `ScheduledTaskActivity` es append-only, así que ningún reopen posterior lo pisa. El sello se lee ANTES de la escritura vía el nuevo `SchedulingRepository.getClosureStamp(taskId)` (las otras tres columnas NO están en el DTO público de `ScheduledTask`, sólo `closureOrigin`, así que hacía falta una lectura propia). Vive en un helper compartido (`reopenClosureStamp.ts`) porque hay **dos** escritores de reopen — `SetTaskGeneralStatus` y `UpdateTask`, éste último por dos vías (`generalStatus` y el legacy `isClosed:false`) — y el defecto era de clase. Cuando no hay sello que preservar el evento va **sin** `metadata`: un objeto con cuatro nulls diría "cerrada por nadie" en vez de "no hay dato".
 
 `closureOrigin` se modela como **`String?` nullable, SIN default a nivel de schema** (`closureOrigin String?` en `schema.prisma`), no enum de Prisma: el repo usa `String` para todo catálogo que pueda crecer (`generalStatus`, `priority`, `category`) y reserva los enums para binarios estructurales (`TicketCommentVisibility`, ver el comentario en `schema.prisma:1652-1663`). Aquí un cuarto origen (p.ej. `'gr'`) es plausible. El tipo cerrado vive en TypeScript (`ClosureOrigin`), que es donde el compilador lo puede exigir.
 

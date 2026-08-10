@@ -65,6 +65,21 @@ export interface CloseTaskIfOpenInput {
   closedByUserId?: string | null;
 }
 
+/**
+ * FIX-C (fix wave 2 W1a) — el SELLO de cierre completo: las cuatro columnas que escribe
+ * `closeTaskIfOpen` y que un reopen (FIX-1) borra. Sólo `closureOrigin` viaja en el DTO
+ * público de `ScheduledTask` (así lo fija el spec), así que las otras tres necesitan una
+ * lectura propia. Su único consumidor es el reopen: leer el sello ANTES de limpiarlo
+ * para dejarlo en la metadata del `status_changed`, que es append-only.
+ */
+export interface ClosureStamp {
+  closureOrigin: ClosureOrigin | null;
+  closureResultCode: string | null;
+  /** ISO-8601. */
+  closedAt: string | null;
+  closedByUserId: string | null;
+}
+
 export interface CloseTaskResult {
   /** true = ESTE escritor ganó la race y escribió. */
   closed: boolean;
@@ -108,6 +123,14 @@ export interface SchedulingRepository {
    * sin rediseñar el predicado.
    */
   closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult>;
+  /**
+   * FIX-C (fix wave 2 W1a) — leer el sello de cierre COMPLETO (las cuatro columnas).
+   * Devuelve null cuando la tarea no existe o no está cerrada. Se lee justo ANTES de
+   * un reopen para que el `status_changed` que lo documenta conserve quién había
+   * cerrado y con qué resultado — dato que FIX-1 borra de la fila y que, sin esto,
+   * desaparece del sistema exactamente en el evento más auditable.
+   */
+  getClosureStamp(taskId: string): Promise<ClosureStamp | null>;
   /**
    * #14: mark closure-completeness flags WITHOUT going through updateTask, so the
    * activity-log diff engine does not emit events for these internal flags.

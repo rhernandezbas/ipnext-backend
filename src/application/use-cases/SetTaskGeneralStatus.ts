@@ -4,6 +4,7 @@ import { TaskNotFoundError, InvalidGeneralStatusError } from '@domain/errors/sch
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 import { applyTaskClosure } from './applyTaskClosure';
+import { readClearedClosureStamp, clearedClosureMetadata } from './reopenClosureStamp';
 
 const VALID_STATUSES: readonly TaskGeneralStatus[] = ['open', 'closed', 'dismissed'];
 
@@ -58,14 +59,23 @@ export class SetTaskGeneralStatus {
       return updated;
     }
 
+    // FIX-C (fix wave 2 W1a) — el sello de cierre se lee ANTES del write que lo borra
+    // (FIX-1 limpia las cuatro columnas en toda transición a un estado != 'closed').
+    // Sin recorder no hay a dónde guardarlo, así que tampoco se hace la query.
+    const clearedClosure = this.recorder
+      ? await readClearedClosureStamp(this.repo, id, prev.generalStatus, status as TaskGeneralStatus)
+      : null;
+
     const updated = await this.repo.updateTask(id, { generalStatus: status as TaskGeneralStatus });
     if (!updated) throw new TaskNotFoundError(id);
 
     if (this.recorder) {
+      const metadata = clearedClosureMetadata(clearedClosure);
       await this.recorder.record(id, 'status_changed', {
         actor: actor ?? SYSTEM_ACTOR,
         fromValue: prev.generalStatus,
         toValue: status,
+        ...(metadata ? { metadata } : {}),
       });
     }
 

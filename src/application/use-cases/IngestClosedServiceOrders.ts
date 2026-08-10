@@ -383,24 +383,39 @@ export class IngestClosedServiceOrders {
       // applyTaskClosure logs the discrepancy instead of silently staying quiet.
       if (moved?.stageCategory === 'hecho') {
         // FIX-4(d) (fix wave W1a) — the discrepancy is reported ONLY on the SO's FIRST
-        // transition into closed. IClass bumps `iclassUpdatedAt` on already-ENCERRADO
-        // orders (approval, an edited commentary, a billing tweak); each bump escapes
-        // the idempotency shortcut above and re-runs this whole block. Without the gate,
-        // a task the staff won with a different result would emit a BRAND NEW
+        // ATTEMPT to close. IClass bumps `iclassUpdatedAt` on already-ENCERRADO orders
+        // (approval, an edited commentary, a billing tweak); each bump escapes the
+        // idempotency shortcut above and re-runs this whole block. Without the gate, a
+        // task the staff won with a different result would emit a BRAND NEW
         // `closure_conflict` on every single tick — turning a queryable discrepancy into
-        // queryable spam. The discriminator needs no extra query: `this.closed.upsert`
-        // only runs AFTER the `statusCode !== TERMINAL_STATUS` guard, so the mere
-        // EXISTENCE of a mirror row (`existing`) proves this SO was already ingested
-        // while closed. `existing === null` ⇔ this run IS the transition.
+        // queryable spam.
+        //
+        // FIX-B (fix wave 2 W1a) — the DISCRIMINATOR changed; the rule did not. It used
+        // to be `existing === null` ("this SO had never been mirrored"), justified by
+        // "the mirror is only written after the terminal-status guard". True but
+        // insufficient: the mirror is upserted ABOVE two bails that skip the close
+        // entirely — a dismissed task, and a result code with no mapped stage. The
+        // second one is the ordinary configuration flow (the operator maps the code
+        // afterwards), and it meant the FIRST run wrote the mirror without ever
+        // attempting to close, so the run that finally DID attempt found
+        // `existing !== null` and dropped the one and only discrepancy in silence.
+        // Now the gate hangs off the attempt itself: `closureAttemptedAt`, stamped on
+        // the mirror right after this call, read in the SAME query as the watermark
+        // (zero extra round-trips). null ⇔ never attempted ⇔ report.
         // The CLOSE itself is NOT gated: it stays idempotent + atomic, so a task an
         // operator reopened still gets re-closed by a later run, exactly as before.
+        const alreadyAttempted = existing?.closureAttemptedAt != null;
         const closeResult = await applyTaskClosure(this.scheduling, this.recorder, {
           taskId: task.id,
           origin: 'iclass',
           resultCode: s.resultCodeName ?? null,
           closedByUserId: null,
-          reportConflict: existing === null,
+          reportConflict: !alreadyAttempted,
         });
+        // Sellar DESPUÉS del intento y sólo la primera vez (el adapter lo hace
+        // condicional). Va acá y no en el upsert porque lo que marca es el INTENTO, no
+        // el espejo: si esta línea se moviera arriba de los bails, el bug vuelve.
+        if (!alreadyAttempted) await this.closed.markClosureAttempted(s.iclassId);
         if (closeResult.closed && this.recorder) {
           await this.recorder.record(task.id, 'status_changed', {
             actor: SYSTEM_ACTOR,

@@ -9,6 +9,7 @@ import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 import { normalizeOnuSerial } from '@domain/services/fiberProvisioning';
 import { applyTaskClosure } from './applyTaskClosure';
+import { readClearedClosureStamp, effectiveGeneralStatus } from './reopenClosureStamp';
 
 export class UpdateTask {
   constructor(
@@ -167,6 +168,19 @@ export class UpdateTask {
     const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined) || isClosingPatch);
     const prev = needsPrev ? await this.repo.getTask(id) : null;
 
+    // FIX-C (fix wave 2 W1a) — si este patch REABRE la tarea, el sello de cierre se lee
+    // ANTES del write que lo borra (FIX-1 limpia las cuatro columnas). Cubre las dos
+    // vías: `generalStatus` y el legacy `isClosed:false`. Sin recorder no hay a dónde
+    // guardarlo → no se hace la query.
+    const clearedClosure = this.recorder && prev
+      ? await readClearedClosureStamp(
+          this.repo,
+          id,
+          prev.generalStatus,
+          effectiveGeneralStatus(data.generalStatus, data.isClosed),
+        )
+      : null;
+
     // wave-1a (cierre atómico) — a patch that CLOSES the task routes the closure
     // itself through the atomic guard (origin=staff); every OTHER field in the same
     // patch still applies via the normal updateTask path — the FE resubmits the full
@@ -239,7 +253,7 @@ export class UpdateTask {
           }
         }
       }
-      const events = computeUpdateTaskActivities(prev, diffData, actor ?? SYSTEM_ACTOR, updated, watcherNames);
+      const events = computeUpdateTaskActivities(prev, diffData, actor ?? SYSTEM_ACTOR, updated, watcherNames, clearedClosure);
       if (events.length > 0) {
         await this.recorder.recordMany(id, events);
       }

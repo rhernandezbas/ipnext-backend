@@ -36,6 +36,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
+import { stripComments, extractCallArgs, methodBody } from '../helpers/staticSourceScan';
 
 const SRC_DIR = join(__dirname, '..', '..');
 
@@ -49,46 +50,6 @@ const CLOSURE_IMPLEMENTORS = [
   join('infrastructure', 'adapters', 'in-memory', 'InMemorySchedulingRepository.ts'),
 ];
 
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-}
-
-/**
- * Extract the FULL argument text of every call to `<token>(`, balancing (), {} and []
- * and skipping ' " ` string literals. Unlike a non-greedy regex this never truncates on
- * a nested call and never needs a lookahead for what follows the closing paren.
- */
-export function extractCallArgs(src: string, token: string): string[] {
-  const out: string[] = [];
-  let from = 0;
-  for (;;) {
-    const hit = src.indexOf(token, from);
-    if (hit === -1) break;
-    let i = hit + token.length; // just past the '('
-    const start = i;
-    let depth = 1;
-    let quote: string | null = null;
-    while (i < src.length && depth > 0) {
-      const ch = src[i]!;
-      if (quote) {
-        if (ch === '\\') { i += 2; continue; }
-        if (ch === quote) quote = null;
-      } else if (ch === "'" || ch === '"' || ch === '`') {
-        quote = ch;
-      } else if (ch === '(' || ch === '{' || ch === '[') {
-        depth++;
-      } else if (ch === ')' || ch === '}' || ch === ']') {
-        depth--;
-      }
-      i++;
-    }
-    // depth===0 → i is one past the matching ')'. Unbalanced (truncated file) → skip.
-    if (depth === 0) out.push(src.slice(start, i - 1));
-    from = hit + token.length;
-  }
-  return out;
-}
-
 /** Does this argument text close the task — by either of the two equivalent doors? */
 export function closesTheTask(callArgs: string): boolean {
   return /generalStatus\s*:\s*['"]closed['"]/.test(callArgs) || /isClosed\s*:\s*true\b/.test(callArgs);
@@ -97,6 +58,23 @@ export function closesTheTask(callArgs: string): boolean {
 /** Does this argument text touch the lifecycle status AT ALL (any value)? */
 export function touchesStatus(callArgs: string): boolean {
   return /\bgeneralStatus\s*:/.test(callArgs) || /\bisClosed\s*:/.test(callArgs);
+}
+
+/** The two literal spellings of "this write closes the task", as COUNTABLE patterns. */
+const CLOSURE_WRITES = {
+  "generalStatus: 'closed'": /generalStatus\s*:\s*['"]closed['"]/g,
+  'isClosed: true': /isClosed\s*:\s*true\b/g,
+} as const;
+
+export type ClosureWriteCounts = Record<keyof typeof CLOSURE_WRITES, number>;
+
+/** How many times each closure literal occurs in `src`. */
+export function countClosureWrites(src: string): ClosureWriteCounts {
+  const out = {} as ClosureWriteCounts;
+  for (const [label, re] of Object.entries(CLOSURE_WRITES)) {
+    out[label as keyof ClosureWriteCounts] = (src.match(new RegExp(re.source, 'g')) ?? []).length;
+  }
+  return out;
 }
 
 function walkTsFiles(dir: string, out: string[] = []): string[] {
@@ -186,6 +164,117 @@ describe('wave-1a — architecture guard: the closed literal lives ONLY in the t
   });
 });
 
+/**
+ * ── FIX-E (fix wave 2) — la exención es POR LLAMADA, no por ARCHIVO ────────────────
+ *
+ * `CLOSURE_IMPLEMENTORS` eximía a los dos adapters ENTEROS: cualquier SEGUNDA escritura
+ * de `generalStatus: 'closed'` dentro de esos archivos — un método nuevo que cierre sin
+ * el `WHERE` guardado, un helper "de conveniencia" — pasaba en verde. Justo los dos
+ * archivos donde más barato es equivocarse, porque son los únicos autorizados a escribir
+ * el literal.
+ *
+ * Se endurece con DOS pines, cada uno suficiente por su cuenta:
+ *  1. CONTEO EXACTO por archivo y por literal (una ocurrencia de cada uno, hoy).
+ *  2. CONTENCIÓN: TODAS las ocurrencias viven dentro del cuerpo de `closeTaskIfOpen`.
+ * El (2) además caza el movimiento: sacar la escritura del guard a otro método mantiene
+ * el conteo pero rompe la contención. Y los dos juntos son el canario de desincronización
+ * del stripper (FIX-F): si se empieza a comer el cuerpo del adapter, el conteo cae a 0.
+ */
+const ALLOWED_CLOSURE_WRITES: Record<string, ClosureWriteCounts> = {
+  [CLOSURE_IMPLEMENTORS[0]!]: { "generalStatus: 'closed'": 1, 'isClosed: true': 1 },
+  [CLOSURE_IMPLEMENTORS[1]!]: { "generalStatus: 'closed'": 1, 'isClosed: true': 1 },
+};
+
+describe('wave-1a — FIX-E: en los adapters allowlisted la escritura de cierre está PINEADA', () => {
+  it.each(CLOSURE_IMPLEMENTORS)('%s: conteo EXACTO de literales de cierre (una segunda escritura rompe el test)', (relPath) => {
+    const src = stripComments(readFileSync(join(SRC_DIR, relPath), 'utf8'));
+    expect({ file: relPath, ...countClosureWrites(src) }).toEqual({
+      file: relPath,
+      ...ALLOWED_CLOSURE_WRITES[relPath]!,
+    });
+  });
+
+  it.each(CLOSURE_IMPLEMENTORS)('%s: TODA ocurrencia vive dentro del cuerpo de closeTaskIfOpen', (relPath) => {
+    const src = stripComments(readFileSync(join(SRC_DIR, relPath), 'utf8'));
+    const body = methodBody(src, 'closeTaskIfOpen');
+    expect(body).not.toBeNull(); // presencia antes que ausencia: el método existe y se pudo aislar
+    const inBody = countClosureWrites(body!);
+    // Si el cuerpo tiene MENOS que el archivo, hay una escritura de cierre AFUERA del guard.
+    expect({ file: relPath, ...inBody }).toEqual({ file: relPath, ...countClosureWrites(src) });
+    // Y el cuerpo aislado tiene que traer las escrituras de verdad (no un {} vacío).
+    expect(inBody["generalStatus: 'closed'"]).toBeGreaterThan(0);
+    expect(inBody['isClosed: true']).toBeGreaterThan(0);
+  });
+});
+
+describe('wave-1a — FIX-E self-tests: el pin discrimina de verdad', () => {
+  const ADAPTER_SHAPE = `
+    export class X {
+      async closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult> {
+        const { count } = await tx.scheduledTask.updateMany({
+          where: { id, generalStatus: { not: 'closed' } },
+          data: { generalStatus: 'closed', isClosed: true },
+        });
+        return { closed: count === 1 };
+      }
+    }
+  `;
+
+  it('la forma legítima pasa: un literal de cada uno, ambos dentro de closeTaskIfOpen', () => {
+    const src = stripComments(ADAPTER_SHAPE);
+    expect(countClosureWrites(src)).toEqual({ "generalStatus: 'closed'": 1, 'isClosed: true': 1 });
+    expect(countClosureWrites(methodBody(src, 'closeTaskIfOpen')!)).toEqual(countClosureWrites(src));
+  });
+
+  it('una SEGUNDA escritura en OTRO método del mismo archivo rompe el conteo Y la contención', () => {
+    const src = stripComments(
+      ADAPTER_SHAPE.replace(
+        '    }\n  ',
+        `    }
+      async closeItTheEasyWay(id: string): Promise<void> {
+        await prisma.scheduledTask.update({ where: { id }, data: { generalStatus: 'closed', isClosed: true } });
+      }
+    `,
+      ),
+    );
+    // (1) el conteo se va a 2 — el pin de 1 falla
+    expect(countClosureWrites(src)["generalStatus: 'closed'"]).toBe(2);
+    // (2) y la contención también: el cuerpo del guard sigue teniendo 1
+    expect(countClosureWrites(methodBody(src, 'closeTaskIfOpen')!)["generalStatus: 'closed'"]).toBe(1);
+  });
+
+  it('MOVER la escritura fuera del guard mantiene el conteo pero rompe la contención', () => {
+    const moved = stripComments(`
+      export class X {
+        async closeTaskIfOpen(id: string): Promise<CloseTaskResult> {
+          return this.writeIt(id);
+        }
+        async writeIt(id: string): Promise<CloseTaskResult> {
+          await prisma.scheduledTask.update({ where: { id }, data: { generalStatus: 'closed', isClosed: true } });
+          return { closed: true };
+        }
+      }
+    `);
+    expect(countClosureWrites(moved)).toEqual({ "generalStatus: 'closed'": 1, 'isClosed: true': 1 }); // conteo intacto
+    expect(countClosureWrites(methodBody(moved, 'closeTaskIfOpen')!)).toEqual({
+      "generalStatus: 'closed'": 0,
+      'isClosed: true': 0,
+    }); // contención rota
+  });
+
+  it('methodBody aísla el método correcto (no se lleva el resto de la clase)', () => {
+    const body = methodBody(stripComments(ADAPTER_SHAPE), 'closeTaskIfOpen');
+    expect(body).toContain('updateMany');
+    expect(body).not.toContain('export class');
+    expect(body!.startsWith('{')).toBe(true);
+    expect(body!.endsWith('}')).toBe(true);
+  });
+
+  it('methodBody devuelve null cuando el método no existe (no inventa un cuerpo)', () => {
+    expect(methodBody('export class X { async other() { return 1; } }', 'closeTaskIfOpen')).toBeNull();
+  });
+});
+
 // ── FIX-7(e) — self-tests, one per pattern. A scanner that never matches anything,
 // even synthetically, proves nothing (memoria: "tests que nunca se ejecutan").
 describe('wave-1a — self-tests: every detector is discriminating', () => {
@@ -246,6 +335,52 @@ describe('wave-1a — self-tests: every detector is discriminating', () => {
   it('isClosed: false (a REOPEN) is not a closure and is NOT flagged', () => {
     const good = stripComments(`await this.repo.updateTask(id, { isClosed: false });`);
     expect(extractCallArgs(good, '.updateTask(').some(closesTheTask)).toBe(false);
+  });
+
+  // ── FIX-F (fix wave 2) — el stripper tiene que ser CONSCIENTE DE STRINGS ─────────
+  it('FIX-F: una URL en un string NO abre un comentario de línea — la escritura que la SIGUE se caza', () => {
+    // `//` dentro de un string literal no abre un comentario. El stripper viejo
+    // (`/\/\/.*$/gm` sobre texto crudo) borraba desde `//wiki…` hasta el fin de la
+    // línea — y con eso se llevaba puesta la violación que venía después. Falso
+    // negativo SILENCIOSO: el guard daba verde sobre código que cierra a mano.
+    const bad = stripComments(
+      `const doc = 'https://wiki.interno/cierres'; await repo.updateTask(id, { generalStatus: 'closed' });`,
+    );
+    expect(bad).toContain('updateTask('); // presencia antes que ausencia: no se comió la línea
+    expect(extractCallArgs(bad, '.updateTask(').some(closesTheTask)).toBe(true);
+  });
+
+  it('FIX-F: una URL con `/*` en un string no abre un comentario de BLOQUE (se comía líneas enteras)', () => {
+    const bad = stripComments(
+      [
+        `const glob = 'https://cdn.interno/assets/*';`,
+        `await repo.updateTask(id, { generalStatus: 'closed' });`,
+        `const x = 1; /* un comentario de verdad */`,
+      ].join('\n'),
+    );
+    expect(bad).toContain('updateTask(');
+    expect(bad).not.toContain('un comentario de verdad');
+    expect(extractCallArgs(bad, '.updateTask(').some(closesTheTask)).toBe(true);
+  });
+
+  it('FIX-F: la URL sigue viva en el stripped (no se borra media línea de código)', () => {
+    const stripped = stripComments(`const doc = "http://x/y"; // comentario de verdad\n`);
+    expect(stripped).toContain('"http://x/y"');
+    expect(stripped).not.toContain('comentario de verdad');
+  });
+
+  it('FIX-F: un regex literal con comilla no desincroniza (la comilla NO abre un string)', () => {
+    const bad = stripComments(
+      [`const q = /['"]/g;`, `await repo.updateTask(id, { isClosed: true });`].join('\n'),
+    );
+    expect(extractCallArgs(bad, '.updateTask(').some(closesTheTask)).toBe(true);
+  });
+
+  it('FIX-F: un `//` dentro de un regex literal tampoco abre un comentario', () => {
+    const bad = stripComments(
+      [`const slash = /\\/\\//g;`, `await repo.updateTask(id, { generalStatus: 'closed' });`].join('\n'),
+    );
+    expect(extractCallArgs(bad, '.updateTask(').some(closesTheTask)).toBe(true);
   });
 
   it('comment stripping: the bug pattern written ONLY in a comment is invisible to every detector', () => {

@@ -44,8 +44,16 @@ export interface ClosedServiceOrderRepository {
    * Returns the idempotency watermark for an already-mirrored SO, or null when
    * it has never been ingested. The caller skips the expensive sub-resource
    * fetch + upsert when the stored iclassUpdatedAt matches the incoming one.
+   *
+   * FIX-B (fix wave 2 W1a) — carries `closureAttemptedAt` too: the ingest gates its
+   * discrepancy report on "did I ever ATTEMPT to close this SO's task?", and that
+   * question is answered by this very read, which already happens one line before the
+   * decision. Bundling it costs ZERO extra queries; a dedicated getter would have added
+   * a round-trip per SO per tick to answer something the row already knows.
    */
-  findSyncStateByIclassId(iclassId: string): Promise<{ iclassUpdatedAt: string | null } | null>;
+  findSyncStateByIclassId(
+    iclassId: string,
+  ): Promise<{ iclassUpdatedAt: string | null; closureAttemptedAt: string | null } | null>;
   /**
    * Upsert the full aggregate (SO + children) keyed by iclassId, linking it to a
    * local task when resolved (scheduledTaskId, null when no match). Does NOT touch
@@ -76,4 +84,12 @@ export interface ClosedServiceOrderRepository {
   markInventoryReturnsProcessed(iclassId: string): Promise<void>;
   /** Increment auditAttempts and stamp lastAuditAttemptAt = now (cap guard upstream). */
   incrementAuditAttempt(iclassId: string): Promise<void>;
+  /**
+   * FIX-B (fix wave 2 W1a) — stamp `closureAttemptedAt = now` the FIRST time the ingest
+   * routes this SO's task through the atomic close guard. Idempotent by design: a second
+   * call must NOT move the timestamp — the value answers "when was the first attempt",
+   * and re-stamping it on every tick would make the "report the discrepancy once" gate
+   * meaningless again. No-op when the SO is not mirrored.
+   */
+  markClosureAttempted(iclassId: string): Promise<void>;
 }

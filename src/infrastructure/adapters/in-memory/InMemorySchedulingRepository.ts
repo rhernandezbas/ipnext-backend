@@ -1,7 +1,7 @@
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
-import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping, ClosureOrigin, CloseTaskIfOpenInput, CloseTaskResult } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping, ClosureOrigin, CloseTaskIfOpenInput, CloseTaskResult, ClosureStamp } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
@@ -823,6 +823,23 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       closureOrigin: input.origin,
     };
     return { closed: true, task: { ...this.tasks[index] }, existingOrigin: null, existingResultCode: null };
+  }
+
+  /**
+   * FIX-C (fix wave 2 W1a) — sello de cierre COMPLETO. En Postgres son cuatro columnas
+   * de la fila; acá, `closureOrigin` vive en la tarea y las otras tres en la side table.
+   * null cuando la tarea no existe o no está cerrada — el mismo contrato que el Prisma.
+   */
+  async getClosureStamp(taskId: string): Promise<ClosureStamp | null> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task || task.generalStatus !== 'closed') return null;
+    const details = this.closureDetails.get(taskId);
+    return {
+      closureOrigin: (task.closureOrigin as ClosureOrigin | null) ?? null,
+      closureResultCode: details?.resultCode ?? null,
+      closedAt: details?.closedAt ?? null,
+      closedByUserId: details?.closedByUserId ?? null,
+    };
   }
 
   async deleteTask(id: string): Promise<boolean> {

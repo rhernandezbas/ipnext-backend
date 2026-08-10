@@ -54,17 +54,48 @@ describe('FIX-6(a) — cerrar SIEMPRE estampa closedAt', () => {
     expect(ts).toBeLessThanOrEqual(after + 1000);
   });
 
-  it('cada uno de los 4 escritores deja closedAt (no sólo el que se testeó primero)', async () => {
+  // FIX-G(a) (fix wave 2 W1a) — el nombre prometía LOS CUATRO y ejercitaba DOS. Un test
+  // que nombra una clase entera y cubre la mitad es peor que uno honesto: el lector (y
+  // el próximo review) lo da por cubierto y nadie vuelve. Se completa con los otros dos
+  // escritores — los harnesses ya existían en este mismo archivo, era barato.
+  it('cada uno de los 4 escritores deja closedAt (staff×2 + CloseIClassServiceOrder + el cron)', async () => {
     const repo = new InMemorySchedulingRepository();
     repo.seedTask({ id: 'staff-status', generalStatus: 'open', isClosed: false });
     repo.seedTask({ id: 'staff-put', generalStatus: 'open', isClosed: false });
 
+    // 1) staff vía el endpoint dedicado de estado
     await new SetTaskGeneralStatus(repo).execute('staff-status', 'closed', ACTOR);
+    // 2) staff vía el PUT genérico
     const any = new AnyLookup();
     await new UpdateTask(repo, any, any, any, any, any).execute('staff-put', { generalStatus: 'closed' }, ACTOR);
 
     expect(repo.getClosureDetails('staff-status')?.closedAt).toEqual(expect.any(String));
     expect(repo.getClosureDetails('staff-put')?.closedAt).toEqual(expect.any(String));
+
+    // 3) staff-con-push: CloseIClassServiceOrder
+    const { schedulingRepo, uc } = await makeCloseIClass();
+    await uc.execute({ taskId: 'task-1', resultCode: 'RESOLVIDO', commentary: 'listo', actorId: 'user-77' });
+    const pushDetails = schedulingRepo.getClosureDetails('task-1');
+    expect(pushDetails).not.toBeNull(); // presencia antes que ausencia: cerró de verdad
+    expect(pushDetails!.closedAt).toEqual(expect.any(String));
+
+    // 4) el cron: IngestClosedServiceOrders
+    const { scheduling, useCase } = ingestHarness();
+    await useCase.execute();
+    const cronDetails = scheduling.getClosureDetails('t1');
+    expect(cronDetails).not.toBeNull();
+    expect(cronDetails!.closedAt).toEqual(expect.any(String));
+
+    // Y los cuatro closedAt tienen que ser instantes REALES, no strings cualquiera
+    // (un mutante que estampe '' o 'null' pasaría el expect.any(String) de arriba).
+    for (const ts of [
+      repo.getClosureDetails('staff-status')!.closedAt,
+      repo.getClosureDetails('staff-put')!.closedAt,
+      pushDetails!.closedAt,
+      cronDetails!.closedAt,
+    ]) {
+      expect(Number.isNaN(Date.parse(ts))).toBe(false);
+    }
   });
 });
 

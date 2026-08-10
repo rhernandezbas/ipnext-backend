@@ -86,8 +86,8 @@ Precisión de "DIFIERE" (fix wave, FIX-4 — sin esto la regla generaba ruido qu
 - Si el PERDEDOR no aporta `resultCode` (`null`), NO hay discrepancia. No trajo un resultado que pueda contradecir a nadie; es el caso cotidiano del staff cerrando a mano desde el panel (los dos caminos de staff siempre pasan `null`).
 - Con AMBOS `resultCode` no nulos, la comparación es NORMALIZADA (trim + minúsculas + puntuación final + espacios internos colapsados: el mismo `normalizeResultCode` que ya usa el resolver de códigos del ingest). IClass devuelve el mismo código con variaciones cosméticas y eso NO es una discrepancia.
 - Si la tarea NO EXISTE, no hay ni log ni activity: no hay ganador cuyo resultado contradecir.
-- Un perdedor CON código sobre un ganador SIN código SÍ es discrepancia.
-- El ingest la registra sólo en la PRIMERA transición de la OS a cerrada; los reprocesos por bump de `iclassUpdatedAt` sobre una OS ya espejada no la repiten.
+- Un perdedor CON código sobre un ganador SIN código SÍ es discrepancia — **salvo que el ganador sea una FILA LEGACY** (fix wave 2, FIX-A). Una tarea cerrada ANTES de esta migración vuelve con `closureOrigin` **y** `closureResultCode` en null: eso es "no hay dato", no "el ganador cerró sin resultado", y reportarlo haría que el backfill histórico inventara una discrepancia por cada OS vieja. El discriminador es `closureOrigin`: lo escribe la MISMA sentencia que `closureResultCode` y lo limpia el mismo reopen, así que `closureOrigin !== null` prueba que el sello es post-migración y su resultado nulo es una divergencia real.
+- El ingest la registra sólo en el PRIMER **INTENTO DE CIERRE** de la OS; los reprocesos por bump de `iclassUpdatedAt` no la repiten (fix wave 2, FIX-B — antes el discriminador era la existencia del espejo, ver más abajo).
 
 #### Scenario: Later IClass result differs from the app's — logged and recorded as an activity, not applied
 - GIVEN `t-1` fue cerrada por `app` con `resultCode='INSTALACION_OK'` (`closureOrigin='app'`)
@@ -104,5 +104,56 @@ Precisión de "DIFIERE" (fix wave, FIX-4 — sin esto la regla generaba ruido qu
 - THEN no se registra discrepancia
 - AND no se crea ningún `ScheduledTaskActivity` tipo `closure_conflict`
 
+#### Scenario: Historical backfill over a task closed before the migration — silence (FIX-A)
+- GIVEN `t-1` fue cerrada hace meses, ANTES de esta wave (`closureOrigin=null`, `closureResultCode=null`)
+- AND el backfill ingesta por primera vez la SO ligada, que trae `resultCodeName='Instalacion Completa Fibra'`
+- WHEN el ingest corre
+- THEN no se registra discrepancia ni se crea `closure_conflict`: no hay ganador cuyo resultado contradecir, sólo una fila sin dato
+
+### Requirement: The ingest gates its discrepancy report on the close ATTEMPT, not on the mirror
+
+El sistema DEBE (MUST) discriminar "¿ya reporté la discrepancia de esta OS?" por el **intento de cierre**, persistido en `IClassServiceOrder.closureAttemptedAt` (`DateTime?`, nullable, sin default), y NO por la existencia previa de la fila espejo.
+
+El espejo se upsertea ANTES de dos bails que se saltean el cierre entero: la tarea `dismissed` (#41 G2) y el result-code **sin stage mapeado**. Este último es el flujo normal de configuración — el operador mapea el código DESPUÉS — así que la primera corrida dejaba el espejo escrito sin haber intentado cerrar nunca, y la corrida que por fin intentaba descartaba en silencio la primera y única discrepancia.
+
+`closureAttemptedAt` se sella **después** del intento y **sólo la primera vez** (escritura condicional: `UPDATE ... WHERE closureAttemptedAt IS NULL`); un segundo tick no puede correr el timestamp hacia adelante.
+
+(Previously: el discriminador era `existing === null` sobre la fila espejo — una discrepancia real se perdía en silencio cada vez que el código de resultado se mapeaba después de la primera ingesta.)
+
+#### Scenario: First run bails on an unmapped result code, the second one reports
+- GIVEN el staff cerró `t-1` con `resultCode='REAGENDADO'`
+- AND la primera ingesta de la SO ligada corre con el result-code SIN mapear a stage: espeja la OS, no intenta cerrar, `closureAttemptedAt` queda `null`
+- WHEN el operador mapea el código y una ingesta posterior (bump de `iclassUpdatedAt`) llega al cierre y PIERDE con un código distinto
+- THEN se registra la discrepancia (log + `closure_conflict`) — es el primer intento
+- AND `closureAttemptedAt` queda sellado
+
+#### Scenario: Re-ingest after the conflict was already reported — no repetition
+- GIVEN la discrepancia de la SO ya fue reportada y `closureAttemptedAt` está sellado
+- WHEN llegan nuevos bumps de `iclassUpdatedAt` sobre la misma OS
+- THEN el cierre sigue corriendo (idempotente) pero NO se emite un segundo `closure_conflict`
+
+### Requirement: Reopening a closed task preserves the closure stamp in the activity
+
+Cuando una transición limpia las cuatro columnas de cierre (`closureOrigin`, `closureResultCode`, `closedAt`, `closedByUserId`) por reabrir una tarea cerrada, el `status_changed` que documenta esa transición DEBE (MUST) llevar el sello borrado en `metadata.clearedClosure` con las cuatro columnas previas.
+
+Aplica a **todos** los escritores de reopen: `SetTaskGeneralStatus` (`closed → open|dismissed`) y `UpdateTask` (vía `generalStatus` y vía el legacy `isClosed: false`). Se lee ANTES de la escritura que lo borra, a través de `SchedulingRepository.getClosureStamp`.
+
+Cuando NO hay sello que preservar (la transición no es un reopen, o la tarea es una fila legacy sin sello) el evento NO lleva `metadata`: un objeto con cuatro nulls diría "cerrada por nadie" cuando la verdad es "no hay dato".
+
+(Previously: FIX-1 limpiaba las cuatro columnas sin dejar rastro — quién cerró la tarea, cuándo y con qué resultado desaparecía del sistema justo en el evento más auditable.)
+
+#### Scenario: Reopen records the wiped stamp
+- GIVEN `t-1` cerrada por `iclass` con `resultCode='Instalacion Completa Fibra'` y `closedByUserId='u-9'`
+- WHEN el staff la reabre (`open` o `dismissed`, por cualquiera de los dos escritores)
+- THEN la tarea queda con las cuatro columnas de cierre en `null` (FIX-1 intacto)
+- AND el `ScheduledTaskActivity` tipo `status_changed` emitido lleva `metadata.clearedClosure = { closureOrigin: 'iclass', closureResultCode: 'Instalacion Completa Fibra', closedAt: <ISO>, closedByUserId: 'u-9' }`
+
+#### Scenario: A non-reopen status change carries no clearedClosure
+- GIVEN `t-1` está `open`
+- WHEN pasa a `dismissed`
+- THEN el `status_changed` NO lleva `metadata.clearedClosure`
+
 ## Aditivo, solo-crece
+`IClassServiceOrder.closureAttemptedAt` (fix wave 2, FIX-B) es NUEVO, nullable y sin default — migración puramente aditiva. Las OS espejadas antes de la migración quedan en `null`: si alguna vez llegan al cierre reportarán su discrepancia una vez, que es exactamente el comportamiento correcto (nunca se intentó cerrarlas).
+
 `closureOrigin` es NUEVO y nullable — tareas cerradas ANTES de esta wave quedan con `closureOrigin=null` (no hay backfill retroactivo del origen histórico, ese dato no existe). El guard atómico es un cambio de IMPLEMENTACIÓN de los 4 escritores existentes, no de su contrato HTTP externo — `POST /api/scheduling/:id/status` sigue aceptando el mismo body.

@@ -11,9 +11,14 @@ export interface ApplyTaskClosureInput {
   /**
    * FIX-4(d) — set to false to SUPPRESS the discrepancy report (log + activity) for
    * this call, while still performing the atomic close. Only the ingest uses it: a
-   * re-run over an SO that was ALREADY mirrored as closed is IClass repeating itself,
-   * not a second independent opinion, so a bump of `iclassUpdatedAt` must not re-log
-   * the same conflict on every cron tick. Defaults to true (report).
+   * re-run over an SO whose task the ingest ALREADY tried to close is IClass repeating
+   * itself, not a second independent opinion, so a bump of `iclassUpdatedAt` must not
+   * re-log the same conflict on every cron tick. Defaults to true (report).
+   *
+   * FIX-B (fix wave 2) — the ingest derives it from `IClassServiceOrder.closureAttemptedAt`
+   * (the close ATTEMPT), not from the mere existence of the mirror row: the mirror is
+   * written before two bails that skip the close, so "already mirrored" was silently
+   * suppressing the first real discrepancy.
    */
   reportConflict?: boolean;
 }
@@ -34,12 +39,25 @@ export interface ApplyTaskClosureInput {
  *    normalizes — a stricter comparison here would contradict it and cry wolf.
  *  - Loser non-null over a winner with null: a REAL divergence (someone closed with no
  *    result and a result arrived afterwards) — still reported.
+ *
+ * FIX-A (fix wave 2 W1a) — one REFINEMENT of the last bullet: a LEGACY ROW is not a
+ * winner. `closureOrigin`/`closureResultCode` are new columns with NO backfill (spec:
+ * "las tareas cerradas ANTES de esta migración quedan con closureOrigin=null"), so a
+ * task closed months ago comes back with BOTH null — which means "no data", not "the
+ * winner closed without a result". Reporting there would make the historical backfill
+ * emit one invented `closure_conflict` per old SO, against a winner that never existed.
+ * The discriminator is `existingOrigin`: it is written by the SAME statement as
+ * `closureResultCode` (`closeTaskIfOpen`) and cleared by the same reopen (FIX-1), so
+ * `origin !== null` proves the stamp is POST-migration and its null result is a real
+ * "closed with no result". The FIX-4 asymmetry survives intact for that case.
  */
 function isRealConflict(result: CloseTaskResult, loserResultCode: string | null): boolean {
   if (result.closed) return false;
   if (result.task === null) return false;
   if (loserResultCode === null) return false;
   const winner = result.existingResultCode;
+  // FIX-A — legacy row (neither origin nor result): nothing to contradict.
+  if (winner === null && result.existingOrigin === null) return false;
   if (winner === null) return true;
   return normalizeResultCode(winner) !== normalizeResultCode(loserResultCode);
 }

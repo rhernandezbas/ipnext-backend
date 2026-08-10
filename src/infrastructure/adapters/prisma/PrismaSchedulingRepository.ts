@@ -11,7 +11,7 @@ import { ScheduledTask, TaskGeneralStatus } from '@domain/entities/scheduling';
 import { IClassStatusCatalogRepository } from '@domain/ports/IClassStatusCatalogRepository';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
-import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping, ClosureOrigin, CloseTaskIfOpenInput, CloseTaskResult } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping, ClosureOrigin, CloseTaskIfOpenInput, CloseTaskResult, ClosureStamp } from '@domain/ports/SchedulingRepository';
 import { StageNotFoundError } from '@domain/errors/scheduling';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
@@ -354,11 +354,17 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
   }
 
   /**
-   * wave-1a (cierre atómico first-writer-wins) — UNA sola sentencia atómica, sin
-   * transacción explícita ni read-then-write: el predicado en el WHERE toma el row
-   * lock de Postgres, así que un segundo escritor concurrente bloquea, reevalúa el
-   * predicado contra el valor ya comiteado, y matchea 0 filas. count===1 → ganamos.
-   * count===0 → perdimos (o la tarea no existe) — releemos para reportar quién ganó.
+   * wave-1a (cierre atómico first-writer-wins) — el CIERRE es UNA sola sentencia
+   * condicional, sin read-then-write: el predicado va en el WHERE del `updateMany`, así
+   * que toma el row lock de Postgres y un segundo escritor concurrente bloquea, reevalúa
+   * el predicado contra el valor ya comiteado y matchea 0 filas. count===1 → ganamos.
+   * count===0 → perdimos (o la tarea no existe).
+   *
+   * FIX-D (fix wave 2 W1a) — este docstring decía "sin transacción explícita" ARRIBA de
+   * un `$transaction`: mentira heredada de la versión pre-FIX-5. Lo que hay es una
+   * transacción CORTA de dos sentencias (el `updateMany` guardado + la relectura que
+   * reporta quién ganó). La transacción NO es lo que hace atómico al guard — el WHERE ya
+   * lo era — sino lo que hace atómico al REPORTE; el porqué está detallado abajo.
    */
   async closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult> {
     // FIX-5 (fix wave W1a) — the guard and the re-read are ONE unit of work.
@@ -397,6 +403,14 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       });
       const row = await tx.scheduledTask.findUnique({ where: { id }, include: INCLUDE });
       return { count, row };
+    }, {
+      // Knob DECIDIDO, no heredado del default implícito de Prisma (2s/5s). Son DOS
+      // sentencias sobre una fila ya lockeada: si tardan más que esto, el problema no
+      // se arregla esperando. `timeout` corto libera la conexión (y el row lock) rápido
+      // en vez de bloquear a todos los demás escritores del mismo task; `maxWait` corto
+      // hace que un pool saturado falle rápido y visible en vez de encolar cierres.
+      maxWait: 2_000,
+      timeout: 5_000,
     });
 
     if (!row) {
@@ -413,6 +427,33 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       task: toTask(row),
       existingOrigin: (row.closureOrigin as ClosureOrigin | null) ?? null,
       existingResultCode: row.closureResultCode ?? null,
+    };
+  }
+
+  /**
+   * FIX-C (fix wave 2 W1a) — sello de cierre COMPLETO. Un `select` de las cuatro
+   * columnas (sin los INCLUDE de `toTask`: nadie necesita los JOINs para esto) porque
+   * tres de las cuatro NO están en el DTO público de `ScheduledTask`. null cuando la
+   * tarea no existe o no está cerrada — así el caller no puede confundir "no hay sello"
+   * con "sello vacío".
+   */
+  async getClosureStamp(taskId: string): Promise<ClosureStamp | null> {
+    const row = await (prisma.scheduledTask as any).findUnique({
+      where: { id: taskId },
+      select: {
+        generalStatus: true,
+        closureOrigin: true,
+        closureResultCode: true,
+        closedAt: true,
+        closedByUserId: true,
+      },
+    });
+    if (!row || row.generalStatus !== 'closed') return null;
+    return {
+      closureOrigin: (row.closureOrigin as ClosureOrigin | null) ?? null,
+      closureResultCode: row.closureResultCode ?? null,
+      closedAt: row.closedAt instanceof Date ? row.closedAt.toISOString() : (row.closedAt ?? null),
+      closedByUserId: row.closedByUserId ?? null,
     };
   }
 

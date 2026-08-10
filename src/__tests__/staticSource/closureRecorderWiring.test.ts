@@ -15,12 +15,12 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
+// FIX-F / FIX-G(b) (fix wave 2) — el scanner es COMPARTIDO con taskClosureGuard: la copia
+// local de `stripComments` acá era la versión vieja, ciega a los strings (una URL en un
+// literal se comía el resto de la línea). Arreglar la clase, no la instancia.
+import { stripComments, extractCallArgs, splitTopLevelArgs, objectLiteralEntries } from '../helpers/staticSourceScan';
 
 const SRC_DIR = join(__dirname, '..', '..');
-
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
-}
 
 function readStripped(...parts: string[]): string {
   return stripComments(readFileSync(join(SRC_DIR, ...parts), 'utf8'));
@@ -75,6 +75,30 @@ describe.each(BOOTSTRAPS.map(b => [b[b.length - 1], b] as const))(
       expect(src).toMatch(/\{\s*\.\.\.buildClosureSideEffects\(\)/);
       expect(src).toContain("from './closureSideEffects'");
     });
+
+    // ── FIX-G(b) (fix wave 2) — el `toMatch` de arriba es un match de TEXTO SUELTO ────
+    // Sólo prueba que en ALGÚN lado del archivo hay un `{ ...buildClosureSideEffects()`.
+    // Pasaba igual si el spread estuviera en un objeto que no es el de opciones del
+    // constructor, y — peor — si DESPUÉS del spread viniera un `recorder: undefined`
+    // (o un segundo spread) que lo pisa: el orden de claves decide, y el regex no lo ve.
+    // Acá se parsea la llamada con el mismo parser balanceado del guard.
+    it('FIX-G(b): el spread está DENTRO del objeto de opciones del constructor y NADA posterior pisa `recorder`', () => {
+      const calls = extractCallArgs(src, 'new IngestClosedServiceOrders(');
+      expect(calls).toHaveLength(1); // presencia antes que ausencia: la llamada se parseó
+
+      const args = splitTopLevelArgs(calls[0]!);
+      expect(args.length).toBeGreaterThanOrEqual(6); // 5 puertos + el objeto de opciones
+      const entries = objectLiteralEntries(args[args.length - 1]!);
+      expect(entries).not.toBeNull(); // el ÚLTIMO argumento es un object literal
+
+      const spreadAt = entries!.findIndex(e => /^\.\.\.\s*buildClosureSideEffects\(\s*\)$/.test(e));
+      expect(spreadAt).toBeGreaterThanOrEqual(0); // y el spread es una entrada SUYA
+
+      // Todo lo que venga DESPUÉS del spread gana por precedencia de object literal.
+      const after = entries!.slice(spreadAt + 1);
+      expect(after.filter(e => /^recorder\s*:/.test(e))).toEqual([]);
+      expect(after.filter(e => e.trimStart().startsWith('...'))).toEqual([]);
+    });
   },
 );
 
@@ -96,5 +120,48 @@ describe('FIX-2 — self-tests: the matchers are not vacuous', () => {
   it('a bootstrap that passes a bare options object (no spread) is rejected', () => {
     const noSpread = 'const ingest = new IngestClosedServiceOrders(a, b, c, d, e, { statusCatalog });';
     expect(noSpread).not.toMatch(/\{\s*\.\.\.buildClosureSideEffects\(\)/);
+  });
+
+  // ── FIX-G(b) — los tres mutantes que el regex de texto suelto NO distinguía ────────
+  const optionsOf = (source: string) => {
+    const args = splitTopLevelArgs(extractCallArgs(source, 'new IngestClosedServiceOrders(')[0]!);
+    return objectLiteralEntries(args[args.length - 1]!)!;
+  };
+
+  it('FIX-G(b): un `recorder: undefined` DESPUÉS del spread pasa el regex viejo y es rechazado por el nuevo', () => {
+    const overridden =
+      'const i = new IngestClosedServiceOrders(a, b, c, d, e, { ...buildClosureSideEffects(), recorder: undefined });';
+    expect(overridden).toMatch(/\{\s*\.\.\.buildClosureSideEffects\(\)/); // ← el viejo daba VERDE
+
+    const entries = optionsOf(overridden);
+    const spreadAt = entries.findIndex(e => /^\.\.\.\s*buildClosureSideEffects\(\s*\)$/.test(e));
+    expect(entries.slice(spreadAt + 1).filter(e => /^recorder\s*:/.test(e))).toEqual(['recorder: undefined']);
+  });
+
+  it('FIX-G(b): un SEGUNDO spread posterior también puede pisar el recorder y es detectado', () => {
+    const shadowed =
+      'const i = new IngestClosedServiceOrders(a, b, c, d, e, { ...buildClosureSideEffects(), ...overrides });';
+    const entries = optionsOf(shadowed);
+    const spreadAt = entries.findIndex(e => /^\.\.\.\s*buildClosureSideEffects\(\s*\)$/.test(e));
+    expect(entries.slice(spreadAt + 1).filter(e => e.startsWith('...'))).toEqual(['...overrides']);
+  });
+
+  it('FIX-G(b): un spread que NO está en el objeto de opciones del constructor no cuenta', () => {
+    const elsewhere = [
+      'const opts = { ...buildClosureSideEffects() };',
+      'const i = new IngestClosedServiceOrders(a, b, c, d, e, { statusCatalog });',
+    ].join('\n');
+    expect(elsewhere).toMatch(/\{\s*\.\.\.buildClosureSideEffects\(\)/); // ← el viejo daba VERDE
+    const entries = optionsOf(elsewhere);
+    expect(entries.some(e => /buildClosureSideEffects/.test(e))).toBe(false);
+  });
+
+  it('FIX-G(b): la forma REAL de los tres bootstraps pasa (el pin no es imposible de cumplir)', () => {
+    const real =
+      'const i = new IngestClosedServiceOrders(a, b, c, d, e, { ...buildClosureSideEffects(), statusCatalog: cat });';
+    const entries = optionsOf(real);
+    const spreadAt = entries.findIndex(e => /^\.\.\.\s*buildClosureSideEffects\(\s*\)$/.test(e));
+    expect(spreadAt).toBe(0);
+    expect(entries.slice(spreadAt + 1)).toEqual(['statusCatalog: cat']);
   });
 });

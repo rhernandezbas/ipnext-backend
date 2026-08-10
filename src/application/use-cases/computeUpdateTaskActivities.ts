@@ -1,5 +1,5 @@
 import type { ScheduledTask } from '@domain/entities/scheduling';
-import type { UpdateTaskInput } from '@domain/ports/SchedulingRepository';
+import type { UpdateTaskInput, ClosureStamp } from '@domain/ports/SchedulingRepository';
 import type { ActivityType } from '@domain/entities/taskActivity';
 import type { ActorContext } from '@domain/ports/TaskActivityRecorder';
 
@@ -27,6 +27,12 @@ export function computeUpdateTaskActivities(
   /** Optional watcher id→name map so watcher_added/removed carry the name (#17).
    * When a watcher id is absent, the event is emitted without a name (degrades). */
   watcherNames?: Record<string, string>,
+  /**
+   * FIX-C (fix wave 2 W1a) — el sello de cierre que este patch está por BORRAR, leído
+   * por el caller antes de escribir. Se adosa a la metadata del `status_changed` del
+   * reopen para que la auditoría no lo pierda. null/omitido → sin metadata.
+   */
+  clearedClosure?: ClosureStamp | null,
 ): TaskActivityEvent[] {
   const events: TaskActivityEvent[] = [];
   const d = data as Record<string, unknown>;
@@ -50,8 +56,17 @@ export function computeUpdateTaskActivities(
   // #41 — status_changed: dual branch. Explicit generalStatus emits a STRING event
   // and wins (a single event even if isClosed is also present). The legacy isClosed
   // path stays for callers that send only the boolean (12 pinned tests).
-  if (changed('generalStatus')) events.push({ type: 'status_changed', actor, fromValue: prev.generalStatus, toValue: data.generalStatus });
-  else if (changed('isClosed')) events.push({ type: 'status_changed', actor, fromValue: prev.isClosed, toValue: data.isClosed });
+  //
+  // FIX-C — cuando la transición es un REOPEN, el evento lleva el sello que el write
+  // borra. Se adosa en las DOS ramas: la vía legacy `isClosed:false` reabre igual de
+  // fuerte que `generalStatus:'open'` y perdía el sello exactamente igual. La guarda
+  // `prev.generalStatus === 'closed'` es defensiva — el caller ya sólo lo lee en un
+  // reopen, pero así ningún caller futuro puede colgarle el sello a otra transición.
+  const reopenMeta = clearedClosure && prev.generalStatus === 'closed'
+    ? { metadata: { clearedClosure } }
+    : {};
+  if (changed('generalStatus')) events.push({ type: 'status_changed', actor, fromValue: prev.generalStatus, toValue: data.generalStatus, ...reopenMeta });
+  else if (changed('isClosed')) events.push({ type: 'status_changed', actor, fromValue: prev.isClosed, toValue: data.isClosed, ...reopenMeta });
   if (changed('reviewedByInventory')) events.push({ type: 'inventory_review_changed', actor, fromValue: prev.reviewedByInventory, toValue: data.reviewedByInventory });
   // K3 fix wave M5 — onuSerial arma un cron que toca hardware: set/cambio/limpieza
   // SIEMPRE auditados con valores (UpdateTask ya lo normalizó antes del snapshot).
