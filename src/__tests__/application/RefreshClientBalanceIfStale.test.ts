@@ -216,10 +216,11 @@ describe('RefreshClientBalanceIfStale — single-flight (F2)', () => {
     const { gr, calls, release } = deferredGr();
     const mirror = new InMemoryClientMirrorRepository();
     const writes: number[] = [];
-    const originalUpdate = mirror.updateClientBalance.bind(mirror);
-    mirror.updateClientBalance = async (id, amount, currency, at) => {
-      writes.push(amount);
-      return originalUpdate(id, amount, currency, at);
+    // FW2-4: se espía la escritura ATÓMICA — ya no hay una suelta que espiar.
+    const originalUpdate = mirror.updateBalanceAndInvoices.bind(mirror);
+    mirror.updateBalanceAndInvoices = async (params) => {
+      writes.push(params.amount);
+      return originalUpdate(params);
     };
     const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
 

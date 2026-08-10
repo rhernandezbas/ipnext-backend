@@ -51,11 +51,6 @@ export class InMemoryClientMirrorRepository implements ClientMirrorRepository {
     return { created };
   }
 
-  async updateClientBalance(grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
-    // No-op for unknown clients (don't throw)
-    this.balances.set(grClienteId, { amount, currency, lastBalanceAt: at });
-  }
-
   /**
    * fix wave F3 — gemelo del método atómico de Prisma: **todo o nada.**
    *
@@ -70,7 +65,9 @@ export class InMemoryClientMirrorRepository implements ClientMirrorRepository {
     const invoicesBefore = [...this.invoices];
 
     try {
-      await this.updateClientBalance(grClienteId, amount, currency, at);
+      // Escritura del saldo (no-op para clientes desconocidos: no tira).
+      // FW2-4 — inline: ya no hay un método público que la haga suelta.
+      this.balances.set(grClienteId, { amount, currency, lastBalanceAt: at });
       if (invoices !== null) {
         await this.upsertInvoices(grClienteId, invoices, at);
       }

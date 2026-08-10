@@ -34,10 +34,10 @@ function parseGrDate(s: string | null): Date | null {
 
 /**
  * Cliente Prisma o cliente transaccional — las escrituras de abajo son idénticas
- * en los dos, y ésa es toda la gracia: la MISMA sentencia corre suelta
- * (`updateClientBalance`) o dentro de una tx (`updateBalanceAndInvoices`) sin
- * duplicar el cuerpo. Duplicarlo sería el molde clásico de "la función que decide
- * no es la que se testea".
+ * en los dos, y ésa es toda la gracia: la MISMA sentencia corre dentro de la tx
+ * de `updateBalanceAndInvoices` o suelta desde `upsertInvoices` sin duplicar el
+ * cuerpo. Duplicarlo sería el molde clásico de "la función que decide no es la
+ * que se testea".
  */
 type Db = typeof prisma | Prisma.TransactionClient;
 
@@ -138,10 +138,6 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     return { created: true };
   }
 
-  async updateClientBalance(grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
-    await writeBalance(prisma, grClienteId, amount, currency, at);
-  }
-
   /**
    * fix wave F3 — saldo + facturas en UNA transacción (ver el docstring del puerto).
    *
@@ -156,8 +152,8 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
     // La resolución del cliente local va FUERA de la tx: es una lectura y no
     // participa del rollback (mismo criterio que `upsertInvoices`, que ya la
     // hacía afuera). Sin cliente local, el espejo de facturas no aplica —
-    // pero la escritura del saldo sigue siendo un no-op inofensivo, igual que
-    // en `updateClientBalance`.
+    // pero la escritura del saldo sigue siendo un no-op inofensivo (el
+    // `updateMany` no matchea ninguna fila).
     const client = invoices === null
       ? null
       : await prisma.client.findUnique({ where: { grClienteId }, select: { id: true, name: true } });
@@ -174,7 +170,7 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
    * Replace-all sync of a client's GR invoices into the local Invoice table.
    *
    * Resolve the local client by grClienteId (no-op if absent — same contract as
-   * updateClientBalance). Then, in ONE transaction:
+   * the balance write). Then, in ONE transaction:
    *   1. deleteMany the client's GR-sourced invoices (grInvoiceId NOT NULL) whose
    *      grInvoiceId is NOT in the current set → the `{ not: null }` guard means
    *      manual invoices (grInvoiceId null) are NEVER deleted. An empty current
@@ -186,7 +182,7 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       where: { grClienteId },
       select: { id: true, name: true },
     });
-    if (!client) return; // unknown client → no-op (mirror of updateClientBalance)
+    if (!client) return; // unknown client → no-op (mirror of the balance write)
 
     await prisma.$transaction(async (tx) => {
       await replaceGrInvoices(tx, client, invoices, at);

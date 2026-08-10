@@ -117,8 +117,8 @@ export function grBalancePayload(
 
 /**
  * Campos de balance de una `FixtureRow` tal como la ESCRITURA REAL los deja:
- * payload GR → `parseClientBalanceResponse` → `updateClientBalance(amount,
- * currency, at)` → columnas. No hay forma de inventar acá un par
+ * payload GR → `parseClientBalanceResponse` → `updateBalanceAndInvoices({amount,
+ * currency, at, ...})` → columnas. No hay forma de inventar acá un par
  * `{balanceDue, balanceCurrency}` que el pipeline no pueda producir.
  */
 export function grBalanceRow(
