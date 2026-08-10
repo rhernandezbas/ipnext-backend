@@ -116,7 +116,7 @@ El sistema DEBE (MUST) discriminar "¿ya reporté la discrepancia de esta OS?" p
 
 El espejo se upsertea ANTES de dos bails que se saltean el cierre entero: la tarea `dismissed` (#41 G2) y el result-code **sin stage mapeado**. Este último es el flujo normal de configuración — el operador mapea el código DESPUÉS — así que la primera corrida dejaba el espejo escrito sin haber intentado cerrar nunca, y la corrida que por fin intentaba descartaba en silencio la primera y única discrepancia.
 
-`closureAttemptedAt` se sella **después** del intento y **sólo la primera vez** (escritura condicional: `UPDATE ... WHERE closureAttemptedAt IS NULL`); un segundo tick no puede correr el timestamp hacia adelante.
+`closureAttemptedAt` se sella **después** del intento, **sólo la primera vez** (escritura condicional: `UPDATE ... WHERE closureAttemptedAt IS NULL`) y **sólo si el intento fue evaluable**: el cierre ganado y la derrota contra un ganador post-migración (reportada, o silenciada por código igual / perdedor sin código) consumen el disparo; la derrota contra una **fila legacy** (`closureOrigin=null` + `closureResultCode=null`, cerrada antes de la migración) NO lo consume — no hay resultado ganador que contradecir, y el derecho a reportar queda intacto para un eventual ganador real posterior. Un segundo tick no puede correr el timestamp hacia adelante.
 
 (Previously: el discriminador era `existing === null` sobre la fila espejo — una discrepancia real se perdía en silencio cada vez que el código de resultado se mapeaba después de la primera ingesta.)
 
@@ -131,6 +131,12 @@ El espejo se upsertea ANTES de dos bails que se saltean el cierre entero: la tar
 - GIVEN la discrepancia de la SO ya fue reportada y `closureAttemptedAt` está sellado
 - WHEN llegan nuevos bumps de `iclassUpdatedAt` sobre la misma OS
 - THEN el cierre sigue corriendo (idempotente) pero NO se emite un segundo `closure_conflict`
+
+#### Scenario: A loss against a legacy row does not consume the gate (FIX-γ)
+- GIVEN el backfill ingesta una SO cuya tarea fue cerrada ANTES de la migración (fila legacy: `closureOrigin=null`, `closureResultCode=null`)
+- WHEN el ingest pierde el cierre contra esa fila
+- THEN no se reporta discrepancia (fila sin dato) Y `closureAttemptedAt` queda `null` — el intento no fue evaluable
+- AND si más tarde la tarea se reabre, el staff la re-cierra (sello post-migración) y un bump trae un código distinto, la discrepancia SÍ se reporta — una sola vez — y recién ahí se sella
 
 ### Requirement: Reopening a closed task preserves the closure stamp in the activity
 
