@@ -9,6 +9,7 @@ import { PrismaFinanceReceiptItemRepository } from '../adapters/prisma/PrismaFin
 import { PrismaFinanceReceiptRetencionRepository } from '../adapters/prisma/PrismaFinanceReceiptRetencionRepository';
 import { SyncGrReceiptsDelta } from '@application/use-cases/finance/SyncGrReceiptsDelta';
 import { SyncGrReceiptsBackfillBatch } from '@application/use-cases/finance/SyncGrReceiptsBackfillBatch';
+import { SyncGrReceiptsReconcileWindow } from '@application/use-cases/finance/SyncGrReceiptsReconcileWindow';
 import { FinanceReceiptIngestScheduler } from './FinanceReceiptIngestScheduler';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 
@@ -60,6 +61,10 @@ export async function bootstrapFinanceReceiptsIngest(): Promise<FinanceReceiptIn
   // here fails to COMPILE instead of silently zeroing the cash metric.
   const syncDelta = new SyncGrReceiptsDelta(client, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo);
   const syncBackfill = new SyncGrReceiptsBackfillBatch(client, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo);
+  // gr-receipt-annulment (design.md Decision 8) — the third lane, SAME Prisma
+  // repos + syncConfig as the other two (itemRepo/retencionRepo mandatory,
+  // same R9 criterion).
+  const syncReconcile = new SyncGrReceiptsReconcileWindow(client, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo);
 
   // PgAdvisoryLock uses a dedicated pg.Client (not the pool) — same rationale
   // as `bootstrapGestionRealSync` — with its OWN lock key
@@ -67,5 +72,5 @@ export async function bootstrapFinanceReceiptsIngest(): Promise<FinanceReceiptIn
   // the `gr-sync`/`gr-ingest` schedulers.
   const lock = new PgAdvisoryLock();
 
-  return new FinanceReceiptIngestScheduler(syncDelta, syncBackfill, state, lock, syncConfig);
+  return new FinanceReceiptIngestScheduler(syncDelta, syncBackfill, state, lock, syncConfig, syncReconcile);
 }

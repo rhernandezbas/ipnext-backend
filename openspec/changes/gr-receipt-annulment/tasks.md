@@ -130,24 +130,32 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 5 — Arbitraje del scheduler: delta > reconcile > backfill
 
-- [ ] 5.1 RED "Delta claims the tick over reconcile and backfill" (scenario 6).
-- [ ] 5.2 RED "Reconcile claims the tick when delta is quiet and its own cadence is due" (scenario 7).
-- [ ] 5.3 RED "Backfill is not starved indefinitely — turns entre ventanas de reconcile" (scenario 8).
-- [ ] 5.4 GREEN modificar el arbitraje en `FinanceReceiptIngestScheduler.ts:311-338` — `runReconcile`
+- [x] 5.1 RED "Delta claims the tick over reconcile and backfill" (scenario 6).
+- [x] 5.2 RED "Reconcile claims the tick when delta is quiet and its own cadence is due" (scenario 7).
+- [x] 5.3 RED "Backfill is not starved indefinitely — turns entre ventanas de reconcile" (scenario 8).
+- [x] 5.4 GREEN modificar el arbitraje en `FinanceReceiptIngestScheduler.ts:311-338` — `runReconcile`
       espeja F4 con el MISMO knob (`deltaStarvationThreshold`) pero contador PROPIO
-      (`reconcileConsecutiveFailures`, nunca compartido con el del delta).
-- [ ] 5.5 RED `worstConsecutiveFailures()` suma el contador nuevo al `Math.max`.
-- [ ] 5.6 GREEN `activeLane` gana `'reconcile'` en el union (`'delta' | 'reconcile' | 'backfill' |
+      (`reconcileConsecutiveFailures`, nunca compartido con el del delta). **Desvío**: el constructor
+      ganó el parámetro `syncReconcile` (obligatorio, posicional, con throw si falsy) ACÁ en vez de en
+      Fase 6 — necesario para que la arbitración compile; Fase 6 hereda el wiring del composition root
+      + los pines de aridad ya con el parámetro existente.
+- [x] 5.5 RED `worstConsecutiveFailures()` suma el contador nuevo al `Math.max`.
+- [x] 5.6 GREEN `activeLane` gana `'reconcile'` en el union (`'delta' | 'reconcile' | 'backfill' |
       'idle'`); `FinanceReceiptIngestTickResult.lane` gana `'reconcile'`; campo opcional
       `reconcile?: ReconcilePageResult`.
-- [ ] 5.7 RED seam S6 — arbitraje con los TRES use cases reales + scheduler real sobre ~40 ticks: delta
+- [x] 5.7 RED seam S6 — arbitraje con los TRES use cases reales + scheduler real sobre ~40 ticks: delta
       gana siempre que está due; reconcile toma turnos cuando el delta no; backfill sigue progresando
-      (`itemsSynced > 0`); con el delta envenenado (`PoisonedApplicationRepo`) F4 se mantiene
-      (scenario 12, extendido a 3 carriles).
-- [ ] 5.8 GREEN de 5.7.
-- [ ] 5.9 RED `GetFinanceSyncStatus` gana bloque `reconcile` (`lastRunAt`, `lastResult`, `itemsSynced`,
+      (`itemsSynced > 0`); con el delta envenenado (`PoisonedApplicationRepoS6`) F4 se mantiene
+      (scenario 12, extendido a 3 carriles). También cierra la parte pendiente de S5 (4.10): un
+      `FinanceReceiptAnnulmentGuardError`/`FinanceReceiptPersistenceError` real desde el carril
+      reconcile no escala `effectiveIntervalMs` (probado con el scheduler REAL, no solo el genérico).
+- [x] 5.8 GREEN de 5.7. Gotcha real capturado: 3 tests nuevos usaban un timestamp fijo para `lastRunAt`
+      pero dejaban `now` en el reloj real del sistema — exactamente la fragilidad "reloj vivo" ya
+      documentada en memoria del repo. Corregido con `now` fijo consistente en los tres.
+- [x] 5.9 RED `GetFinanceSyncStatus` gana bloque `reconcile` (`lastRunAt`, `lastResult`, `itemsSynced`,
       `sweepInProgress`, `windowFrom`, `windowTo`, `pageOffset`), misma convención que delta/backfill.
-- [ ] 5.10 GREEN de 5.9.
+      También se propagó a `FinanceSyncStatusDto`/`toFinanceSyncStatusDto` (aditivo en `/sync/status`).
+- [x] 5.10 GREEN de 5.9.
 
 ## Fase 6 — Wiring + pin del composition root
 

@@ -3,11 +3,14 @@ import { DistributedLock } from '@domain/ports/DistributedLock';
 import { FinanceReceiptSyncConfigRepository, FinanceReceiptSyncConfig, FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { SyncGrReceiptsDelta, DeltaPageResult, deltaCursorHasPendingPages } from '@application/use-cases/finance/SyncGrReceiptsDelta';
 import { SyncGrReceiptsBackfillBatch, BackfillPageResult } from '@application/use-cases/finance/SyncGrReceiptsBackfillBatch';
+import { SyncGrReceiptsReconcileWindow, ReconcilePageResult, isReconcileDue } from '@application/use-cases/finance/SyncGrReceiptsReconcileWindow';
 import { FinanceReceiptPostFetchError } from '@application/use-cases/finance/financeIngestErrors';
 import { FinancePacingStatusDto } from '@application/dto/financeGrowth.dto';
 
 const LOCK_KEY = 'finance-receipts-ingest';
 const DELTA_ENTITY = 'finance-receipts-delta';
+/** gr-receipt-annulment — same entity key `SyncGrReceiptsReconcileWindow` writes to, re-declared here so the scheduler can decide `isReconcileDue` WITHOUT re-running the use case (same criterion as `DELTA_ENTITY`/`isDeltaDue`). */
+const RECONCILE_ENTITY = 'finance-receipts-reconcile';
 
 export interface FinanceReceiptIngestSchedulerOptions {
   /** Suppress console logging (tests). */
@@ -19,8 +22,9 @@ export interface FinanceReceiptIngestSchedulerOptions {
 export interface FinanceReceiptIngestTickResult {
   skipped?: boolean;
   error?: string;
-  lane?: 'delta' | 'backfill';
+  lane?: 'delta' | 'reconcile' | 'backfill';
   delta?: DeltaPageResult;
+  reconcile?: ReconcilePageResult;
   backfill?: BackfillPageResult;
 }
 
@@ -71,7 +75,7 @@ export class FinanceReceiptIngestScheduler {
    * the read stayed broken. See `start()` for the actual override.
    */
   private currentEnabled = true;
-  private activeLane: 'delta' | 'backfill' | 'idle' = 'idle';
+  private activeLane: 'delta' | 'reconcile' | 'backfill' | 'idle' = 'idle';
 
   // fix-wave-2 R4 — health tracked PER SOURCE. Before this fix, a single
   // SHARED `consecutiveFailures` counter was reset to 0 by ANY tick's
@@ -81,6 +85,15 @@ export class FinanceReceiptIngestScheduler {
   // lied exactly on the case F4's circuit breaker exists to handle).
   private deltaConsecutiveFailures = 0;
   private backfillConsecutiveFailures = 0;
+  /**
+   * gr-receipt-annulment (design.md Decision 1) — the reconcile lane's OWN
+   * counter, NEVER shared with `deltaConsecutiveFailures` even though the
+   * F4 anti-starvation mechanic reuses the SAME threshold knob
+   * (`deltaStarvationThreshold`) — R4's lesson applied to the third lane: a
+   * shared counter would let reconcile's recovery mask delta's sustained
+   * failure, or vice versa.
+   */
+  private reconcileConsecutiveFailures = 0;
   // fix-wave-2 R5 — scheduler-level infra failures (config read / lock ops),
   // tracked separately from lane health so a config hiccup doesn't get
   // silently absorbed into (or silently absorb) a lane's own failure streak.
@@ -128,8 +141,23 @@ export class FinanceReceiptIngestScheduler {
      * next tick.
      */
     private readonly syncConfig: Pick<FinanceReceiptSyncConfigRepository, 'get'>,
+    /**
+     * gr-receipt-annulment (design.md Wiring, W6/R9 criterion) — the third
+     * lane, MANDATORY and POSITIONAL (never optional-trailing): a bootstrap
+     * that drops this wiring must FAIL TO COMPILE, not silently run with a
+     * dead reconcile lane. Pinned by a `@ts-expect-error` aridity test
+     * (`finance-growth-composition-root.test.ts`) — if the type ever gets
+     * loosened to optional, that pin fails, catching the regression at the
+     * type layer before it ever reaches runtime.
+     */
+    private readonly syncReconcile: Pick<SyncGrReceiptsReconcileWindow, 'execute'>,
     private readonly opts: FinanceReceiptIngestSchedulerOptions = {},
   ) {
+    if (!syncReconcile) {
+      throw new Error(
+        'FinanceReceiptIngestScheduler: syncReconcile is REQUIRED (design.md Wiring) — omitting it would silently run the scheduler with a dead reconcile lane instead of failing loudly.',
+      );
+    }
     this.now = opts.now ?? (() => new Date());
   }
 
@@ -252,7 +280,7 @@ export class FinanceReceiptIngestScheduler {
       }
 
       try {
-        return await this.runTick(cfg.deltaCheckIntervalMs);
+        return await this.runTick(cfg);
       } finally {
         try {
           await this.lock.release(LOCK_KEY);
@@ -307,18 +335,18 @@ export class FinanceReceiptIngestScheduler {
     }
   }
 
-  /** The actual delta-vs-backfill arbitration + execution, ALWAYS called with both guards already held. */
-  private async runTick(deltaCheckIntervalMs: number): Promise<FinanceReceiptIngestTickResult> {
+  /** The actual delta > reconcile > backfill arbitration + execution, ALWAYS called with both guards already held. */
+  private async runTick(cfg: FinanceReceiptSyncConfig): Promise<FinanceReceiptIngestTickResult> {
     this.tickCount++;
     try {
-      const deltaDue = await this.isDeltaDue(deltaCheckIntervalMs);
+      const deltaDue = await this.isDeltaDue(cfg.deltaCheckIntervalMs);
       // fix-wave-1 F4 — once the delta has failed `deltaStarvationThreshold`
       // times in a row, it no longer gets EVERY tick just by being "due": the
-      // scheduler alternates with the backfill lane (odd ticks still retry
-      // delta so it can recover immediately; even ticks give backfill the
-      // turn so history keeps progressing instead of sitting at zero).
-      const starved = this.deltaConsecutiveFailures >= this.currentDeltaStarvationThreshold;
-      const runDelta = deltaDue && !(starved && this.tickCount % 2 === 0);
+      // scheduler alternates with the other lanes (odd ticks still retry
+      // delta so it can recover immediately; even ticks cede the turn so
+      // history keeps progressing instead of sitting at zero).
+      const deltaStarved = this.deltaConsecutiveFailures >= this.currentDeltaStarvationThreshold;
+      const runDelta = deltaDue && !(deltaStarved && this.tickCount % 2 === 0);
 
       if (runDelta) {
         let delta: DeltaPageResult;
@@ -335,6 +363,37 @@ export class FinanceReceiptIngestScheduler {
         this.refreshEffectiveInterval();
         this.log(`[finance-receipts] delta: +${delta.pageProcessed}${delta.hasPendingPages ? ' (pending)' : ''}`);
         return { lane: 'delta', delta };
+      }
+
+      // gr-receipt-annulment (design.md Decision 1) — reconcile takes the
+      // tick whenever delta is quiet AND reconcile itself has work, BEFORE
+      // backfill ever gets a look. `reconcileEnabled` is checked here (the
+      // kill-switch), never inside `isReconcileDue` itself (a pure function
+      // of "is there work", not the kill-switch — design.md `isReconcileDue`).
+      const reconcileDue = cfg.reconcileEnabled && (await this.isReconcileDueNow(cfg.reconcileCheckIntervalMs));
+      // F4 mirrored for reconcile — SAME knob (`deltaStarvationThreshold`,
+      // no new one invented), but its OWN counter: a chronically-broken
+      // reconcile that's always "due" (pending pages that never persist)
+      // would otherwise claim 100% of the turns delta cedes and starve
+      // backfill — the exact F4 bug, one lane over.
+      const reconcileStarved = this.reconcileConsecutiveFailures >= this.currentDeltaStarvationThreshold;
+      const runReconcile = reconcileDue && !(reconcileStarved && this.tickCount % 2 === 0);
+
+      if (runReconcile) {
+        let reconcile: ReconcilePageResult;
+        try {
+          reconcile = await this.syncReconcile.execute();
+        } catch (err) {
+          this.reconcileConsecutiveFailures++;
+          this.trackGrHealth(err);
+          throw err;
+        }
+        this.reconcileConsecutiveFailures = 0;
+        this.grConsecutiveFailures = 0;
+        this.activeLane = 'reconcile';
+        this.refreshEffectiveInterval();
+        this.log(`[finance-receipts] reconcile: +${reconcile.pageProcessed}${reconcile.sweepInProgress ? ' (sweep in progress)' : ''}`);
+        return { lane: 'reconcile', reconcile };
       }
 
       let backfill: BackfillPageResult;
@@ -407,6 +466,18 @@ export class FinanceReceiptIngestScheduler {
   }
 
   /**
+   * gr-receipt-annulment (design.md Decision 2) — reads the reconcile lane's
+   * OWN `SyncState` entity and delegates the due-ness cycle to
+   * `isReconcileDue` (the SAME pure function `SyncGrReceiptsReconcileWindow`
+   * uses internally) — one implementation of "is there work", never a second
+   * copy that could drift from what the use case itself decides.
+   */
+  private async isReconcileDueNow(reconcileCheckIntervalMs: number): Promise<boolean> {
+    const reconcileState = await this.state.get(RECONCILE_ENTITY);
+    return isReconcileDue({ reconcileCheckIntervalMs }, reconcileState, this.now());
+  }
+
+  /**
    * fix-wave-2 R4 — `consecutiveFailures`/`degraded` on `/sync/status` (and
    * the F4 starvation threshold, via `deltaConsecutiveFailures` directly)
    * derive from the WORST currently-open failure streak across BOTH lanes AND
@@ -435,6 +506,7 @@ export class FinanceReceiptIngestScheduler {
   private worstConsecutiveFailures(): number {
     return Math.max(
       this.deltaConsecutiveFailures,
+      this.reconcileConsecutiveFailures,
       this.backfillConsecutiveFailures,
       this.configConsecutiveFailures,
       this.lockConsecutiveFailures,

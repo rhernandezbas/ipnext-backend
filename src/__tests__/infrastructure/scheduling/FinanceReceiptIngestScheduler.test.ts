@@ -5,14 +5,20 @@ import { InMemoryFinanceReceiptSyncConfigRepository } from '@infrastructure/adap
 import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { DeltaPageResult } from '@application/use-cases/finance/SyncGrReceiptsDelta';
 import { BackfillPageResult } from '@application/use-cases/finance/SyncGrReceiptsBackfillBatch';
+import { ReconcilePageResult } from '@application/use-cases/finance/SyncGrReceiptsReconcileWindow';
 import { FinanceReceiptPersistenceError, FinanceReceiptAnnulmentGuardError } from '@application/use-cases/finance/financeIngestErrors';
 
 const DELTA_ENTITY = 'finance-receipts-delta';
+const RECONCILE_ENTITY = 'finance-receipts-reconcile';
 
 function fakeDelta(result: DeltaPageResult | Error = { pageProcessed: 0, hasPendingPages: false, coveredThroughDate: null }) {
   return { execute: jest.fn(async () => { if (result instanceof Error) throw result; return result; }) };
 }
 function fakeBackfill(result: BackfillPageResult | Error = { pageProcessed: 0, monthAdvanced: false, done: true }) {
+  return { execute: jest.fn(async () => { if (result instanceof Error) throw result; return result; }) };
+}
+// gr-receipt-annulment (design.md Decision 1) — third lane fake, molde fakeDelta/fakeBackfill.
+function fakeReconcile(result: ReconcilePageResult | Error = { pageProcessed: 0, sweepInProgress: false, windowFrom: null, windowTo: null }) {
   return { execute: jest.fn(async () => { if (result instanceof Error) throw result; return result; }) };
 }
 
@@ -28,17 +34,37 @@ function makeHarness(opts: {
   const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
   const delta = fakeDelta();
   const backfill = fakeBackfill();
-  const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, {
+  const reconcile = fakeReconcile();
+  // gr-receipt-annulment — reconcile defaults to "already satisfied" (a
+  // closed sweep, just ran) so the ~30 PRE-EXISTING delta-vs-backfill tests
+  // in this file (written before the third lane existed) keep their original
+  // 2-lane semantics unless a test explicitly seeds RECONCILE_ENTITY itself
+  // (the dedicated arbitration describe block below does exactly that).
+  // Without this, `isReconcileDue`'s `!prior` branch makes reconcile due by
+  // DEFAULT (never ran) in every one of those tests, silently stealing turns
+  // that used to go to backfill. `InMemorySyncStateRepository.save` has no
+  // internal `await`, so the Map write lands synchronously before this
+  // function returns — safe to fire-and-forget in a non-async helper.
+  void state.save({ entity: RECONCILE_ENTITY, cursor: null, lastRunAt: (opts.now ?? (() => new Date()))(), lastResult: 'sweep ok', itemsSynced: 0 });
+  const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, reconcile as never, {
     silent: true,
     now: opts.now,
   });
-  return { state, lock, syncConfig, delta, backfill, scheduler, opts };
+  return { state, lock, syncConfig, delta, backfill, reconcile, scheduler, opts };
 }
 
 /** Seeds the config repo BEFORE constructing the harness's expectations — call before `scheduler.tick()`. */
 async function seedConfig(
   syncConfig: InMemoryFinanceReceiptSyncConfigRepository,
-  patch: { requestIntervalMs?: number; maxRequestIntervalMs?: number; deltaCheckIntervalMs?: number; enabled?: boolean; deltaStarvationThreshold?: number },
+  patch: {
+    requestIntervalMs?: number;
+    maxRequestIntervalMs?: number;
+    deltaCheckIntervalMs?: number;
+    enabled?: boolean;
+    deltaStarvationThreshold?: number;
+    reconcileEnabled?: boolean;
+    reconcileCheckIntervalMs?: number;
+  },
 ) {
   await syncConfig.update(patch);
 }
@@ -158,7 +184,7 @@ describe('FinanceReceiptIngestScheduler', () => {
     const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
     const delta = fakeDelta();
     const backfill = fakeBackfill();
-    const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, alwaysGrantingLock as never, syncConfig, { silent: true });
+    const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, alwaysGrantingLock as never, syncConfig, fakeReconcile() as never, { silent: true });
 
     const [r1, r2] = await Promise.all([scheduler.tick(), scheduler.tick()]);
     const results = [r1, r2];
@@ -343,7 +369,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       const delta = { execute: jest.fn(async () => { await inFlightDelta; return { pageProcessed: 0, hasPendingPages: false, coveredThroughDate: null }; }) };
       const backfill = { execute: jest.fn(async () => ({ pageProcessed: 0, monthAdvanced: false, done: true })) };
 
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       scheduler.start();
       // Let the FIRST tick start and get stuck awaiting `inFlightDelta`.
@@ -367,7 +393,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       scheduler.start();
       scheduler.stop();
@@ -397,7 +423,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       await syncConfig.update({ requestIntervalMs: 20000, deltaCheckIntervalMs: 300000 });
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       scheduler.start();
       scheduler.start(); // called again — must NOT create a second parallel timer chain
@@ -426,7 +452,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       const delta = { execute: jest.fn(async () => { await inFlightDelta; return { pageProcessed: 0, hasPendingPages: false, coveredThroughDate: null }; }) };
       const backfill = { execute: jest.fn(async () => ({ pageProcessed: 0, monthAdvanced: false, done: true })) };
 
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       scheduler.start(); // arms chain A
       await jest.advanceTimersByTimeAsync(20000); // chain A fires -> tick 1 starts, stuck in-flight
@@ -518,7 +544,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       const throwingConfig = { get: jest.fn(async () => { throw new Error('config DB down'); }) };
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, fakeReconcile() as never, { silent: true });
 
       const result = await scheduler.tick();
 
@@ -534,7 +560,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       const throwingConfig = { get: jest.fn(async () => { throw new Error('config DB down'); }) };
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, fakeReconcile() as never, { silent: true });
 
       await scheduler.tick();
 
@@ -555,7 +581,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       };
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, flakyConfig as never, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, flakyConfig as never, fakeReconcile() as never, { silent: true });
 
       await scheduler.tick();
       expect(scheduler.status.degraded).toBe(true);
@@ -573,7 +599,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       const throwingConfig = { get: jest.fn(async () => { throw new Error('config DB down'); }) };
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, fakeReconcile() as never, { silent: true });
 
       for (let i = 0; i < 5; i++) {
         await expect(scheduler.tick()).resolves.toBeDefined();
@@ -598,7 +624,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       await syncConfig.update({ enabled: false });
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       // First tick: a REAL read observes enabled=false.
       const first = await scheduler.tick();
@@ -628,7 +654,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       await syncConfig.update({ enabled: false });
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       await scheduler.tick();
       expect(scheduler.isEnabled()).toBe(false);
@@ -648,7 +674,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       await syncConfig.update({ enabled: false, requestIntervalMs: 5000 });
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       await scheduler.tick();
       expect(scheduler.status.requestIntervalMs).toBe(5000);
@@ -678,7 +704,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       const throwingConfig = { get: jest.fn(async () => { throw new Error('config DB down'); }) };
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, fakeReconcile() as never, { silent: true });
 
       // No `start()` call — this is the shape unit tests use throughout this
       // file, never the real boot path. Documented, not "fixed": nothing in
@@ -717,7 +743,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       };
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, throwingConfig as never, fakeReconcile() as never, { silent: true });
 
       scheduler.start();
       // Before the fix: `currentEnabled` stayed at the optimistic `true` set
@@ -746,7 +772,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       await syncConfig.update({ requestIntervalMs: 20000, deltaCheckIntervalMs: 300000 }); // enabled stays true (default)
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       scheduler.start();
       await jest.advanceTimersByTimeAsync(20000);
@@ -764,7 +790,7 @@ describe('FinanceReceiptIngestScheduler', () => {
       await syncConfig.update({ requestIntervalMs: 20000, enabled: false });
       const delta = fakeDelta();
       const backfill = fakeBackfill();
-      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, { silent: true });
+      const scheduler = new FinanceReceiptIngestScheduler(delta as never, backfill as never, state, lock, syncConfig, fakeReconcile() as never, { silent: true });
 
       scheduler.start();
       await jest.advanceTimersByTimeAsync(20000);
@@ -934,6 +960,196 @@ describe('FinanceReceiptIngestScheduler', () => {
       }
 
       expect(sawResetOnBackfillTurn).toBe(true);
+    });
+  });
+
+  // ── gr-receipt-annulment (design.md Decision 1) — the third lane's
+  // arbitration: delta > reconcile > backfill, strict priority. Reconcile
+  // mirrors delta's F4 anti-starvation mechanic (SAME knob,
+  // `deltaStarvationThreshold` — no new one invented) but with its OWN
+  // counter (`reconcileConsecutiveFailures`, never shared with delta's) —
+  // R4's lesson applied to the new lane: a shared counter lets one lane's
+  // recovery mask another's sustained failure.
+  describe('gr-receipt-annulment: reconcile lane arbitration (delta > reconcile > backfill)', () => {
+    it('scenario 6 — delta claims the tick over reconcile and backfill, even when both have work', async () => {
+      const { state, delta, backfill, reconcile, scheduler, syncConfig } = makeHarness();
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-07-2026:15-07-2026:20', lastRunAt: new Date(), lastResult: 'page ok', itemsSynced: 20 });
+      // reconcile is due by default (never ran) — same "also has work" shape as backfill.
+
+      const result = await scheduler.tick();
+
+      expect(delta.execute).toHaveBeenCalledTimes(1);
+      expect(reconcile.execute).not.toHaveBeenCalled();
+      expect(backfill.execute).not.toHaveBeenCalled();
+      expect(result.lane).toBe('delta');
+    });
+
+    it('scenario 7 — reconcile claims the tick when delta is quiet and its own cadence is due, ahead of backfill', async () => {
+      const now = new Date('2026-08-10T12:05:00Z');
+      const { state, delta, backfill, reconcile, scheduler, syncConfig } = makeHarness({ now: () => now });
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+      // Delta NOT due: plain cursor, interval not elapsed.
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T12:02:00Z'), lastResult: 'ok', itemsSynced: 1 });
+      // Reconcile's cadence elapsed (default 6h, last ran 12h ago) — overrides `makeHarness`'s "just satisfied" default.
+      await state.save({ entity: RECONCILE_ENTITY, cursor: null, lastRunAt: new Date('2026-08-10T00:00:00Z'), lastResult: 'sweep ok', itemsSynced: 5 });
+
+      const result = await scheduler.tick();
+
+      expect(reconcile.execute).toHaveBeenCalledTimes(1);
+      expect(delta.execute).not.toHaveBeenCalled();
+      expect(backfill.execute).not.toHaveBeenCalled();
+      expect(result.lane).toBe('reconcile');
+    });
+
+    it('scenario 8 — backfill is not starved indefinitely: it gets the turn once reconcile has no pending work and its cadence has not elapsed', async () => {
+      const now = new Date('2026-08-10T12:05:00Z');
+      const { state, delta, backfill, reconcile, scheduler, syncConfig } = makeHarness({ now: () => now });
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000, reconcileCheckIntervalMs: 21600000 });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T12:02:00Z'), lastResult: 'ok', itemsSynced: 1 });
+      // Reconcile's sweep already closed AND its cadence has not elapsed.
+      await state.save({ entity: RECONCILE_ENTITY, cursor: null, lastRunAt: new Date('2026-08-10T10:00:00Z'), lastResult: 'sweep ok', itemsSynced: 5 });
+
+      const result = await scheduler.tick();
+
+      expect(backfill.execute).toHaveBeenCalledTimes(1);
+      expect(delta.execute).not.toHaveBeenCalled();
+      expect(reconcile.execute).not.toHaveBeenCalled();
+      expect(result.lane).toBe('backfill');
+    });
+
+    it('reconcile is due when its own sweep still has pending pages (composite cursor), regardless of cadence', async () => {
+      const now = new Date('2026-08-10T12:05:00Z');
+      const { state, backfill, reconcile, scheduler, syncConfig } = makeHarness({ now: () => now });
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T12:02:00Z'), lastResult: 'ok', itemsSynced: 1 });
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:100', lastRunAt: new Date('2026-08-10T12:04:00Z'), lastResult: 'page ok @100', itemsSynced: 100 });
+
+      const result = await scheduler.tick();
+
+      expect(reconcile.execute).toHaveBeenCalledTimes(1);
+      expect(backfill.execute).not.toHaveBeenCalled();
+      expect(result.lane).toBe('reconcile');
+    });
+
+    it('reconcileEnabled: false means reconcile is never due — backfill gets the turn instead (delta already satisfied)', async () => {
+      const { state, backfill, reconcile, scheduler, syncConfig } = makeHarness();
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+      await syncConfig.update({ reconcileEnabled: false });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date(), lastResult: 'ok', itemsSynced: 1 }); // delta NOT due
+
+      const result = await scheduler.tick();
+
+      expect(backfill.execute).toHaveBeenCalledTimes(1);
+      expect(reconcile.execute).not.toHaveBeenCalled();
+      expect(result.lane).toBe('backfill');
+    });
+
+    it('activeLane reports "reconcile" while it holds the turn', async () => {
+      const { state, scheduler, syncConfig } = makeHarness();
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-07-2026', lastRunAt: new Date(), lastResult: 'ok', itemsSynced: 1 }); // delta NOT due
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: new Date(), lastResult: 'error: x', itemsSynced: 0 }); // reconcile due (pending pages)
+
+      const result = await scheduler.tick();
+
+      expect(result.lane).toBe('reconcile');
+      expect(scheduler.status.activeLane).toBe('reconcile');
+    });
+
+    describe('F4 mirrored for reconcile — own counter, same knob', () => {
+      it('after deltaStarvationThreshold consecutive reconcile failures, backfill starts getting turns even though reconcile remains "due"', async () => {
+        const { state, backfill, reconcile, scheduler, syncConfig } = makeHarness();
+        await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+        await state.save({ entity: DELTA_ENTITY, cursor: '10-07-2026', lastRunAt: new Date(), lastResult: 'ok', itemsSynced: 1 });
+        // Reconcile has a composite (pending-pages) cursor -> ALWAYS "due".
+        await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: new Date(), lastResult: 'error: GR down', itemsSynced: 0 });
+        (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = fakeReconcile(new Error('GR down')) as never;
+
+        await scheduler.tick();
+        await scheduler.tick();
+        await scheduler.tick();
+        expect(backfill.execute).not.toHaveBeenCalled();
+
+        let backfillRanAtLeastOnce = false;
+        for (let i = 0; i < 10; i++) {
+          const r = await scheduler.tick();
+          if (r.lane === 'backfill') backfillRanAtLeastOnce = true;
+        }
+
+        expect(backfillRanAtLeastOnce).toBe(true);
+        void reconcile;
+      });
+
+      it("reconcile's failure streak does NOT feed delta's own F4 counter, and vice versa — independent circuit breakers", async () => {
+        const { state, delta, scheduler, syncConfig } = makeHarness();
+        await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+        // Delta is NOT due (plain cursor, interval fresh) so every tick goes to reconcile.
+        await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T13:59:00Z'), lastResult: 'ok', itemsSynced: 1 });
+        await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: new Date('2026-08-10T13:59:00Z'), lastResult: 'error: GR down', itemsSynced: 0 });
+        (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = fakeReconcile(new Error('GR down')) as never;
+
+        for (let i = 0; i < 5; i++) await scheduler.tick();
+
+        // Delta never even attempted — its own F4 streak must stay at 0, so a
+        // FUTURE delta failure still gets the full deltaStarvationThreshold
+        // grace period, unpolluted by reconcile's unrelated failures.
+        expect(delta.execute).not.toHaveBeenCalled();
+      });
+    });
+
+    it('worstConsecutiveFailures (degraded/consecutiveFailures on /sync/status) includes the reconcile counter', async () => {
+      // Fixed clock — pinning `lastRunAt` to a literal timestamp while
+      // leaving `now` on the REAL wall clock is exactly the "reloj vivo"
+      // brittleness this repo has been bitten by before (the isDeltaDue
+      // check would silently flip from NOT-due to due depending on when the
+      // suite happens to run).
+      const now = new Date('2026-08-10T14:00:00Z');
+      const { state, scheduler, syncConfig } = makeHarness({ now: () => now });
+      await seedConfig(syncConfig, { deltaCheckIntervalMs: 300000 });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T13:59:00Z'), lastResult: 'ok', itemsSynced: 1 });
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: now, lastResult: 'error: GR down', itemsSynced: 0 });
+      (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = fakeReconcile(new Error('GR down')) as never;
+
+      await scheduler.tick();
+
+      expect(scheduler.status.degraded).toBe(true);
+      expect(scheduler.status.consecutiveFailures).toBeGreaterThan(0);
+    });
+
+    it('a reconcile failure that is a FinanceReceiptPersistenceError does not escalate the shared pacing backoff (same R8 criterion as delta/backfill)', async () => {
+      const now = new Date('2026-08-10T14:00:00Z');
+      const { state, scheduler, syncConfig } = makeHarness({ now: () => now });
+      await seedConfig(syncConfig, { requestIntervalMs: 20000, maxRequestIntervalMs: 300000, deltaCheckIntervalMs: 300000, deltaStarvationThreshold: 100 });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T13:59:00Z'), lastResult: 'ok', itemsSynced: 1 });
+      // Reconcile due (pending pages) every tick — the poisoned fake below never advances the cursor either.
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: now, lastResult: 'ok', itemsSynced: 0 });
+      (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = {
+        execute: jest.fn(async () => { throw new FinanceReceiptPersistenceError(new Error('P2000: poisoned row')); }),
+      } as never;
+
+      for (let i = 0; i < 4; i++) {
+        const r = await scheduler.tick();
+        expect(r.error).toBeDefined(); // confirms reconcile was actually ATTEMPTED (and failed), not skipped/no-op
+        expect(scheduler.status.effectiveIntervalMs).toBe(20000);
+      }
+    });
+
+    it('a reconcile failure that is a FinanceReceiptAnnulmentGuardError also does not escalate the shared pacing backoff', async () => {
+      const now = new Date('2026-08-10T14:00:00Z');
+      const { state, scheduler, syncConfig } = makeHarness({ now: () => now });
+      await seedConfig(syncConfig, { requestIntervalMs: 20000, maxRequestIntervalMs: 300000, deltaCheckIntervalMs: 300000, deltaStarvationThreshold: 100 });
+      await state.save({ entity: DELTA_ENTITY, cursor: '10-08-2026', lastRunAt: new Date('2026-08-10T13:59:00Z'), lastResult: 'ok', itemsSynced: 1 });
+      await state.save({ entity: RECONCILE_ENTITY, cursor: '07-07-2026:10-08-2026:0', lastRunAt: now, lastResult: 'ok', itemsSynced: 0 });
+      (scheduler as unknown as { syncReconcile: { execute: jest.Mock } }).syncReconcile = {
+        execute: jest.fn(async () => { throw new FinanceReceiptAnnulmentGuardError('ABORT anulados=63/100'); }),
+      } as never;
+
+      for (let i = 0; i < 4; i++) {
+        const r = await scheduler.tick();
+        expect(r.error).toBeDefined();
+        expect(scheduler.status.effectiveIntervalMs).toBe(20000);
+      }
     });
   });
 });

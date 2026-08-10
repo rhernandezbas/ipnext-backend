@@ -64,7 +64,7 @@ export interface FinancePacingStatusDto {
   effectiveIntervalMs: number;
   degraded: boolean;
   consecutiveFailures: number;
-  activeLane: 'delta' | 'backfill' | 'idle';
+  activeLane: 'delta' | 'reconcile' | 'backfill' | 'idle';
   /**
    * fix-wave-2 R3 — the LIVE `FinanceReceiptSyncConfig.enabled` kill-switch,
    * as last observed by a tick. Before this field existed, an operator who
@@ -82,6 +82,16 @@ export interface FinanceSyncStatusDto {
     itemsSynced: number;
     pendingPages: boolean;
     coveredThroughDate: string | null;
+  };
+  /** gr-receipt-annulment (design.md Decision 9) — third lane, same derive-from-SyncState shape as delta/backfill. */
+  reconcile: {
+    lastRunAt: string | null;
+    lastResult: string | null;
+    itemsSynced: number;
+    sweepInProgress: boolean;
+    windowFrom: string | null;
+    windowTo: string | null;
+    pageOffset: number;
   };
   backfill: {
     lastRunAt: string | null;
@@ -125,6 +135,15 @@ export function toFinanceSyncStatusDto(
       itemsSynced: status.delta.itemsSynced,
       pendingPages: status.delta.pendingPages,
       coveredThroughDate: status.delta.coveredThroughDate,
+    },
+    reconcile: {
+      lastRunAt: status.reconcile.lastRunAt?.toISOString() ?? null,
+      lastResult: status.reconcile.lastResult,
+      itemsSynced: status.reconcile.itemsSynced,
+      sweepInProgress: status.reconcile.sweepInProgress,
+      windowFrom: status.reconcile.windowFrom,
+      windowTo: status.reconcile.windowTo,
+      pageOffset: status.reconcile.pageOffset,
     },
     backfill: {
       lastRunAt: status.backfill.lastRunAt?.toISOString() ?? null,

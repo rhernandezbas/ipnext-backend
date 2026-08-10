@@ -1,9 +1,12 @@
 import { SyncStateRepository } from '@domain/ports/SyncStateRepository';
 import { deltaCursorHasPendingPages } from './SyncGrReceiptsDelta';
+import { parseCompositeCursor } from './financeReceiptCursors';
 import { isValidYearMonth } from './financeDates';
 
 const DELTA_ENTITY = 'finance-receipts-delta';
 const BACKFILL_ENTITY = 'finance-receipts-backfill';
+/** gr-receipt-annulment — SAME entity key `SyncGrReceiptsReconcileWindow` writes to. */
+const RECONCILE_ENTITY = 'finance-receipts-reconcile';
 const DEBTOR_BALANCES_ENTITY = 'gr-debtor-balances';
 /** finance-growth Fase 3 rework (J3) — SAME entity key `FinanceSnapshotScheduler` writes to via `SyncStateRepository`. */
 export const SNAPSHOT_JOB_ENTITY = 'finance-snapshot-job';
@@ -35,6 +38,19 @@ export interface FinanceDebtorBalancesStatus {
   itemsSynced: number;
 }
 
+/** gr-receipt-annulment (design.md Decision 9) — same derive-from-SyncState convention as delta/backfill. */
+export interface FinanceReconcileStatus {
+  lastRunAt: Date | null;
+  lastResult: string | null;
+  itemsSynced: number;
+  /** True while the current window sweep still has unpaged pages (composite cursor). */
+  sweepInProgress: boolean;
+  /** The window ["DD-MM-AAAA", "DD-MM-AAAA"] of the sweep IN PROGRESS, or null when idle/unknown. */
+  windowFrom: string | null;
+  windowTo: string | null;
+  pageOffset: number;
+}
+
 /** finance-growth Fase 3 rework (J3) — same shape as `FinanceDebtorBalancesStatus`, kept as its own named type for clarity at the call site. */
 export interface FinanceSnapshotJobStatus {
   lastRunAt: Date | null;
@@ -44,6 +60,7 @@ export interface FinanceSnapshotJobStatus {
 
 export interface FinanceSyncStatus {
   delta: FinanceDeltaStatus;
+  reconcile: FinanceReconcileStatus;
   backfill: FinanceBackfillStatus;
   debtorBalances: FinanceDebtorBalancesStatus;
   snapshotJob: FinanceSnapshotJobStatus;
@@ -63,8 +80,9 @@ export class GetFinanceSyncStatus {
   constructor(private readonly state: SyncStateRepository) {}
 
   async execute(): Promise<FinanceSyncStatus> {
-    const [delta, backfill, debtor, snapshotJob] = await Promise.all([
+    const [delta, reconcile, backfill, debtor, snapshotJob] = await Promise.all([
       this.state.get(DELTA_ENTITY),
+      this.state.get(RECONCILE_ENTITY),
       this.state.get(BACKFILL_ENTITY),
       this.state.get(DEBTOR_BALANCES_ENTITY),
       this.state.get(SNAPSHOT_JOB_ENTITY),
@@ -77,6 +95,32 @@ export class GetFinanceSyncStatus {
       itemsSynced: delta?.itemsSynced ?? 0,
       pendingPages,
       coveredThroughDate: delta?.cursor && !pendingPages ? delta.cursor : null,
+    };
+
+    // gr-receipt-annulment (design.md Decision 9) — same F14 criterion as
+    // backfill below: a corrupt/unparseable composite cursor reports
+    // "unknown" (null window, sweepInProgress:false), never a garbage slice.
+    let windowFrom: string | null = null;
+    let windowTo: string | null = null;
+    let pageOffset = 0;
+    let sweepInProgress = false;
+    if (reconcile?.cursor && deltaCursorHasPendingPages(reconcile.cursor)) {
+      const parsed = parseCompositeCursor(reconcile.cursor);
+      if (parsed) {
+        windowFrom = parsed.fechaDesde;
+        windowTo = parsed.fechaHasta;
+        pageOffset = parsed.offset;
+        sweepInProgress = true;
+      }
+    }
+    const reconcileStatus: FinanceReconcileStatus = {
+      lastRunAt: reconcile?.lastRunAt ?? null,
+      lastResult: reconcile?.lastResult ?? null,
+      itemsSynced: reconcile?.itemsSynced ?? 0,
+      sweepInProgress,
+      windowFrom,
+      windowTo,
+      pageOffset,
     };
 
     let cursorYearMonth: string | null = null;
@@ -129,6 +173,6 @@ export class GetFinanceSyncStatus {
       itemsSynced: snapshotJob?.itemsSynced ?? 0,
     };
 
-    return { delta: deltaStatus, backfill: backfillStatus, debtorBalances, snapshotJob: snapshotJobStatus };
+    return { delta: deltaStatus, reconcile: reconcileStatus, backfill: backfillStatus, debtorBalances, snapshotJob: snapshotJobStatus };
   }
 }

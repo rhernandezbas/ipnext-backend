@@ -88,12 +88,15 @@ async function buildApp(overrides: { rearmBackfill?: RearmFinanceReceiptsBackfil
   const financeSchedulerLock = new InMemoryDistributedLock();
   const noopDelta = { execute: async () => ({ pageProcessed: 0, hasPendingPages: false, coveredThroughDate: null }) };
   const noopBackfill = { execute: async () => ({ pageProcessed: 0, monthAdvanced: false, done: true }) };
+  // gr-receipt-annulment — third lane, same no-op molde as delta/backfill above.
+  const noopReconcile = { execute: async () => ({ pageProcessed: 0, sweepInProgress: false, windowFrom: null, windowTo: null }) };
   const financeScheduler = new FinanceReceiptIngestScheduler(
     noopDelta,
     noopBackfill,
     new InMemorySyncStateRepository(),
     financeSchedulerLock,
     financeSyncConfig,
+    noopReconcile,
     { silent: true },
   );
 

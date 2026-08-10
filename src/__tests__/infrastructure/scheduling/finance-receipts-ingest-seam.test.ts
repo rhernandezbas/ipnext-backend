@@ -278,16 +278,22 @@ describe('finance-receipts-ingest seam — F4 anti-starvation with the REAL use 
     const applicationRepo = new PoisonedApplicationRepo(receiptRepo);
     const invoiceTypes = new InMemoryFinanceInvoiceTypeClassificationRepository();
     const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
-    await syncConfig.update({ backfillFloorYearMonth: '2026-01' });
+    // gr-receipt-annulment — reconcile stays OUT of this test's dynamics on
+    // purpose: this test is specifically about delta-vs-backfill F4
+    // starvation with the REAL use cases; a real reconcile lane would be a
+    // THIRD variable in a test that already isolates two. The dedicated
+    // 3-lane arbitration seam (task 5.7, "S6") exercises reconcile for real.
+    await syncConfig.update({ backfillFloorYearMonth: '2026-01', reconcileEnabled: false });
 
     const now = () => new Date('2026-07-15T14:00:00Z');
     const itemRepo = new InMemoryFinanceReceiptItemRepository();
     const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
     const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo, { now });
     const syncBackfill = new SyncGrReceiptsBackfillBatch(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
+    const noopReconcile = { execute: async () => ({ pageProcessed: 0, sweepInProgress: false, windowFrom: null, windowTo: null }) };
 
     const lock = new InMemoryDistributedLock();
-    const scheduler = new FinanceReceiptIngestScheduler(syncDelta, syncBackfill, state, lock, syncConfig, { silent: true, now });
+    const scheduler = new FinanceReceiptIngestScheduler(syncDelta, syncBackfill, state, lock, syncConfig, noopReconcile as never, { silent: true, now });
 
     for (let i = 0; i < 30; i++) {
       await scheduler.tick();
@@ -461,5 +467,84 @@ describe('finance-receipts-ingest seam — SyncGrReceiptsReconcileWindow (S1-S5,
     const saved = await state.get(RECONCILE_ENTITY);
     expect(saved?.lastResult).toMatch(/^error:/);
     expect(saved?.cursor).toBe('07-07-2026:10-08-2026:0'); // sin avanzar — la misma página se reintenta
+  });
+});
+
+/**
+ * gr-receipt-annulment (design.md Testing strategy, "S6") — the THREE real
+ * use cases + the real scheduler, sharing ONE `GestionRealPort`, over ~40
+ * ticks. Molde the F4 seam test above, extended to a third lane: delta gets
+ * PERMANENTLY poisoned (persistence layer, GR itself healthy — same P2000
+ * shape) so its every attempt fails, while reconcile and backfill share a
+ * healthy responder. Verifies the full priority chain end to end: delta
+ * always attempted first; reconcile takes the turns delta cedes; backfill
+ * still progresses; the shared pacing backoff never escalates (GR was never
+ * the problem, only the poisoned lane's persistence).
+ */
+class PoisonedApplicationRepoS6 extends InMemoryFinanceReceiptApplicationRepository {
+  async upsertBatch(applications: FinanceReceiptApplication[]): Promise<void> {
+    if (applications.some((a) => a.amount === 999999999)) {
+      throw new Error('P2000: value too long for column importe');
+    }
+    return super.upsertBatch(applications);
+  }
+}
+
+describe('finance-receipts-ingest seam — S6: THREE real use cases + REAL scheduler, delta permanently poisoned', () => {
+  it('delta always attempted (and fails); reconcile takes the turns delta cedes; backfill keeps progressing; the shared backoff never escalates (F4 held across 3 lanes)', async () => {
+    const gr = new RawPayloadGestionRealPort();
+    let poisonCounter = 0;
+    let okCounter = 0;
+    gr.responder = (params) => {
+      if (params.fechaDesde === params.fechaHasta) {
+        // Delta's single-day request — ALWAYS poisoned.
+        return rawReciboPayload(`poison-${poisonCounter++}`, '100099', 999999999, '15-07-2026');
+      }
+      // Backfill's whole-month AND reconcile's 35-day-window requests both
+      // land here — a healthy receipt either way, unique ids never collide.
+      return rawReciboPayload(`ok-${okCounter++}`, '100011', 1000, '10-07-2026');
+    };
+
+    const state = new InMemorySyncStateRepository();
+    const receiptRepo = new InMemoryFinancePaymentReceiptRepository();
+    const applicationRepo = new PoisonedApplicationRepoS6(receiptRepo);
+    const invoiceTypes = new InMemoryFinanceInvoiceTypeClassificationRepository();
+    const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
+    await syncConfig.update({ backfillFloorYearMonth: '2026-01', reconcileWindowDays: 35, reconcileCheckIntervalMs: 21600000 });
+
+    const now = () => new Date('2026-08-10T14:00:00Z');
+    const itemRepo = new InMemoryFinanceReceiptItemRepository();
+    const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
+    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo, { now });
+    const syncBackfill = new SyncGrReceiptsBackfillBatch(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
+    const syncReconcile = new SyncGrReceiptsReconcileWindow(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
+
+    const lock = new InMemoryDistributedLock();
+    const scheduler = new FinanceReceiptIngestScheduler(syncDelta, syncBackfill, state, lock, syncConfig, syncReconcile, { silent: true, now });
+
+    const lanesSeen = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      const result = await scheduler.tick();
+      if (result.lane) lanesSeen.add(result.lane);
+      // The whole point of R8/Decision 4: a delta PERSISTENCE failure (GR is
+      // healthy) must never escalate the SHARED request-pacing backoff,
+      // whichever lane actually ran this tick.
+      expect(scheduler.status.effectiveIntervalMs).toBe(FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS.requestIntervalMs);
+    }
+
+    const deltaState = await state.get(DELTA_ENTITY);
+    const backfillState = await state.get(BACKFILL_ENTITY);
+    const reconcileState = await state.get(RECONCILE_ENTITY);
+
+    // Delta stays visibly broken — attempted every time it's due, never silently skipped.
+    expect(deltaState?.lastResult).toMatch(/^error:/);
+    // Reconcile and backfill BOTH made real progress across the 40 ticks —
+    // delta's permanent failure never fully starves either of them.
+    expect(reconcileState?.itemsSynced ?? 0).toBeGreaterThan(0);
+    expect(backfillState?.itemsSynced ?? 0).toBeGreaterThan(0);
+    // All three lanes actually held the turn at some point.
+    expect(lanesSeen.has('reconcile')).toBe(true);
+    expect(lanesSeen.has('backfill')).toBe(true);
+    expect(scheduler.status.degraded).toBe(true); // delta's sustained failure is visible on /sync/status
   });
 });
