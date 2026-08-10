@@ -2,6 +2,7 @@ import {
   FinanceReceiptSyncConfig,
   FinanceReceiptSyncConfigRepository,
   FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS,
+  normalizeFinanceReceiptSyncConfig,
 } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { prisma } from '../../database/prisma';
 
@@ -14,17 +15,28 @@ interface ConfigRow {
   deltaCheckIntervalMs: number;
   backfillFloorYearMonth: string;
   deltaStarvationThreshold: number;
+  reconcileEnabled: boolean;
+  reconcileWindowDays: number;
+  reconcileCheckIntervalMs: number;
+  annulmentGuardMaxPct: number;
+  annulmentGuardMinCount: number;
 }
 
+/** gr-receipt-annulment (design.md Decision 7) — a raw DB row is UNTRUSTED (a hand-edited SQL row can carry anything); normalize it before it reaches the scheduler/use cases. */
 function toConfig(row: ConfigRow): FinanceReceiptSyncConfig {
-  return {
+  return normalizeFinanceReceiptSyncConfig({
     enabled: row.enabled,
     requestIntervalMs: row.requestIntervalMs,
     maxRequestIntervalMs: row.maxRequestIntervalMs,
     deltaCheckIntervalMs: row.deltaCheckIntervalMs,
     backfillFloorYearMonth: row.backfillFloorYearMonth,
     deltaStarvationThreshold: row.deltaStarvationThreshold,
-  };
+    reconcileEnabled: row.reconcileEnabled,
+    reconcileWindowDays: row.reconcileWindowDays,
+    reconcileCheckIntervalMs: row.reconcileCheckIntervalMs,
+    annulmentGuardMaxPct: row.annulmentGuardMaxPct,
+    annulmentGuardMinCount: row.annulmentGuardMinCount,
+  });
 }
 
 /**

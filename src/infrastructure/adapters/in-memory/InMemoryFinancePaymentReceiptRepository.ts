@@ -13,4 +13,8 @@ export class InMemoryFinancePaymentReceiptRepository implements FinancePaymentRe
   async exists(grReceiptId: string): Promise<boolean> {
     return this.rows.has(grReceiptId);
   }
+
+  async existingIds(grReceiptIds: string[]): Promise<Set<string>> {
+    return new Set(grReceiptIds.filter((id) => this.rows.has(id)));
+  }
 }

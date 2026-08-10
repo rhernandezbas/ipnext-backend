@@ -49,4 +49,14 @@ export class PrismaFinancePaymentReceiptRepository implements FinancePaymentRece
     const row = await this.table.findUnique({ where: { grReceiptId }, select: { grReceiptId: true } });
     return !!row;
   }
+
+  async existingIds(grReceiptIds: string[]): Promise<Set<string>> {
+    if (grReceiptIds.length === 0) return new Set();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows: Array<{ grReceiptId: string }> = await this.table.findMany({
+      where: { grReceiptId: { in: grReceiptIds } },
+      select: { grReceiptId: true },
+    });
+    return new Set(rows.map((r) => r.grReceiptId));
+  }
 }

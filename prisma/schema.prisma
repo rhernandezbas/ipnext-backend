@@ -2646,6 +2646,28 @@ model FinanceReceiptSyncConfig {
   /// pacing model stays editable in DB without a redeploy (same rationale as
   /// the rest of this table, F6).
   deltaStarvationThreshold Int      @default(3)
+  /// gr-receipt-annulment (design.md Decision 1/2) — third lane: re-consults GR
+  /// a moving window backwards, catching late-confirmed receipts and real
+  /// annulments. Runtime kill-switch, independent of `enabled` (the whole ingest).
+  reconcileEnabled         Boolean  @default(true)
+  /// gr-receipt-annulment (design.md Decision 2/7) — how many days back the
+  /// reconcile lane re-scans. MUST be >= the snapshot rebuild window (current +
+  /// previous month, worst case 35d) — the normalizer enforces an effective
+  /// floor of 35 (see `normalizeFinanceReceiptSyncConfig`).
+  reconcileWindowDays      Int      @default(35)
+  /// gr-receipt-annulment (design.md Decision 2/9) — how often (ms) the
+  /// reconcile lane re-checks whether a fresh sweep is due once idle.
+  reconcileCheckIntervalMs Int      @default(21600000)
+  /// gr-receipt-annulment (design.md Decision 4/7) — systemic guard: aborts a
+  /// page/run when the annulled ratio EXCEEDS this percent (strict `>`),
+  /// protecting against a GR sentinel-format drift flooding the mirror with
+  /// false `anulado: true`. `100` would mean "never abort" — REJECTED by the
+  /// normalizer as the dangerous extreme.
+  annulmentGuardMaxPct     Int      @default(5)
+  /// gr-receipt-annulment (design.md Decision 4/7) — absolute floor: the guard
+  /// never fires below this many annulled rows in the page/run, so a tiny tail
+  /// page with 1-2 LEGITIMATE annulments never traps the lane forever.
+  annulmentGuardMinCount   Int      @default(5)
   updatedAt                DateTime @updatedAt
 }
 

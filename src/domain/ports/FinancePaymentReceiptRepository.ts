@@ -22,4 +22,12 @@ export interface FinancePaymentReceiptRepository {
   /** Idempotent upsert keyed by `grReceiptId`. */
   upsertBatch(receipts: FinancePaymentReceipt[]): Promise<void>;
   exists(grReceiptId: string): Promise<boolean>;
+  /**
+   * gr-receipt-annulment (design.md Decision 9) — which of `grReceiptIds`
+   * ALREADY existed in the mirror before this call. ONE query, never N — used
+   * by the reconcile lane, once per page, BEFORE persisting, to log how many
+   * of the page are newly-caught (the "nuevos=" metric that makes the
+   * reconcile window's dimensioning falsifiable).
+   */
+  existingIds(grReceiptIds: string[]): Promise<Set<string>>;
 }
