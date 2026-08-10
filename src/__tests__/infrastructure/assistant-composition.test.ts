@@ -211,6 +211,138 @@ describe('composition root — P1: boot REAL de createApp() captura deps.refresh
     expect(capturedDeps).toBeDefined();
     expect(capturedDeps?.refreshBalance).toBeUndefined();
   });
+
+  /**
+   * fix wave F6(a) — **el `withTimeout` del use case no aborta el axios.**
+   *
+   * `RefreshClientBalanceIfStale.withTimeout` hace `Promise.race`: cuando vence,
+   * el caller sigue de largo pero la request a GR **sigue viva**, y detrás
+   * `postWithRetry` reintenta hasta 3 veces con backoff exponencial. Un solo
+   * mensaje de WhatsApp podía dejar ~16s de llamadas huérfanas a GR — trabajo
+   * que ya no le importa a nadie, contra un proveedor cuyo load balancer
+   * justamente se cae bajo carga.
+   *
+   * El wrapper YA es el techo de tiempo. Reintentar por detrás no aporta nada
+   * que el caller pueda usar: cuando la respuesta llegue, el WhatsApp ya se
+   * contestó. Instancia dedicada con `maxRetries: 0`.
+   */
+  it('F6a — el GestionRealClient del REFRESH va con maxRetries 0 (el withTimeout ya es el techo; reintentar por detrás son llamadas huérfanas)', () => {
+    jest.resetModules();
+    let capturedDeps: Record<string, unknown> | undefined;
+    jest.doMock(ENGINE_MODULE_PATH, () => ({
+      composeAssistantEngine: (deps: Record<string, unknown>) => {
+        capturedDeps = deps;
+        return {};
+      },
+    }));
+    process.env = {
+      ...ORIGINAL_ENV,
+      SPLYNX_API_URL: 'http://x',
+      SPLYNX_API_KEY: 'k',
+      SPLYNX_API_SECRET: 's',
+      JWT_SECRET: 'j',
+      PORT: '3000',
+      GR_SYNC_ENABLED: 'true',
+      GR_CUIT: '30-12345678-9',
+      GR_SECRET: 'a-secret',
+      BALANCE_REFRESH_TIMEOUT_MS: '3000',
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createApp } = require('../../infrastructure/http/app');
+    createApp();
+
+    // Se inspecciona la INSTANCIA realmente cableada, no el texto de app.ts:
+    // un pin de texto lo satisface cualquier `maxRetries: 0` en un cliente
+    // que después no se usa.
+    const refresh = capturedDeps?.refreshBalance as { gr: { maxRetries: number; http: { defaults: { timeout: number } } } };
+    expect(refresh).toBeDefined();
+    expect(refresh.gr.maxRetries).toBe(0);
+    // Y el timeout del axios es el del refresh (clampeado), no el general.
+    expect(refresh.gr.http.defaults.timeout).toBe(3000);
+  });
+});
+
+/**
+ * fix wave F9 — **P1 pineaba la CLASE, no la IDENTIDAD.**
+ *
+ * El mutante M11b sobrevivió los 16 tests: construir una instancia PARALELA de
+ * `RefreshClientBalanceIfStale` (misma clase, GR stub roto) sólo para el bot
+ * pasaba P1, P2 y el control — `toBeInstanceOf` no distingue "la misma" de "una
+ * igual". Y el comentario de `app.ts` afirma explícitamente que es LA MISMA
+ * instancia que ya usan la ficha y el inbox.
+ *
+ * Post-F2 eso dejó de ser un detalle de prolijidad y pasó a ser funcional: el
+ * single-flight vive en un mapa de INSTANCIA. Tres instancias distintas ⇒ tres
+ * vuelos concurrentes al mismo cliente ⇒ vuelve la carrera que F2 cerró. La
+ * identidad es ahora parte del contrato, y esto es lo que la pinea.
+ */
+describe('composition root — F9: ficha, inbox y bot comparten LA MISMA instancia de RefreshClientBalanceIfStale', () => {
+  const ORIGINAL_ENV = process.env;
+  const ENGINE_MODULE_PATH = '../../infrastructure/http/composeAssistantEngine';
+  const DETAIL_MODULE_PATH = '../../application/use-cases/GetClientDetail';
+  const INBOX_MODULE_PATH = '../../application/use-cases/messaging/GetInboxClientContext';
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+    jest.dontMock(ENGINE_MODULE_PATH);
+    jest.dontMock(DETAIL_MODULE_PATH);
+    jest.dontMock(INBOX_MODULE_PATH);
+    jest.resetModules();
+  });
+
+  it('F9 — las tres superficies reciben la MISMA instancia (toBe, no toBeInstanceOf)', () => {
+    jest.resetModules();
+    let botRefresh: unknown;
+    let detailRefresh: unknown;
+    let inboxRefresh: unknown;
+
+    jest.doMock(ENGINE_MODULE_PATH, () => ({
+      composeAssistantEngine: (deps: Record<string, unknown>) => {
+        botRefresh = deps.refreshBalance;
+        return {};
+      },
+    }));
+    // Los dos use cases se capturan por su POSICIÓN en el constructor — que es
+    // exactamente el contrato que app.ts tiene que respetar.
+    jest.doMock(DETAIL_MODULE_PATH, () => ({
+      GetClientDetail: class {
+        constructor(_repo: unknown, refresh: unknown) {
+          detailRefresh = refresh;
+        }
+      },
+    }));
+    jest.doMock(INBOX_MODULE_PATH, () => ({
+      GetInboxClientContext: class {
+        constructor(...args: unknown[]) {
+          inboxRefresh = args[10]; // 11º arg — ver el wiring de app.ts
+        }
+      },
+    }));
+
+    process.env = {
+      ...ORIGINAL_ENV,
+      SPLYNX_API_URL: 'http://x',
+      SPLYNX_API_KEY: 'k',
+      SPLYNX_API_SECRET: 's',
+      JWT_SECRET: 'j',
+      PORT: '3000',
+      GR_SYNC_ENABLED: 'true',
+      GR_CUIT: '30-12345678-9',
+      GR_SECRET: 'a-secret',
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createApp } = require('../../infrastructure/http/app');
+    createApp();
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { RefreshClientBalanceIfStale } = require('../../application/use-cases/RefreshClientBalanceIfStale');
+    expect(botRefresh).toBeInstanceOf(RefreshClientBalanceIfStale);
+    // ⚠️ EL PIN: identidad, no tipo. Esto es lo que mata a M11b.
+    expect(detailRefresh).toBe(botRefresh);
+    expect(inboxRefresh).toBe(botRefresh);
+  });
 });
 
 /**

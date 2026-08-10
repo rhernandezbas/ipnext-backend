@@ -46,4 +46,68 @@ describe('config.gestionReal.balanceRefreshTimeoutMs (BALANCE_REFRESH_TIMEOUT_MS
     const { config } = require('../../infrastructure/config');
     expect(config.gestionReal.balanceRefreshTimeoutMs).toBe(8000);
   });
+
+  // fix wave F11(a) — el PISO del clamp también es una decisión, no un adorno.
+  // Un `BALANCE_REFRESH_TIMEOUT_MS=1` no es "más rápido": es un timeout que
+  // vence antes de que GR pueda contestar NUNCA, o sea el refresh apagado en
+  // silencio. La basura cae al valor SEGURO (500), no al default.
+  it('F11a — BALANCE_REFRESH_TIMEOUT_MS=1 clampea al PISO 500 (no al default 4000, ni pasa tal cual)', () => {
+    process.env.BALANCE_REFRESH_TIMEOUT_MS = '1';
+    const { config } = require('../../infrastructure/config');
+    expect(config.gestionReal.balanceRefreshTimeoutMs).toBe(500);
+  });
+});
+
+/**
+ * fix wave F6(b) — **el techo de 10s era del refresh, y se lo comió también el
+ * reconcile.**
+ *
+ * `app.ts` construía UN solo `GestionRealClient` con
+ * `timeoutMs: balanceRefreshTimeoutMs` y se lo daba a los dos: al refresh
+ * on-demand (camino caliente de un WhatsApp, donde 10s ya es un cuelgue) y a
+ * `ReconcileGrClients`, que pagina el universo COMPLETO de GR (~147 páginas) en
+ * una ruta de diagnóstico donde nadie está esperando en tiempo real. Bajar el
+ * techo por el primero le puso al segundo un timeout de 4s por página.
+ *
+ * La premisa del comentario que justificaba el clamp era cierta para UNO de los
+ * dos consumidores. Ahora cada uno tiene su knob.
+ */
+describe('config.gestionReal.requestTimeoutMs (GR_REQUEST_TIMEOUT_MS)', () => {
+  const ORIGINAL_ENV = process.env;
+
+  beforeEach(() => {
+    jest.resetModules();
+    process.env = {
+      ...ORIGINAL_ENV,
+      SPLYNX_API_URL: 'http://x',
+      SPLYNX_API_KEY: 'k',
+      SPLYNX_API_SECRET: 's',
+      JWT_SECRET: 'j',
+      PORT: '3000',
+    };
+    delete process.env.GR_REQUEST_TIMEOUT_MS;
+    delete process.env.BALANCE_REFRESH_TIMEOUT_MS;
+  });
+
+  afterAll(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  it('F6b — ausente → 30000 (el default del adapter, no el del refresh)', () => {
+    const { config } = require('../../infrastructure/config');
+    expect(config.gestionReal.requestTimeoutMs).toBe(30_000);
+  });
+
+  it('F6b — es INDEPENDIENTE del refresh: bajar BALANCE_REFRESH_TIMEOUT_MS no toca al reconcile', () => {
+    process.env.BALANCE_REFRESH_TIMEOUT_MS = '1000';
+    const { config } = require('../../infrastructure/config');
+    expect(config.gestionReal.balanceRefreshTimeoutMs).toBe(1000);
+    expect(config.gestionReal.requestTimeoutMs).toBe(30_000);
+  });
+
+  it('F6b — su propio techo es HOLGADO (60s): es un diagnóstico, no un camino caliente', () => {
+    process.env.GR_REQUEST_TIMEOUT_MS = '900000';
+    const { config } = require('../../infrastructure/config');
+    expect(config.gestionReal.requestTimeoutMs).toBe(60_000);
+  });
 });

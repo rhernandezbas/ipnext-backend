@@ -123,11 +123,37 @@ export const config = {
      * timeout corre DENTRO del flujo de un mensaje de WhatsApp (ClienteSaldoResolver),
      * y un env mal seteado a 60s sería un cuelgue real del bot, no un margen de
      * seguridad. Clamp al lado seguro, aditivo — el default (4000) no cambia.
+     *
+     * ⚠️ fix wave F6(b) — este knob es **sólo del refresh on-demand**. La versión
+     * anterior de este comentario justificaba el techo con una premisa cierta
+     * para UNO de sus dos consumidores: `app.ts` construía un único
+     * `GestionRealClient` con este timeout y se lo daba también a
+     * `ReconcileGrClients`, que pagina el universo COMPLETO de GR en una ruta de
+     * diagnóstico. Bajar el techo por el camino caliente del bot le ponía al
+     * reconcile 4s por página. Ahora el reconcile usa `requestTimeoutMs`.
+     *
+     * El PISO (500) también decide: un `=1` no es "más rápido", es el refresh
+     * apagado en silencio — vence antes de que GR pueda contestar nunca. La
+     * basura cae al valor seguro, no al default.
      */
     balanceRefreshTimeoutMs: parsePositiveInt(process.env.BALANCE_REFRESH_TIMEOUT_MS, {
       default: 4000,
       min: 500,
       max: 10_000,
+    }),
+    /**
+     * Timeout (ms) del cliente GR de propósito general — hoy `ReconcileGrClients`.
+     *
+     * Techo HOLGADO (60s) a propósito, al revés que el del refresh: acá nadie
+     * espera en tiempo real. Es un diagnóstico read-only que pagina el universo
+     * completo de GR, y GR tiene un load balancer que se pone lento bajo carga;
+     * un timeout corto no protege a nadie, sólo hace fallar el diagnóstico.
+     * Default 30.000 = el default histórico del `GestionRealClient`.
+     */
+    requestTimeoutMs: parsePositiveInt(process.env.GR_REQUEST_TIMEOUT_MS, {
+      default: 30_000,
+      min: 1_000,
+      max: 60_000,
     }),
     /**
      * Interval (ms) between balance-lane runs (default: 1h).
