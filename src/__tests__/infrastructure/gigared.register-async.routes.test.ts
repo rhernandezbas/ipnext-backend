@@ -192,8 +192,7 @@ describe('POST /customers/:id/register — 202 asíncrono (W2.1)', () => {
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
     // El runner se bloquea en su PRIMER write: así el estado observable es exactamente el que
     // dejó la RUTA, sin carreras con el trabajo de fondo.
-    jest.spyOn(registerStatus, 'setStatus').mockImplementation(async function (this: unknown, id, row) {
-      if (row.status === 'pending') { (registerStatus as unknown as { store: Map<string, unknown> }); }
+    jest.spyOn(registerStatus, 'setStatus').mockImplementation(async (id, row) => {
       if (row.status !== 'pending') return new Promise<void>(() => {}); // cuelga al runner
       registerStatus.seedStatus(id, row);
     });
@@ -247,6 +246,10 @@ describe('POST /customers/:id/register — 202 asíncrono (W2.1)', () => {
     await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     await new Promise(r => setTimeout(r, 200));
     expect((await registerStatus.getStatus(CUST))?.status).toBe('done');
+    // PIN del contador: sin esto, todos los `expect(llamadasAlPartner(port)).toBe(0)` de este
+    // archivo podrían estar pasando por un helper que devuelve 0 SIEMPRE — una aserción de
+    // ausencia que no discrimina nada. Acá se prueba que el contador sí sube cuando debe.
+    expect(llamadasAlPartner(port)).toBeGreaterThan(0);
   });
 });
 
