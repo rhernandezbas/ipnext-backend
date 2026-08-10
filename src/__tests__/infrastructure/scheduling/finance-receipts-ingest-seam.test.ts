@@ -13,6 +13,8 @@ import { InMemoryFinanceReceiptItemRepository } from '@infrastructure/adapters/i
 import { InMemoryFinanceReceiptRetencionRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceReceiptRetencionRepository';
 import { FinanceReceiptApplication } from '@domain/ports/FinanceReceiptApplicationRepository';
 import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
+import { SyncGrReceiptsReconcileWindow, RECONCILE_ENTITY } from '@application/use-cases/finance/SyncGrReceiptsReconcileWindow';
+import { FinanceReceiptAnnulmentGuardError } from '@application/use-cases/finance/financeIngestErrors';
 
 const DELTA_ENTITY = 'finance-receipts-delta';
 const BACKFILL_ENTITY = 'finance-receipts-backfill';
@@ -311,5 +313,153 @@ describe('finance-receipts-ingest seam — F4 anti-starvation with the REAL use 
     // the F4 circuit breaker) still reflects the sustained delta failure.
     expect(scheduler.status.degraded).toBe(true);
     expect(scheduler.status.consecutiveFailures).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * gr-receipt-annulment (design.md Testing strategy) — "Todo test del anulado
+ * va acá, no en un unitario del mapper: el bug vivía justo en la juntura
+ * parser↔mapper que un unitario no cruza." Raw payload -> REAL parser -> REAL
+ * `SyncGrReceiptsReconcileWindow` -> in-memory repo, molde
+ * `RawPayloadGestionRealPort` already defined above.
+ */
+function makeReconcileHarness(pageSize = 100, now: () => Date = () => new Date('2026-08-10T14:00:00Z')) {
+  const gr = new RawPayloadGestionRealPort();
+  const state = new InMemorySyncStateRepository();
+  const receiptRepo = new InMemoryFinancePaymentReceiptRepository();
+  const applicationRepo = new InMemoryFinanceReceiptApplicationRepository(receiptRepo);
+  const invoiceTypes = new InMemoryFinanceInvoiceTypeClassificationRepository();
+  const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
+  const itemRepo = new InMemoryFinanceReceiptItemRepository(receiptRepo);
+  const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
+  const uc = new SyncGrReceiptsReconcileWindow(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { pageSize, now });
+  return { gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, uc };
+}
+
+/** Builds a raw `recibos` payload with `totalCount` receipts, the first `residueCount` carrying an unparseable `fecha_anulacion` (financeAnnulmentGuard fodder), the rest the known-good sentinel. */
+function buildResiduePayload(totalCount: number, residueCount: number, fechaDDMMYYYY: string) {
+  const recibos: Record<string, unknown> = {};
+  for (let i = 0; i < totalCount; i++) {
+    recibos[`G${i}`] = {
+      cliente: { cliente_id: '100099', nombre: 'CLIENTE DE PRUEBA' },
+      recaudador: 'mercadopago',
+      fecha_recibo: fechaDDMMYYYY,
+      fecha_confirmacion: `${fechaDDMMYYYY} 10:00:00`,
+      fecha_anulacion: i < residueCount ? 'basura' : '00-00-0000 00:00:00',
+      observaciones: null,
+      aplicaciones: { '1': { tipo: 'FB', sucursal: '00010', numero: `n${i}`, importe: '10.00', fecha: fechaDDMMYYYY } },
+      items: { '1': { banco: null, caja_cuenta_id: null, destino: null, fecha: fechaDDMMYYYY, importe: '10.00', moneda: null, numero_transferencia: null, tipo: null } },
+      retenciones: {},
+    };
+  }
+  return { error: 0, resultados: String(totalCount), recibos };
+}
+
+describe('finance-receipts-ingest seam — SyncGrReceiptsReconcileWindow (S1-S5, raw payload -> REAL parser -> REAL use case -> in-memory repo)', () => {
+  it('S1 — a payload with a REAL fecha_anulacion is INCLUDED (rows.size===1), marked anulado:true, with its children persisted (scenario 1)', async () => {
+    const { gr, receiptRepo, applicationRepo, itemRepo, syncConfig, uc } = makeReconcileHarness();
+    await syncConfig.update({ reconcileWindowDays: 35 });
+    const payload = rawReciboPayload('9001', '100011', 1500, '05-08-2026');
+    (payload.recibos['9001'] as Record<string, unknown>).fecha_anulacion = '06-08-2026 12:00:00';
+    gr.rawResponses.push(payload);
+
+    await uc.execute();
+
+    // PRESENCE first, then the flag — a probe whose only assertion is an
+    // absence gives false confidence against a world where the row never existed.
+    expect(receiptRepo.rows.size).toBe(1);
+    expect(receiptRepo.rows.get('9001')?.anulado).toBe(true);
+    expect(applicationRepo.rows.size).toBeGreaterThan(0);
+    expect(itemRepo.rows.size).toBeGreaterThan(0);
+  });
+
+  it('S2 — THE FLIP (la invariante del change): a healthy receipt from sweep 1 becomes anulado:true in sweep 2 when GR reports a real fecha_anulacion on the SAME grReceiptId (scenarios 1/27)', async () => {
+    const now = { v: new Date('2026-08-10T14:00:00Z') };
+    const { gr, receiptRepo, syncConfig, uc } = makeReconcileHarness(100, () => now.v);
+    await syncConfig.update({ reconcileWindowDays: 35 });
+
+    gr.rawResponses.push(rawReciboPayload('9002', '100022', 800, '05-08-2026'));
+    await uc.execute();
+    expect(receiptRepo.rows.get('9002')?.anulado).toBe(false);
+
+    // Force a second sweep (default cadence 6h) — the SAME grReceiptId, now voided.
+    now.v = new Date('2026-08-10T21:00:00Z');
+    const voided = rawReciboPayload('9002', '100022', 800, '05-08-2026');
+    (voided.recibos['9002'] as Record<string, unknown>).fecha_anulacion = '09-08-2026 10:00:00';
+    gr.rawResponses.push(voided);
+    await uc.execute();
+
+    expect(receiptRepo.rows.size).toBe(1); // the SAME fila, not a duplicate
+    expect(receiptRepo.rows.get('9002')?.anulado).toBe(true); // FLIPPED — exercises the upsert's `update` block
+  });
+
+  it('S3 — the inverse of S2: re-upserting an already-healthy receipt a second time stays anulado:false (no spurious flip)', async () => {
+    const now = { v: new Date('2026-08-10T14:00:00Z') };
+    const { gr, receiptRepo, syncConfig, uc } = makeReconcileHarness(100, () => now.v);
+    await syncConfig.update({ reconcileWindowDays: 35 });
+
+    gr.rawResponses.push(rawReciboPayload('9005', '100055', 400, '05-08-2026'));
+    await uc.execute();
+
+    now.v = new Date('2026-08-10T21:00:00Z');
+    gr.rawResponses.push(rawReciboPayload('9005', '100055', 400, '05-08-2026'));
+    await uc.execute();
+
+    expect(receiptRepo.rows.size).toBe(1);
+    expect(receiptRepo.rows.get('9005')?.anulado).toBe(false);
+  });
+
+  it('S4 — reconcile catches a receipt confirmed LATE (fecha_recibo 5 days old, ABSENT from the mirror before the sweep) — the bug measured in prod (scenario 13)', async () => {
+    const { gr, receiptRepo, syncConfig, uc } = makeReconcileHarness();
+    await syncConfig.update({ reconcileWindowDays: 35 });
+    expect(receiptRepo.rows.has('9003')).toBe(false); // absent BEFORE — simulates the delta lane's overlap window having missed it
+    gr.rawResponses.push(rawReciboPayload('9003', '100033', 500, '05-08-2026')); // 5 days before "now" (10-08)
+
+    await uc.execute();
+
+    expect(receiptRepo.rows.has('9003')).toBe(true);
+    expect(receiptRepo.rows.get('9003')?.fechaRecibo?.toISOString()).toBe('2026-08-05T03:00:00.000Z');
+  });
+
+  it('re-sweeping the same window twice does not duplicate rows in any of the four tables (scenario 14)', async () => {
+    const now = { v: new Date('2026-08-10T14:00:00Z') };
+    const { gr, receiptRepo, applicationRepo, itemRepo, syncConfig, uc } = makeReconcileHarness(100, () => now.v);
+    await syncConfig.update({ reconcileWindowDays: 35 });
+
+    gr.rawResponses.push(rawReciboPayload('9004', '100044', 100, '05-08-2026'));
+    await uc.execute();
+    now.v = new Date('2026-08-10T21:00:00Z');
+    gr.rawResponses.push(rawReciboPayload('9004', '100044', 100, '05-08-2026'));
+    await uc.execute();
+
+    expect(receiptRepo.rows.size).toBe(1);
+    expect(applicationRepo.rows.size).toBe(1);
+    expect(itemRepo.rows.size).toBe(1);
+  });
+
+  it('a GR error envelope during reconcile propagates as a thrown error — zero writes, cursor untouched (scenario 16, mismo criterio que delta/backfill)', async () => {
+    const { gr, receiptRepo, state, syncConfig, uc } = makeReconcileHarness();
+    await syncConfig.update({ reconcileWindowDays: 35 });
+    gr.rawResponses.push({ error: '91', descripcion: 'No Se indicó la Acción' });
+
+    await expect(uc.execute()).rejects.toThrow(/91/);
+
+    expect(receiptRepo.rows.size).toBe(0);
+    const saved = await state.get(RECONCILE_ENTITY);
+    expect(saved?.lastResult).toMatch(/^error:/);
+  });
+
+  it('S5 — the systemic guard aborts a page with 63/100 residue: throws FinanceReceiptAnnulmentGuardError, ZERO writes, cursor untouched, lastResult starts with "error:" (scenarios 19/21)', async () => {
+    const { gr, receiptRepo, applicationRepo, state, syncConfig, uc } = makeReconcileHarness();
+    await syncConfig.update({ reconcileWindowDays: 35 });
+    gr.rawResponses.push(buildResiduePayload(100, 63, '05-08-2026'));
+
+    await expect(uc.execute()).rejects.toBeInstanceOf(FinanceReceiptAnnulmentGuardError);
+
+    expect(receiptRepo.rows.size).toBe(0); // cero escrituras — el mismo repo que S1 demostró que sabe escribir
+    expect(applicationRepo.rows.size).toBe(0);
+    const saved = await state.get(RECONCILE_ENTITY);
+    expect(saved?.lastResult).toMatch(/^error:/);
+    expect(saved?.cursor).toBe('07-07-2026:10-08-2026:0'); // sin avanzar — la misma página se reintenta
   });
 });

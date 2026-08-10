@@ -9,6 +9,17 @@ import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceRecei
 import { grDateAr, isValidGrDate } from './financeDates';
 import { FinanceReceiptPersistenceError } from './financeIngestErrors';
 import { mapAndGuardReceiptPage, persistReceiptPage } from './financeReceiptPageIngest';
+import { deltaCursorHasPendingPages, parseCompositeCursor } from './financeReceiptCursors';
+
+/**
+ * Re-exported so existing call sites (`FinanceReceiptIngestScheduler`,
+ * `GetFinanceSyncStatus`) that import `deltaCursorHasPendingPages` FROM this
+ * module keep working unchanged. The real implementation moved to
+ * `financeReceiptCursors.ts` (design.md Decision 2) — the reconcile lane
+ * needs the identical codec, and duplicating it would be exactly the "test
+ * certifies the canonical, prod runs the other" trap.
+ */
+export { deltaCursorHasPendingPages };
 
 const LANE = 'delta';
 
@@ -211,31 +222,4 @@ export class SyncGrReceiptsDelta {
       throw err;
     }
   }
-}
-
-/**
- * True when the persisted `finance-receipts-delta` cursor is COMPOSITE
- * ("DD-MM-AAAA:DD-MM-AAAA:offset" — a range still has unpaged pages); false
- * for a plain "DD-MM-AAAA" (fully covered) or a missing cursor. Exported so
- * `FinanceReceiptIngestScheduler` can derive `hasPendingPages` from
- * `SyncStateRepository` WITHOUT re-running the use case (design.md Decision 4b).
- */
-export function deltaCursorHasPendingPages(cursor: string | null): boolean {
-  return !!cursor && cursor.includes(':');
-}
-
-/**
- * Parse a composite `"{fechaDesde}:{fechaHasta}:{offset}"` cursor. Returns
- * `null` (never a garbage-filled object) when the shape is wrong or either
- * date isn't a valid GR "DD-MM-AAAA" — fix-wave-1 F14, the caller resets to a
- * known-sane state instead of building a request GR will reject.
- */
-function parseCompositeCursor(cursor: string): { fechaDesde: string; fechaHasta: string; offset: number } | null {
-  const parts = cursor.split(':');
-  if (parts.length !== 3) return null;
-  const [fechaDesde, fechaHasta, offsetStr] = parts as [string, string, string];
-  if (!isValidGrDate(fechaDesde) || !isValidGrDate(fechaHasta)) return null;
-  const offset = Number(offsetStr);
-  if (!Number.isFinite(offset) || offset < 0) return null;
-  return { fechaDesde, fechaHasta, offset };
 }

@@ -90,36 +90,43 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 4 — Carril `reconcile`: `SyncState`, cursor, use case, seam
 
-- [ ] 4.1 Mover `parseCompositeCursor`/`deltaCursorHasPendingPages` a `financeReceiptCursors.ts`
+- [x] 4.1 Mover `parseCompositeCursor`/`deltaCursorHasPendingPages` a `financeReceiptCursors.ts`
       (application); `SyncGrReceiptsDelta` re-exporta `deltaCursorHasPendingPages`. Gate: tests de delta
-      existentes siguen en verde sin tocarlos.
-- [ ] 4.2 RED `SyncGrReceiptsReconcileWindow.test.ts` (U6) — primer barrido calcula ventana; paginado;
+      existentes siguen en verde sin tocarlos. **GATE PASADO** (97 tests, sin tocar delta/backfill/seam/
+      scheduler/GetFinanceSyncStatus).
+- [x] 4.2 RED `SyncGrReceiptsReconcileWindow.test.ts` (U6) — primer barrido calcula ventana; paginado;
       ventana CONGELADA cuando el reloj cruza medianoche AR a mitad de barrido; cierre a `cursor: null`;
       cadencia (`isReconcileDue`); cursor corrupto ⇒ recalcula ventana desde cero; `reconcileEnabled:
       false` ⇒ cero llamadas a GR.
-- [ ] 4.3 GREEN `SyncGrReceiptsReconcileWindow.ts` (application) — cursor compuesto
+- [x] 4.3 GREEN `SyncGrReceiptsReconcileWindow.ts` (application) — cursor compuesto
       `"{fechaDesde}:{fechaHasta}:{offset}"`, ventana congelada al arrancar el barrido, `isReconcileDue`,
       llama `mapAndGuardReceiptPage`/`persistReceiptPage`, logea con `existingIds` (nuevos/anulados/
       `masViejoReparado`) y `WARN` de borde. `itemRepo`/`retencionRepo` obligatorios y no-trailing, throw
       en el constructor si faltan (criterio R9).
-- [ ] 4.4 RED seam S4 — recibo con `fecha_recibo` de hace 5 días, ausente del espejo (confirmación
+- [x] 4.4 RED seam S4 — recibo con `fecha_recibo` de hace 5 días, ausente del espejo (confirmación
       tardía) ⇒ tras un barrido del reconcile, está (scenario 13, el bug medido).
-- [ ] 4.5 RED seam S1 — payload con `fecha_anulacion` real ⇒ recibo **presente** (`rows.size === 1`) Y
+- [x] 4.5 RED seam S1 — payload con `fecha_anulacion` real ⇒ recibo **presente** (`rows.size === 1`) Y
       `anulado === true`, hijas persistidas (scenario 1).
-- [ ] 4.6 RED seam S2 (el flip, LA invariante del change) — barrido 1 persiste recibo sano
+- [x] 4.6 RED seam S2 (el flip, LA invariante del change) — barrido 1 persiste recibo sano
       (`anulado:false`); barrido 2 mismo `grReceiptId` con `fecha_anulacion` real ⇒ la MISMA fila pasa a
       `anulado:true`, ejercitando el bloque `update` del upsert (soporta también scenario 27 del portal).
-- [ ] 4.7 RED seam S3 — re-upsert sano de una fila sana ⇒ sigue `false` (no hay flip espurio).
-- [ ] 4.8 RED seam — re-barrer el MISMO rango dos veces no duplica filas: conteo de
+- [x] 4.7 RED seam S3 — re-upsert sano de una fila sana ⇒ sigue `false` (no hay flip espurio).
+- [x] 4.8 RED seam — re-barrer el MISMO rango dos veces no duplica filas: conteo de
       `FinancePaymentReceipt`/`Item`/`Application`/`Retencion` por `grReceiptId` sigue en 1 tras el
       segundo barrido (scenario 14).
-- [ ] 4.9 RED seam — sobre de error de GR (`{"error":"N"}`, N≠"0") durante una página del reconcile ⇒
+- [x] 4.9 RED seam — sobre de error de GR (`{"error":"N"}`, N≠"0") durante una página del reconcile ⇒
       `parseReceiptsResponse` tira, cero escrituras, cursor sin avanzar (scenario 16 — mismo
       comportamiento que delta/backfill hoy, sin dedicado en la tabla S1-S6 del design; se completa acá).
-- [ ] 4.10 RED seam S5 — página con 63/100 en residuo ⇒ `execute()` tira,
+- [x] 4.10 RED seam S5 — página con 63/100 en residuo ⇒ `execute()` tira,
       `receiptRepo.rows.size === 0` (cero escrituras), cursor sin avanzar, `lastResult` arranca con
-      `error:`, `scheduler.status.effectiveIntervalMs` NO escala (GR no culpado) (scenarios 19, 21).
-- [ ] 4.11 GREEN de 4.4 a 4.10 (si algo no quedó cubierto por 4.3).
+      `error:`. **Parcial**: la parte `scheduler.status.effectiveIntervalMs NO escala` (GR no culpado)
+      requiere el scheduler con `syncReconcile` cableado — eso es Fase 5/6. Ya está PROBADO
+      genéricamente en 3.3 (el clasificador `trackGrHealth` es agnóstico de carril: se probó lanzando
+      `FinanceReceiptAnnulmentGuardError` desde el delta y confirmando que no escala) — se completa el
+      caso con el carril reconcile real en Fase 5 (tarea 5.7/S6) una vez wireado.
+- [x] 4.11 GREEN de 4.4 a 4.10 (si algo no quedó cubierto por 4.3). Los 12 tests del seam corrieron en
+      verde en el primer intento (incluye los 5 preexistentes) — la implementación de 4.3 ya cubría todo
+      el comportamiento que estos escenarios de integración ejercitan.
 
 ## Fase 5 — Arbitraje del scheduler: delta > reconcile > backfill
 
