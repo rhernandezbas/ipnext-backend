@@ -9,7 +9,7 @@ import { FinanceReceiptRetencionRepository } from '@domain/ports/FinanceReceiptR
 import { grDateAr } from './financeDates';
 import { FinanceReceiptPersistenceError, FinanceReceiptAnnulmentGuardError } from './financeIngestErrors';
 import { mapAndGuardReceiptPage, persistReceiptPage } from './financeReceiptPageIngest';
-import { GUARD_ABORT_ABANDON_THRESHOLD, GUARD_ABORT_MARKER, parseGuardAbortStreak } from './financeAnnulmentGuard';
+import { GUARD_ABORT_ABANDON_THRESHOLD, recordGuardAbort, clearGuardAbortStreak } from './financeGuardAbortStreak';
 import { MappedGrReceipt } from './mapGrReceipt';
 import { deltaCursorHasPendingPages, parseCompositeCursor } from './financeReceiptCursors';
 
@@ -112,6 +112,13 @@ export class SyncGrReceiptsReconcileWindow {
       offset = 0;
     }
 
+    /**
+     * fix-wave-2 RFX3 — identifies the SWEEP the guard-abort streak belongs to.
+     * The offset is deliberately NOT part of it: an abort never advances the
+     * offset, and a sweep that DID advance is the same sweep still.
+     */
+    const sweepKey = `${fechaDesde}..${fechaHasta}`;
+
     try {
       const page = await this.gr.fetchReceipts({ fechaDesde, fechaHasta, cantidad: this.pageSize, offset });
       const { total, receipts } = page;
@@ -161,6 +168,11 @@ export class SyncGrReceiptsReconcileWindow {
             itemsSynced,
           });
         }
+
+        // fix-wave-2 RFX3 — a page that made it through the guard breaks the
+        // streak: the three aborts must be CONSECUTIVE. No write happens when
+        // there is nothing to clear (the healthy case).
+        await clearGuardAbortStreak(this.state, RECONCILE_ENTITY, this.now());
       } catch (err) {
         throw err instanceof FinanceReceiptPersistenceError ? err : new FinanceReceiptPersistenceError(err);
       }
@@ -178,12 +190,17 @@ export class SyncGrReceiptsReconcileWindow {
       // After `GUARD_ABORT_ABANDON_THRESHOLD` consecutive aborts on this
       // sweep, the sweep is abandoned (cursor → null, `lastRunAt` = now), so
       // the next attempt waits the full `reconcileCheckIntervalMs` and starts
-      // from a freshly computed window. The streak marker is dropped on
-      // abandonment so the NEXT sweep gets its own three attempts, and any
-      // successful page clears it naturally (a success writes a `lastResult`
-      // without the marker).
+      // from a freshly computed window. The streak is cleared on abandonment
+      // so the NEXT sweep gets its own three attempts, and any successful page
+      // clears it too.
+      //
+      // fix-wave-2 RFX3 — the streak is EXPLICIT persisted state keyed by
+      // `sweepKey`, no longer regex'd out of the previous `lastResult`. A
+      // non-guard failure (the `ECONNRESET` below) writes `lastResult` without
+      // touching the counter, so an intermittent GR can no longer keep the
+      // threshold permanently out of reach by alternating failure kinds.
       if (err instanceof FinanceReceiptAnnulmentGuardError) {
-        const streak = parseGuardAbortStreak(prior?.lastResult) + 1;
+        const streak = await recordGuardAbort(this.state, RECONCILE_ENTITY, sweepKey, this.now());
         const abandon = streak >= GUARD_ABORT_ABANDON_THRESHOLD;
         await this.state.save({
           entity: RECONCILE_ENTITY,
@@ -191,10 +208,11 @@ export class SyncGrReceiptsReconcileWindow {
           lastRunAt: this.now(),
           lastResult: abandon
             ? `error: ${err.message} [barrido ABANDONADO tras ${streak} aborts consecutivos del guard — reintenta en la cadencia normal]`
-            : `error: ${err.message} [${GUARD_ABORT_MARKER}${streak}]`,
+            : `error: ${err.message} [aborts consecutivos del guard en este barrido: ${streak}]`,
           itemsSynced: prior?.itemsSynced ?? 0,
         });
         if (abandon) {
+          await clearGuardAbortStreak(this.state, RECONCILE_ENTITY, this.now());
           console.error(
             `[finance-receipts-${LANE}] barrido ${fechaDesde}..${fechaHasta} ABANDONADO tras ${streak} aborts consecutivos del guard en offset=${offset} — el carril queda degradado y reintenta un barrido nuevo en la próxima cadencia.`,
           );

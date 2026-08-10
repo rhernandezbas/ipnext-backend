@@ -212,6 +212,19 @@ anulada. Cada flip MUST loguearse con el id del recibo y el valor CRUDO de `fech
   ABORT en `lastResult`, y el próximo intento espera la cadencia normal en vez de repetir la misma página
   en cada tick para siempre
 
+#### Scenario: The abort counter survives an unrelated error in between
+- GIVEN el guard aborta, después la llamada a GR falla con `ECONNRESET`, después el guard aborta de nuevo,
+  otro `ECONNRESET`, y un tercer abort del guard
+- WHEN se registra ese tercer abort
+- THEN el barrido se ABANDONA igual — el contador de aborts es estado PERSISTIDO propio del carril
+  (`SyncState` `"{carril}:guard-aborts"`, clave = el rango del barrido), MUST NOT derivarse del último
+  `lastResult`, y sólo lo incrementa un abort del guard
+- AND el contador se pone en cero al completar una página, al abandonar el barrido, y al empezar un barrido
+  con un rango distinto
+  (Previously: el streak se parseaba del marcador `guardAborts=N` en `lastResult`, así que cualquier otro
+  error intercalado lo devolvía a 1 y el umbral de abandono era inalcanzable contra un GR intermitente —
+  justo el escenario que este requirement viene a cortar.)
+
 #### Scenario: GR's error envelope during reconcile never degrades to an empty write
 - GIVEN GR responde `{"error": "N"}` (N != "0") a una página del reconcile
 - WHEN `parseReceiptsResponse` lo procesa

@@ -9,7 +9,7 @@ import { FinanceReceiptSyncConfigRepository } from '@domain/ports/FinanceReceipt
 import { grDateAr, isValidGrDate } from './financeDates';
 import { FinanceReceiptPersistenceError, FinanceReceiptAnnulmentGuardError } from './financeIngestErrors';
 import { mapAndGuardReceiptPage, persistReceiptPage } from './financeReceiptPageIngest';
-import { GUARD_ABORT_ABANDON_THRESHOLD, GUARD_ABORT_MARKER, parseGuardAbortStreak } from './financeAnnulmentGuard';
+import { GUARD_ABORT_ABANDON_THRESHOLD, recordGuardAbort, clearGuardAbortStreak } from './financeGuardAbortStreak';
 import { deltaCursorHasPendingPages, parseCompositeCursor } from './financeReceiptCursors';
 
 /**
@@ -159,6 +159,9 @@ export class SyncGrReceiptsDelta {
       offset = 0;
     }
 
+    /** fix-wave-2 RFX3 (hermano del reconcile) — the RANGE the guard-abort streak belongs to. */
+    const sweepKey = `${fechaDesde}..${fechaHasta}`;
+
     // fix-wave-1 F5: the ENTIRE run (fetch + persistence + classification) is
     // now inside this try — before the fix, only `gr.fetchReceipts` was
     // guarded, so a throw from `upsertBatch`/`upsertIfAbsent` escaped
@@ -230,6 +233,9 @@ export class SyncGrReceiptsDelta {
             itemsSynced,
           });
         }
+
+        // fix-wave-2 RFX3 — a page through the guard breaks the streak.
+        await clearGuardAbortStreak(this.state, DELTA_ENTITY, this.now());
       } catch (err) {
         throw err instanceof FinanceReceiptPersistenceError ? err : new FinanceReceiptPersistenceError(err);
       }
@@ -253,8 +259,14 @@ export class SyncGrReceiptsDelta {
       // would mean skipping a month's page permanently — unrecoverable history
       // loss. Delta and reconcile both re-scan overlapping ranges by design, so
       // giving up on a range costs nothing but a delay.
+      //
+      // fix-wave-2 RFX3 — same correction as the reconcile hermano: the streak
+      // is EXPLICIT persisted state keyed by the range, not a number parsed
+      // back out of the last message written. An `ECONNRESET` between two
+      // aborts no longer zeroes it, so a flaky GR can no longer keep this lane
+      // hammering the same page below the abandon threshold forever.
       if (err instanceof FinanceReceiptAnnulmentGuardError) {
-        const streak = parseGuardAbortStreak(prior?.lastResult) + 1;
+        const streak = await recordGuardAbort(this.state, DELTA_ENTITY, sweepKey, this.now());
         const abandon = streak >= GUARD_ABORT_ABANDON_THRESHOLD;
         await this.state.save({
           entity: DELTA_ENTITY,
@@ -262,10 +274,11 @@ export class SyncGrReceiptsDelta {
           lastRunAt: this.now(),
           lastResult: abandon
             ? `error: ${err.message} [rango ABANDONADO tras ${streak} aborts consecutivos del guard — reintenta en la cadencia normal]`
-            : `error: ${err.message} [${GUARD_ABORT_MARKER}${streak}]`,
+            : `error: ${err.message} [aborts consecutivos del guard en este rango: ${streak}]`,
           itemsSynced: prior?.itemsSynced ?? 0,
         });
         if (abandon) {
+          await clearGuardAbortStreak(this.state, DELTA_ENTITY, this.now());
           console.error(
             `[finance-receipts-${LANE}] rango ${fechaDesde}..${fechaHasta} ABANDONADO tras ${streak} aborts consecutivos del guard en offset=${offset} — el carril queda degradado y reintenta desde ${fechaDesde} en la próxima cadencia.`,
           );

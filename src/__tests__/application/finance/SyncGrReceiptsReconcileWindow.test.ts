@@ -7,6 +7,7 @@ import { InMemoryFinanceReceiptSyncConfigRepository } from '@infrastructure/adap
 import { InMemoryFinanceReceiptItemRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceReceiptItemRepository';
 import { InMemoryFinanceReceiptRetencionRepository } from '@infrastructure/adapters/in-memory/InMemoryFinanceReceiptRetencionRepository';
 import { SyncGrReceiptsReconcileWindow, RECONCILE_ENTITY } from '@application/use-cases/finance/SyncGrReceiptsReconcileWindow';
+import { readSnapshotRebuildQueue } from '@application/use-cases/finance/financeSnapshotRebuildQueue';
 import { GrReceipt } from '@domain/entities/gestionReal';
 
 function receipt(id: string, dateDDMMYYYY: string): GrReceipt {
@@ -357,6 +358,73 @@ describe('SyncGrReceiptsReconcileWindow', () => {
       expect(saved?.cursor).not.toBeNull();
     });
 
+    // ── fix-wave-2 RFX3 — the streak used to be DERIVED by regex-ing the
+    // previous `lastResult`. Any other failure written in between (an
+    // `ECONNRESET` on the GR call, a repo write blowing up) overwrites that
+    // string and the counter silently restarts at 1. A flaky GR — the exact
+    // situation where the guard trips and the connection drops — could then
+    // alternate abort/error/abort/error forever WITHOUT ever reaching three,
+    // which is precisely the hammering RF4 exists to stop. The counter is now
+    // persisted EXPLICITLY, incremented only by guard aborts, and it survives
+    // whatever else gets written to `lastResult` in between.
+    it('RFX3: an ECONNRESET between two aborts does NOT reset the streak — the third abort still abandons', async () => {
+      const now = { v: new Date('2026-08-10T14:00:00Z') };
+      const { gr, state, syncConfig, uc } = makeHarness(100, () => now.v);
+      await syncConfig.update({ reconcileWindowDays: 35 });
+      seedGuardTrippingPage(gr);
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const realFetch = gr.fetchReceipts.bind(gr);
+      let broken = false;
+      jest.spyOn(gr, 'fetchReceipts').mockImplementation(async (params) => {
+        if (broken) throw new Error('ECONNRESET');
+        return realFetch(params);
+      });
+
+      // abort, ECONNRESET, abort, ECONNRESET, abort — the same sweep
+      // throughout (every failure re-pins the same composite cursor).
+      const script: Array<{ at: string; fail: boolean }> = [
+        { at: '2026-08-10T14:00:00Z', fail: false },
+        { at: '2026-08-10T15:00:00Z', fail: true },
+        { at: '2026-08-10T16:00:00Z', fail: false },
+        { at: '2026-08-10T17:00:00Z', fail: true },
+        { at: '2026-08-10T18:00:00Z', fail: false },
+      ];
+      for (const step of script) {
+        now.v = new Date(step.at);
+        broken = step.fail;
+        await expect(uc.execute()).rejects.toThrow(step.fail ? /ECONNRESET/ : /ABORT/);
+      }
+      errSpy.mockRestore();
+
+      const saved = await state.get(RECONCILE_ENTITY);
+      expect(saved?.cursor).toBeNull();
+      expect(saved?.lastResult).toMatch(/ABANDONADO/);
+    });
+
+    it('RFX3: the counter resets on abandonment — the FRESH sweep gets its own three attempts', async () => {
+      const now = { v: new Date('2026-08-10T14:00:00Z') };
+      const { gr, state, syncConfig, uc } = makeHarness(100, () => now.v);
+      await syncConfig.update({ reconcileWindowDays: 35, reconcileCheckIntervalMs: 21600000 });
+      seedGuardTrippingPage(gr);
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      for (const t of ['2026-08-10T14:00:00Z', '2026-08-10T21:00:00Z', '2026-08-11T04:00:00Z']) {
+        now.v = new Date(t);
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+      }
+      expect((await state.get(RECONCILE_ENTITY))?.cursor).toBeNull();
+
+      // Two aborts on the NEW sweep must NOT abandon it immediately.
+      now.v = new Date('2026-08-11T11:00:00Z');
+      await expect(uc.execute()).rejects.toThrow(/ABORT/);
+      now.v = new Date('2026-08-11T18:00:00Z');
+      await expect(uc.execute()).rejects.toThrow(/ABORT/);
+      errSpy.mockRestore();
+
+      expect((await state.get(RECONCILE_ENTITY))?.cursor).not.toBeNull();
+    });
+
     it('a NON-guard failure (GR down) is unaffected — it still pins the cursor for a plain retry', async () => {
       const now = new Date('2026-08-10T14:00:00Z');
       const { gr, state, syncConfig, uc } = makeHarness(100, () => now);
@@ -367,6 +435,85 @@ describe('SyncGrReceiptsReconcileWindow', () => {
 
       const saved = await state.get(RECONCILE_ENTITY);
       expect(saved?.cursor).toBe('06-07-2026:09-08-2026:0');
+    });
+  });
+
+  // ── fix-wave-2, re-lectura conjunta RFX1 × RF4 — the rebuild queue is
+  // written by `persistReceiptPage`, and RF4 can ABANDON a sweep. Two
+  // questions the two fixes raise together, answered here instead of by
+  // reasoning: (a) can a guard abort leave an ORPHAN queued month (a month
+  // queued for a page whose flip was never written)? and (b) does abandoning a
+  // sweep LOSE months queued by pages that already succeeded?
+  describe('RFX1 × RF4: the enqueue sits downstream of the guard, and survives an abandoned sweep', () => {
+    /** now = 10-02-2026 → a 35-day window covers 06-01..09-02, so January receipts are in range. */
+    const FEB = { v: new Date('2026-02-10T14:00:00Z') };
+    const JAN_RECEIPT_DATE = '15-01-2026';
+
+    function annulledResidue(id: string): GrReceipt {
+      return { ...receipt(id, JAN_RECEIPT_DATE), fechaAnulacion: 'basura' };
+    }
+
+    async function mirrorAsLive(receipts: InMemoryFinancePaymentReceiptRepository, id: string): Promise<void> {
+      await receipts.upsertBatch([
+        {
+          grReceiptId: id,
+          clientGrId: '100011',
+          recaudador: 'mercadopago',
+          fechaRecibo: new Date('2026-01-15T13:00:00.000Z'),
+          fechaConfirmacion: null,
+          anulado: false,
+          observaciones: null,
+        },
+      ]);
+    }
+
+    it('(a) a page the guard ABORTS queues nothing — the enqueue runs inside persistReceiptPage, which the abort never reaches', async () => {
+      const now = { v: new Date(FEB.v) };
+      const { gr, state, receipts, syncConfig, uc } = makeHarness(100, () => now.v);
+      await syncConfig.update({ reconcileWindowDays: 35 });
+      await mirrorAsLive(receipts, 'OLD1');
+      // OLD1 would be a flip on 2026-01 (a closed month) — but the page is
+      // poisoned, so NOTHING about it may be believed, queue included.
+      gr.receipts.push(annulledResidue('OLD1'));
+      for (let i = 0; i < 20; i++) gr.receipts.push(annulledResidue(`G${i}`));
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(uc.execute()).rejects.toThrow(/ABORT/);
+      errSpy.mockRestore();
+
+      expect(await readSnapshotRebuildQueue(state)).toEqual([]);
+      expect(receipts.rows.get('OLD1')?.anulado).toBe(false);
+    });
+
+    it('(b) a month queued by a page that SUCCEEDED survives the sweep being abandoned three pages later', async () => {
+      const now = { v: new Date(FEB.v) };
+      const { gr, state, receipts, syncConfig, uc } = makeHarness(5, () => now.v);
+      await syncConfig.update({ reconcileWindowDays: 35 });
+      await mirrorAsLive(receipts, 'OLD1');
+
+      // Page 1 (offset 0): ONE real annulment among five — under the minCount
+      // floor of 5, so the guard lets it through and the flip is written.
+      gr.receipts.push({ ...receipt('OLD1', JAN_RECEIPT_DATE), fechaAnulacion: '09-02-2026 10:00:00' });
+      for (let i = 0; i < 4; i++) gr.receipts.push(receipt(`H${i}`, JAN_RECEIPT_DATE));
+      // Page 2 (offset 5): all annulled residue — trips the guard, every time.
+      for (let i = 0; i < 5; i++) gr.receipts.push(annulledResidue(`G${i}`));
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      await uc.execute();
+      expect(receipts.rows.get('OLD1')?.anulado).toBe(true);
+      expect(await readSnapshotRebuildQueue(state)).toEqual(['2026-01']);
+
+      for (const t of ['2026-02-10T15:00:00Z', '2026-02-10T16:00:00Z', '2026-02-10T17:00:00Z']) {
+        now.v = new Date(t);
+        await expect(uc.execute()).rejects.toThrow(/ABORT/);
+      }
+      warnSpy.mockRestore();
+      errSpy.mockRestore();
+
+      // The sweep is gone; the repair it already earned is NOT.
+      expect((await state.get(RECONCILE_ENTITY))?.cursor).toBeNull();
+      expect(await readSnapshotRebuildQueue(state)).toEqual(['2026-01']);
     });
   });
 

@@ -25,39 +25,14 @@ import { FinanceReceiptAnnulmentGuardError } from './financeIngestErrors';
  */
 /**
  * fix-wave RF4 — how many CONSECUTIVE systemic-guard aborts on the same range
- * before a lane gives that range up.
- *
- * Before this, an abort re-persisted the cursor UNCHANGED, and a composite
- * (pending-pages) cursor makes a lane permanently "due": the same poisoned page
- * was re-requested on every eligible tick, forever, with no backoff and no way
- * out short of an operator editing `SyncState` by hand. Three retries rides out
- * a transient GR hiccup; past that the page is not going to fix itself in the
- * next 20 seconds, and the healthy thing is to stop hammering and come back on
- * the normal cadence.
- *
- * Lives HERE, next to the guard itself, because BOTH the delta and reconcile
- * lanes need the identical bookkeeping — a second copy would be exactly the
- * "the function that decides is not the one under test" trap. The backfill lane
- * deliberately does NOT use it: there, abandoning a range means permanently
- * skipping a month of history, while delta and reconcile both re-scan
- * overlapping ranges by design, so giving one up costs only a delay.
+ * before a lane gives that range up. RF4's rationale (an abort re-persisted the
+ * cursor UNCHANGED, and a composite cursor makes a lane permanently "due", so
+ * the same poisoned page was re-requested on every eligible tick forever) is
+ * unchanged; the THRESHOLD and the counter that feeds it moved to
+ * `financeGuardAbortStreak.ts` in fix-wave-2 RFX3, because the counter stopped
+ * being a string parsed out of `lastResult` and became persisted state of its
+ * own. See that module for why.
  */
-export const GUARD_ABORT_ABANDON_THRESHOLD = 3;
-
-/** Marker written into `SyncState.lastResult` to carry the streak across ticks (there is no dedicated field). */
-export const GUARD_ABORT_MARKER = 'guardAborts=';
-
-/**
- * Reads the streak back out of `lastResult`. Any result WITHOUT the marker —
- * a success (`page ok`, `sweep ok`), a non-guard error, or the message written
- * when a range is abandoned — parses as 0, which is what makes the streak
- * self-resetting: the counter only survives across consecutive guard aborts.
- */
-export function parseGuardAbortStreak(lastResult: string | null | undefined): number {
-  if (!lastResult) return 0;
-  const match = lastResult.match(/guardAborts=(\d+)/);
-  return match ? Number(match[1]) : 0;
-}
 
 export interface AnnulmentGuardPageContext {
   /** The GR date range this page was requested with, e.g. `"06-07-2026..09-08-2026"`. */

@@ -502,6 +502,36 @@ describe('SyncGrReceiptsDelta', () => {
         expect((await state.get(ENTITY))?.cursor).toBe('15-07-2026:15-07-2026:0');
       });
 
+      // ── fix-wave-2 RFX3 (hermano del reconcile) — the streak was parsed out
+      // of the previous `lastResult`, so ANY other failure written in between
+      // reset it to zero. GR being flaky (guard trips on the poisoned page,
+      // connection drops on the next tick, repeat) is not a corner case: it is
+      // the most likely shape of a real GR incident, and it made the abandon
+      // threshold unreachable — the lane hammered the same page forever, which
+      // is exactly what RF4 was supposed to end. The counter is explicit now.
+      it('RFX3: an ECONNRESET between two aborts does NOT reset the streak — the third abort still abandons the range', async () => {
+        const { gr, state, uc } = makeHarness(100, now);
+        seedTodayPage(gr);
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        const realFetch = gr.fetchReceipts.bind(gr);
+        let broken = false;
+        jest.spyOn(gr, 'fetchReceipts').mockImplementation(async (params) => {
+          if (broken) throw new Error('ECONNRESET');
+          return realFetch(params);
+        });
+
+        for (const fail of [false, true, false, true, false]) {
+          broken = fail;
+          await expect(uc.execute()).rejects.toThrow(fail ? /ECONNRESET/ : /ABORT/);
+        }
+        errSpy.mockRestore();
+
+        const saved = await state.get(ENTITY);
+        expect(saved?.cursor).toBe('15-07-2026');
+        expect(saved?.lastResult).toMatch(/ABANDONADO/);
+      });
+
       it('a NON-guard failure (GR down) still pins the cursor for a plain retry — unaffected', async () => {
         const { gr, state, uc } = makeHarness(100, now);
         jest.spyOn(gr, 'fetchReceipts').mockRejectedValue(new Error('GR down'));
