@@ -3,7 +3,7 @@ import { assertFactsArePiiFree } from '@application/use-cases/assistant/assistan
 import type { Customer } from '@domain/entities/customer';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { AssistantSubjectContext } from '@domain/ports/AssistantDataSourceRegistry';
-import { customerFrom, FIXED_NOW, type FixtureRow } from '../../../helpers/customerFixture';
+import { customerFrom, grBalanceRow, FIXED_NOW, type FixtureRow } from '../../../helpers/customerFixture';
 
 /**
  * ai-assistant-multiagent — el resolver de saldo.
@@ -33,10 +33,8 @@ const CUSTOMER_ROW: Partial<FixtureRow> = {
   country: 'AR',
   login: 'jperez',
   createdAt: new Date('2024-01-01T00:00:00.000Z'),
-  grClienteId: 'GR1',
-  balanceDue: 45000,
-  balanceCurrency: 'ARS',
-  lastBalanceAt: FRESH_AT,
+  // fix wave (F1): los campos de balance salen del PARSER real, no a mano.
+  ...grBalanceRow('45000.00', FRESH_AT),
 };
 
 const CUSTOMER_BASE: Customer = customerFrom(CUSTOMER_ROW);
@@ -66,11 +64,41 @@ describe('ClienteSaldoResolver', () => {
     });
   });
 
-  it('marca tieneDeuda:false cuando el saldo es 0', async () => {
-    const zeroBalance = customerFrom({ ...CUSTOMER_ROW, balanceDue: 0 });
-    const resolver = new ClienteSaldoResolver(repoOf(zeroBalance));
+  /**
+   * ⚠️ **F1 — el CRITICAL de la fix wave.** El fixture viejo era
+   * `{...CUSTOMER_ROW, balanceDue: 0}`, que dejaba `balanceCurrency:'ARS'`
+   * heredado: una fila que la escritura real NUNCA produce. El parser sintetiza
+   * `currency = amount > 0 ? 'ARS' : null`, así que en PROD "sin deuda" ⟺
+   * "moneda null" — y el guard de moneda mandaba a un humano a TODO cliente al
+   * día (~2.300 del carril rápido). Con la fila REAL (`debt: "0.00"` por el
+   * parser) este test es el que caza la regresión.
+   */
+  it('F1 — cliente al día (payload GR debt "0.00" ⇒ currency null): responde "al día", NO deriva a humano por moneda', async () => {
+    const alDia = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('0.00', FRESH_AT) });
+    // Sanity de la premisa: la fila que la escritura real produce trae moneda null.
+    expect(alDia.balanceDue).toBe(0);
+    expect(alDia.balanceCurrency).toBeNull();
 
-    await expect(resolver.resolve(ctx)).resolves.toMatchObject({ tieneDeuda: false, saldo: 0 });
+    const resolver = new ClienteSaldoResolver(repoOf(alDia));
+
+    await expect(resolver.resolve(ctx)).resolves.toMatchObject({
+      disponible: true,
+      tieneDeuda: false,
+      saldo: 0,
+    });
+  });
+
+  it('F1b — saldo a favor (debt negativa ⇒ currency null): tampoco deriva a humano', async () => {
+    const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-1500.50', FRESH_AT) });
+    expect(aFavor.balanceCurrency).toBeNull();
+
+    const resolver = new ClienteSaldoResolver(repoOf(aFavor));
+
+    await expect(resolver.resolve(ctx)).resolves.toMatchObject({
+      disponible: true,
+      tieneDeuda: false,
+      saldo: -1500.5,
+    });
   });
 
   // ── La regla que importa ─────────────────────────────────────────────────
@@ -149,7 +177,16 @@ describe('ClienteSaldoResolver', () => {
 
   // ─── customer-balance-unmask (Fase 4) — guard de moneda (spec assistant-balance-guard) ───
 
-  it('S21 — trusted balance, unconfirmed currency: balanceCurrency:null en un balance confiable ⇒ handoff, NUNCA asume ARS', async () => {
+  /**
+   * ⚠️ Fila **legacy/defensiva a propósito**, y la única de este archivo que NO
+   * sale del parser: hoy `parseClientBalanceResponse` nunca produce
+   * `{amount > 0, currency: null}`. La combinación puede existir en la columna
+   * igual — filas escritas antes de que el parser sintetizara la moneda, o una
+   * moneda futura no-ARS que el parser todavía no sepa nombrar. El guard cubre
+   * ESE caso: monto positivo que el bot iba a emitir, sin moneda confirmada.
+   * (post-F1 el guard ya NO se dispara con monto <= 0 — ver F1/F1b arriba.)
+   */
+  it('S21 — trusted balance, unconfirmed currency: balanceCurrency:null sobre un monto POSITIVO ⇒ handoff, NUNCA asume ARS', async () => {
     const unconfirmedCurrency = customerFrom({ ...CUSTOMER_ROW, balanceCurrency: null });
     const resolver = new ClienteSaldoResolver(repoOf(unconfirmedCurrency));
 

@@ -12,6 +12,7 @@
  * `fdd05af0`).
  */
 import { toCustomer } from '@infrastructure/adapters/prisma/PrismaCustomerRepository';
+import { parseClientBalanceResponse } from '@infrastructure/adapters/gestion-real/GestionRealClient';
 import type { Customer } from '@domain/entities/customer';
 
 /** Reloj fijo por defecto — deterministico, sin fake timers. */
@@ -76,4 +77,64 @@ export function customerFrom(
     opts.ttlMinutes ?? 60,
     opts.now ?? (() => FIXED_NOW),
   );
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * fix wave (F1) — REGLA DE FIXTURES DE BALANCE
+ *
+ * `customerFrom` cerró el hueco "Customer a mano" ⇒ "Customer del mapper real".
+ * Pero quedó un hueco MÁS ADENTRO: la FILA. Un review adversarial encontró un
+ * CRITICAL que vivía exactamente ahí — `{balanceDue: 0, balanceCurrency: 'ARS'}`
+ * es una fila plausible a ojo, pero la escritura real JAMÁS la produce: la moneda
+ * la SINTETIZA `parseClientBalanceResponse` como `amount > 0 ? 'ARS' : null`, así
+ * que "sin deuda" ⟺ "moneda null". Con una fila imposible, el guard de moneda
+ * parecía inofensivo; con la fila REAL, apagaba el "estás al día" de ~2.300
+ * clientes.
+ *
+ * Regla: **todo fixture de balance nace de un payload GR pasado por el parser
+ * real**, nunca de un par `{balanceDue, balanceCurrency}` escrito a mano.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Payload GR mínimo y REALISTA para `action: 'cliente'` (forma medida en vivo). */
+export function grBalancePayload(
+  debt: string | number,
+  opts: { invoices?: unknown[]; grClienteId?: string } = {},
+): Record<string, unknown> {
+  return {
+    error: '0',
+    clientes: [
+      {
+        idcustomer: opts.grClienteId ?? 'GR1',
+        cuentas: {
+          debt,
+          invoices_qty: String(opts.invoices?.length ?? 0),
+          invoices: opts.invoices ?? [],
+        },
+      },
+    ],
+  };
+}
+
+/**
+ * Campos de balance de una `FixtureRow` tal como la ESCRITURA REAL los deja:
+ * payload GR → `parseClientBalanceResponse` → `updateClientBalance(amount,
+ * currency, at)` → columnas. No hay forma de inventar acá un par
+ * `{balanceDue, balanceCurrency}` que el pipeline no pueda producir.
+ */
+export function grBalanceRow(
+  debt: string | number,
+  lastBalanceAt: Date | null,
+  opts: { grClienteId?: string; invoices?: unknown[] } = {},
+): Pick<FixtureRow, 'grClienteId' | 'balanceDue' | 'balanceCurrency' | 'lastBalanceAt'> {
+  const grClienteId = opts.grClienteId ?? 'GR1';
+  const parsed = parseClientBalanceResponse(
+    grClienteId,
+    grBalancePayload(debt, { invoices: opts.invoices, grClienteId }),
+  );
+  return {
+    grClienteId,
+    balanceDue: parsed.amount,
+    balanceCurrency: parsed.currency,
+    lastBalanceAt,
+  };
 }

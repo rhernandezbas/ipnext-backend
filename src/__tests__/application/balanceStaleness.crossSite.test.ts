@@ -29,7 +29,8 @@ import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMe
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { GrClientBalance } from '@domain/entities/gestionReal';
-import { customerFrom } from '../helpers/customerFixture';
+import { parseClientBalanceResponse } from '@infrastructure/adapters/gestion-real/GestionRealClient';
+import { customerFrom, grBalancePayload } from '../helpers/customerFixture';
 
 const NOW = () => new Date('2026-08-10T12:00:00.000Z');
 const TTL_MINUTES = 60;
@@ -89,9 +90,11 @@ async function inboxStale(lastBalanceAt: string | null): Promise<boolean> {
 async function refreshJudgedStale(lastBalanceAt: string | null): Promise<boolean> {
   const gr = new InMemoryGestionRealPort();
   const mirror = new InMemoryClientMirrorRepository();
-  const balance: GrClientBalance = {
-    grClienteId: 'gr-1', amount: 1000, currency: 'ARS', invoicesQty: 0, paymentUrls: {}, invoices: [], raw: {},
-  };
+  // fix wave (F1) — el balance nace de un payload GR pasado por el parser real,
+  // no de un `GrClientBalance` escrito a mano: la moneda la SINTETIZA el parser
+  // (`amount > 0 ? 'ARS' : null`) y un literal a mano puede codificar un par
+  // que la escritura real nunca produce (así vivió el CRITICAL de F1).
+  const balance: GrClientBalance = parseClientBalanceResponse('gr-1', grBalancePayload('1000.00', { grClienteId: 'gr-1' }));
   gr.balancesByClient['gr-1'] = balance;
   const refresh = new RefreshClientBalanceIfStale(gr, mirror, { now: NOW, ttlMinutes: TTL_MINUTES });
 
