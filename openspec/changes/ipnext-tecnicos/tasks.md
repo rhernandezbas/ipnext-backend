@@ -7,27 +7,27 @@ TDD estricto en todo el BE: cada task de código va precedida por su test en roj
 ## Wave 1a — Cierre atómico first-writer-wins (Solo BE)
 Spec: `specs/task-general-status/spec.md`. Arregla deuda preexistente (4 escritores sin lock) antes de sumar el 5º (app).
 
-- [ ] W1a.1 Migración `add_scheduled_task_closure_tracking` (aditiva): `ScheduledTask.closureOrigin String?`, `closureResultCode String?`, `closedAt DateTime?`, `closedByUserId String?` + FK `RbacUser` `onDelete: SetNull`.
-- [ ] W1a.2 RED — `InMemorySchedulingRepository.closeTaskIfOpen`: test de concurrencia con hook `beforeWrite` (`Promise.all([closeApp, closeIclass])` → un `closed:true`, un `closed:false` con `existingOrigin` correcto). Debe fallar (método no existe).
-- [ ] W1a.3 GREEN — Agregar `ClosureOrigin`/`CloseTaskResult`/`closeTaskIfOpen` a `domain/ports/SchedulingRepository.ts`; implementar en `InMemorySchedulingRepository` con el hook de interleaving.
-- [ ] W1a.4 RED — Test in-memory: cerrar una tarea ya `closed` es no-op (`closed:false`, `existingOrigin` del ganador previo, sin doble escritura).
-- [ ] W1a.5 GREEN — Ajustar el shape de retorno de `closeTaskIfOpen` in-memory hasta que W1a.4 pase.
-- [ ] W1a.6 RED — `PrismaSchedulingRepository.closeTaskIfOpen`: test de integración contra Postgres, `updateMany` condicional, `count===1` gana / `count===0` pierde y releé.
-- [ ] W1a.7 GREEN — Implementar `closeTaskIfOpen` en `PrismaSchedulingRepository.ts` (una sola sentencia `updateMany({where:{id, generalStatus:{not:'closed'}}}`, sin transacción explícita).
-- [ ] W1a.8 RED — Test del helper de aplicación (`applyTaskClosure` o similar): resultCodes distintos → log `[task-closure-conflict]` + `ScheduledTaskActivity` tipo `closure_conflict`; mismo resultCode → ninguno de los dos.
-- [ ] W1a.9 GREEN — Implementar el helper único que envuelve `closeTaskIfOpen` (log + activity), consumido por los 5 escritores.
-- [ ] W1a.10 RED — Test del mapper DTO: `closureOrigin` en la respuesta de `ScheduledTask`, `null` salvo `generalStatus==='closed'`.
-- [ ] W1a.11 GREEN — Sumar `closureOrigin` al mapper Prisma→DTO existente.
-- [ ] W1a.12 Rutear `SetTaskGeneralStatus.ts:34` por el helper (origin=`staff`), preservando el no-op D8 sobre tarea ya cerrada; actualizar sus tests.
-- [ ] W1a.13 Rutear `UpdateTask.ts:34`: si el patch trae `generalStatus:'closed'` → helper (origin=`staff`); cualquier otro valor sigue por `updateTask`; actualizar tests.
-- [ ] W1a.14 Rutear `IngestClosedServiceOrders.ts:379-380` por el helper (origin=`iclass`), preservando el no-op si `generalStatus!=='closed'` ya no aplica; actualizar tests.
-- [ ] W1a.15 Rutear `CloseIClassServiceOrder.ts:101` por el helper (origin=`staff`), manteniendo el chequeo `:70`; confirmar que el push a IClass no se ve afectado; actualizar tests.
-- [ ] W1a.16 RED+GREEN — Test estático `src/__tests__/staticSource/taskClosureGuard.test.ts`: ningún archivo fuera de `PrismaSchedulingRepository`/`InMemorySchedulingRepository` contiene `generalStatus: 'closed'` en un `updateTask` directo (filtrar comentarios antes de matchear).
-- [ ] W1a.17 Revert-probe: revertir temporalmente `closeTaskIfOpen` a `updateTask` en un escritor y confirmar que W1a.2/W1a.6 se ponen en ROJO; revertir el revert. Documentar el resultado en el commit.
-- [ ] W1a.18 Matriz spec-compliance Wave 1a: los 8 scenarios de `specs/task-general-status/spec.md` → test file:case (insumo de sdd-verify).
-- [ ] W1a.19 `npm test` + `tsc --noEmit` verdes.
-- [ ] W1a.20 Review adversarial (judgment-day) del diff completo de la wave.
-- [ ] W1a.21 Verificación EN VIVO: contra el entorno real, disparar dos cierres concurrentes de la MISMA tarea desde dos de los 4 escritores existentes (p. ej. `SetTaskGeneralStatus` vía curl + un ciclo forzado de `IngestClosedServiceOrders`); confirmar UN solo `generalStatus='closed'` persistido con el `closureOrigin` correcto, y — si los `resultCode` difieren — el `ScheduledTaskActivity closure_conflict` visible por API/DB.
+- [x] W1a.1 Migración `add_scheduled_task_closure_tracking` (aditiva): `ScheduledTask.closureOrigin String?`, `closureResultCode String?`, `closedAt DateTime?`, `closedByUserId String?` + FK `RbacUser` `onDelete: SetNull`.
+- [x] W1a.2 RED — `InMemorySchedulingRepository.closeTaskIfOpen`: test de concurrencia con hook `beforeWrite` (`Promise.all([closeApp, closeIclass])` → un `closed:true`, un `closed:false` con `existingOrigin` correcto). Debe fallar (método no existe).
+- [x] W1a.3 GREEN — Agregar `ClosureOrigin`/`CloseTaskResult`/`closeTaskIfOpen` a `domain/ports/SchedulingRepository.ts`; implementar en `InMemorySchedulingRepository` con el hook de interleaving.
+- [x] W1a.4 RED — Test in-memory: cerrar una tarea ya `closed` es no-op (`closed:false`, `existingOrigin` del ganador previo, sin doble escritura).
+- [x] W1a.5 GREEN — Ajustar el shape de retorno de `closeTaskIfOpen` in-memory hasta que W1a.4 pase.
+- [x] W1a.6 RED — `PrismaSchedulingRepository.closeTaskIfOpen`: test de integración contra Postgres, `updateMany` condicional, `count===1` gana / `count===0` pierde y releé. *(Sin DB real disponible en esta fase — prisma singleton mockeado, mismo convenio que `PrismaSchedulingRepository.methods.test.ts`.)*
+- [x] W1a.7 GREEN — Implementar `closeTaskIfOpen` en `PrismaSchedulingRepository.ts` (una sola sentencia `updateMany({where:{id, generalStatus:{not:'closed'}}}`, sin transacción explícita).
+- [x] W1a.8 RED — Test del helper de aplicación (`applyTaskClosure` o similar): resultCodes distintos → log `[task-closure-conflict]` + `ScheduledTaskActivity` tipo `closure_conflict`; mismo resultCode → ninguno de los dos.
+- [x] W1a.9 GREEN — Implementar el helper único que envuelve `closeTaskIfOpen` (log + activity), consumido por los 5 escritores.
+- [x] W1a.10 RED — Test del mapper DTO: `closureOrigin` en la respuesta de `ScheduledTask`, `null` salvo `generalStatus==='closed'`.
+- [x] W1a.11 GREEN — Sumar `closureOrigin` al mapper Prisma→DTO existente.
+- [x] W1a.12 Rutear `SetTaskGeneralStatus.ts:34` por el helper (origin=`staff`), preservando el no-op D8 sobre tarea ya cerrada; actualizar sus tests.
+- [x] W1a.13 Rutear `UpdateTask.ts:34`: si el patch trae `generalStatus:'closed'` → helper (origin=`staff`); cualquier otro valor sigue por `updateTask`; actualizar tests.
+- [x] W1a.14 Rutear `IngestClosedServiceOrders.ts:379-380` por el helper (origin=`iclass`), preservando el no-op si `generalStatus!=='closed'` ya no aplica; actualizar tests.
+- [x] W1a.15 Rutear `CloseIClassServiceOrder.ts:101` por el helper (origin=`staff`), manteniendo el chequeo `:70`; confirmar que el push a IClass no se ve afectado; actualizar tests.
+- [x] W1a.16 RED+GREEN — Test estático `src/__tests__/staticSource/taskClosureGuard.test.ts`: ningún archivo fuera de `PrismaSchedulingRepository`/`InMemorySchedulingRepository` contiene `generalStatus: 'closed'` en un `updateTask` directo (filtrar comentarios antes de matchear).
+- [x] W1a.17 Revert-probe: revertir temporalmente `closeTaskIfOpen` a `updateTask` en un escritor y confirmar que W1a.2/W1a.6 se ponen en ROJO; revertir el revert. Documentar el resultado en el commit.
+- [x] W1a.18 Matriz spec-compliance Wave 1a: los 8 scenarios de `specs/task-general-status/spec.md` → test file:case (insumo de sdd-verify). *(El spec file tiene 7 scenarios reales, no 8 — ver desvíos en el commit/reporte.)*
+- [x] W1a.19 `npm test` + `tsc --noEmit` verdes. 1202/1202 suites, 12238/12238 tests, tsc sin errores.
+- [ ] W1a.20 Review adversarial (judgment-day) del diff completo de la wave. **BLOQUEADO para este agente**: sdd-apply es EXECUTOR, no puede lanzar sub-agentes (protocolo sdd-phase-common). Requiere invocación separada (orquestador o sdd-verify).
+- [ ] W1a.21 Verificación EN VIVO: contra el entorno real, disparar dos cierres concurrentes de la MISMA tarea desde dos de los 4 escritores existentes (p. ej. `SetTaskGeneralStatus` vía curl + un ciclo forzado de `IngestClosedServiceOrders`); confirmar UN solo `generalStatus='closed'` persistido con el `closureOrigin` correcto, y — si los `resultCode` difieren — el `ScheduledTaskActivity closure_conflict` visible por API/DB. **BLOQUEADO para este agente**: no hay entorno real/DB accesible en este worktree de apply.
 
 ---
 

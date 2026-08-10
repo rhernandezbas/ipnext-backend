@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'lastBroadcastAt' | 'lastBroadcastByName' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus' | 'onuSerial'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'closureOrigin' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'lastBroadcastAt' | 'lastBroadcastByName' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus' | 'onuSerial'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';
@@ -55,11 +55,82 @@ export interface TaskProjectMapping {
   iclassSoType: { id: string; code: string; active: boolean } | null;
 }
 
+// wave-1a (cierre atómico first-writer-wins) — origen del cierre. String en la columna
+// (catálogo que puede crecer), tipo cerrado acá en TypeScript.
+export type ClosureOrigin = 'app' | 'iclass' | 'staff';
+
+export interface CloseTaskIfOpenInput {
+  origin: ClosureOrigin;
+  resultCode?: string | null;
+  closedByUserId?: string | null;
+}
+
+/**
+ * FIX-C (fix wave 2 W1a) — el SELLO de cierre completo: las cuatro columnas que escribe
+ * `closeTaskIfOpen` y que un reopen (FIX-1) borra. Sólo `closureOrigin` viaja en el DTO
+ * público de `ScheduledTask` (así lo fija el spec), así que las otras tres necesitan una
+ * lectura propia. Su único consumidor es el reopen: leer el sello ANTES de limpiarlo
+ * para dejarlo en la metadata del `status_changed`, que es append-only.
+ */
+export interface ClosureStamp {
+  closureOrigin: ClosureOrigin | null;
+  closureResultCode: string | null;
+  /** ISO-8601. */
+  closedAt: string | null;
+  closedByUserId: string | null;
+}
+
+export interface CloseTaskResult {
+  /** true = ESTE escritor ganó la race y escribió. */
+  closed: boolean;
+  /** Estado tras la operación (el ganador previo si closed=false). Null si la tarea no existe. */
+  task: ScheduledTask | null;
+  /** Sólo cuando closed=false: quién había cerrado antes y con qué resultado. */
+  existingOrigin: ClosureOrigin | null;
+  existingResultCode: string | null;
+}
+
 export interface SchedulingRepository {
   listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]>;
   getTask(id: string): Promise<ScheduledTask | null>;
   createTask(data: CreateTaskInput): Promise<ScheduledTask>;
   updateTask(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null>;
+  /**
+   * wave-1a (cierre atómico first-writer-wins) — escritura condicional ATÓMICA
+   * equivalente a `UPDATE ... WHERE id = :id AND generalStatus != 'closed'` en UNA
+   * sola sentencia (nunca getTask + updateTask por separado). Todo camino que cierre
+   * una tarea (staff, iclass, app) DEBE pasar por acá — es el único chokepoint que
+   * arregla la race preexistente entre los escritores de generalStatus='closed'.
+   * Molde: `moveTaskToStageIfForward`, mismo patrón de retorno `{ ...boolean-ish }`.
+   *
+   * ALCANCE DEL PREDICADO (FIX-8, decisión explícita): cierra CUALQUIER estado que no
+   * sea `'closed'`, **INCLUIDO `'dismissed'`**. No es un descuido: cerrar a mano una
+   * tarea descartada es una operación legítima del staff, y los cuatro escritores
+   * actuales que NO deben tocar dismissed ya la filtran ANTES de llegar acá (los guards
+   * G1/G2 de IngestClosedServiceOrders, el `generalStatus === 'open'` del step 4 de
+   * CloseIClassServiceOrder). **El caller que necesite excluir dismissed DEBE
+   * pre-chequearlo él mismo** — este método no lo va a hacer por él. En particular
+   * `CloseTaskFromField` (app técnico, wave 1b) tiene que bailar en dismissed ANTES de
+   * invocar el guard, o su 409 `TASK_ALREADY_CLOSED` no dispara nunca.
+   *
+   * DEPENDENCIA DEL FENCE: `generalStatus` es **NOT NULL** en el schema
+   * (`String @default("open")`). El fence descansa en eso: en SQL, `generalStatus <>
+   * 'closed'` es UNKNOWN — y por lo tanto NO matchea — cuando el valor es NULL. Si
+   * alguna vez se hiciera la columna nullable, una fila con NULL dejaría de ser
+   * cerrable por este método (y, del otro lado, Prisma traduce `{ not: 'closed' }`
+   * incluyendo los NULL, con lo que el comportamiento entre el SQL crudo y el ORM
+   * divergiría). O sea: hacer nullable a `generalStatus` ROMPE este guard. No lo hagas
+   * sin rediseñar el predicado.
+   */
+  closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult>;
+  /**
+   * FIX-C (fix wave 2 W1a) — leer el sello de cierre COMPLETO (las cuatro columnas).
+   * Devuelve null cuando la tarea no existe o no está cerrada. Se lee justo ANTES de
+   * un reopen para que el `status_changed` que lo documenta conserve quién había
+   * cerrado y con qué resultado — dato que FIX-1 borra de la fila y que, sin esto,
+   * desaparece del sistema exactamente en el evento más auditable.
+   */
+  getClosureStamp(taskId: string): Promise<ClosureStamp | null>;
   /**
    * #14: mark closure-completeness flags WITHOUT going through updateTask, so the
    * activity-log diff engine does not emit events for these internal flags.

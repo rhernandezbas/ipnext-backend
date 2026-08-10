@@ -16,13 +16,20 @@ const str = (b: bigint | null): string | null => (b != null ? b.toString() : nul
 const num = (v: unknown): number | null => (v != null ? Number(v) : null);
 
 export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRepository {
-  async findSyncStateByIclassId(iclassId: string): Promise<{ iclassUpdatedAt: string | null } | null> {
+  async findSyncStateByIclassId(
+    iclassId: string,
+  ): Promise<{ iclassUpdatedAt: string | null; closureAttemptedAt: string | null } | null> {
     const row = await (prisma.iClassServiceOrder as any).findUnique({
       where: { iclassId: BigInt(iclassId) },
-      select: { iclassUpdatedAt: true },
+      // FIX-B — closureAttemptedAt viaja en la MISMA lectura que el watermark: es la
+      // query que el ingest ya hace justo antes de decidir si reporta la discrepancia.
+      select: { iclassUpdatedAt: true, closureAttemptedAt: true },
     });
     if (!row) return null;
-    return { iclassUpdatedAt: row.iclassUpdatedAt ? row.iclassUpdatedAt.toISOString() : null };
+    return {
+      iclassUpdatedAt: row.iclassUpdatedAt ? row.iclassUpdatedAt.toISOString() : null,
+      closureAttemptedAt: row.closureAttemptedAt ? row.closureAttemptedAt.toISOString() : null,
+    };
   }
 
   async upsert(order: ClosedServiceOrder, scheduledTaskId: string | null): Promise<void> {
@@ -395,6 +402,21 @@ export class PrismaClosedServiceOrderRepository implements ClosedServiceOrderRep
     await (prisma.iClassServiceOrder as any).update({
       where: { iclassId: BigInt(iclassId) },
       data: { [effect]: done },
+    });
+  }
+
+  /**
+   * FIX-B (fix wave 2 W1a) — sella el PRIMER intento de cierre. `updateMany` con
+   * `closureAttemptedAt: null` en el WHERE: la escritura es condicional en la misma
+   * sentencia, así que un segundo tick (o dos crons solapados) no puede correr el
+   * timestamp hacia adelante — mismo patrón de guard que `closeTaskIfOpen`, por la misma
+   * razón: si el sello se moviera, el gate "reportá una sola vez" volvería a ser un
+   * "reportá siempre". No-op cuando la OS no está espejada (0 filas).
+   */
+  async markClosureAttempted(iclassId: string): Promise<void> {
+    await (prisma.iClassServiceOrder as any).updateMany({
+      where: { iclassId: BigInt(iclassId), closureAttemptedAt: null },
+      data: { closureAttemptedAt: new Date() },
     });
   }
 

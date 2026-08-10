@@ -63,6 +63,41 @@ describe('SetTaskGeneralStatus use case', () => {
     expect(updated.isClosed).toBe(true);
   });
 
+  // wave-1a (cierre atómico) — closing routes through closeTaskIfOpen(origin='staff').
+  it('wave-1a: closing an open task routes through the atomic guard with origin=staff', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const useCase = new SetTaskGeneralStatus(repo);
+    const task = await repo.createTask(CREATE_INPUT);
+
+    const updated = await useCase.execute(task.id, 'closed', { actorId: 'u-1', actorName: 'Ana' });
+
+    expect(updated.closureOrigin).toBe('staff');
+  });
+
+  // wave-1a — the preexisting staff↔iclass race is closed by the SAME guard: if this
+  // call loses (someone else closed it between the D8 read and the atomic write), it
+  // must return the CURRENT (already-closed) task without throwing and without
+  // emitting its own status_changed — the winner already emitted its own event.
+  it('wave-1a: loses a race to a concurrent iclass close — returns the winner\'s task, no throw, no status_changed for THIS call', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const recorder = new FakeRecorder();
+    const useCase = new SetTaskGeneralStatus(repo, recorder);
+    const task = await repo.createTask(CREATE_INPUT);
+
+    // Simulate: between this use case's D8 read (task still 'open') and its atomic
+    // write, iclass wins the race and closes the task first.
+    repo.setBeforeCloseWriteHook(async () => {
+      repo.setBeforeCloseWriteHook(undefined);
+      await repo.closeTaskIfOpen(task.id, { origin: 'iclass', resultCode: 'REAGENDADO' });
+    });
+
+    const result = await useCase.execute(task.id, 'closed', { actorId: 'u-1', actorName: 'Ana' });
+
+    expect(result.generalStatus).toBe('closed');
+    expect(result.closureOrigin).toBe('iclass');
+    expect(recorder.events.filter(e => e.type === 'status_changed')).toHaveLength(0);
+  });
+
   it('dismisses an open task → generalStatus=dismissed, isClosed=false', async () => {
     const repo = new InMemorySchedulingRepository();
     const useCase = new SetTaskGeneralStatus(repo);
