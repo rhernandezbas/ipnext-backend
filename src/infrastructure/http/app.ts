@@ -3264,6 +3264,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // ⚠️ Sin esta línea, el motor existiría pero NADIE lo llamaría — exactamente el bug W6
     // del EPIC #38 (rutas cableadas, hook nunca inyectado, CI verde, feature muerta en prod).
     // Pineado por `assistant-composition.test.ts`.
+    //
+    // customer-balance-unmask (D3/R2) — `refreshBalance: balanceRefresh` (ya en scope,
+    // línea ~1284/3235: es la MISMA instancia que ya usa `getInboxClientContext`). Antes
+    // de esta línea la rama de refresco de `ClienteSaldoResolver` era código MUERTO en
+    // prod — el bot podía citar un saldo stale sin intentar refrescarlo primero.
+    // Pineado por P1 (`assistant-composition.test.ts`, boot real de `createApp()`).
     const assistantEngine = composeAssistantEngine({
       conversationRepo,
       customerRepo: customerAdapter,
@@ -3274,6 +3280,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       listTasks,
       threadReader: new ChatMessageThreadReader(chatMessageRepo),
       clientResolver: new CustomerAssistantClientResolver(customerAdapter, customerAdapter),
+      refreshBalance: balanceRefresh,
     });
 
     app.use('/api/messaging', createMessagingRouter(

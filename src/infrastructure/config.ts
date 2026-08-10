@@ -24,7 +24,15 @@ validateEnv();
 
 /**
  * Intervalo del ticker de los dos carriles de balances. Se resuelve UNA SOLA VEZ
- * y se reusa, porque `portalBalanceStaleTtlMinutes` se acota CONTRA este valor.
+ * y se reusa por el resto del módulo — el porqué está abajo.
+ *
+ * customer-balance-unmask — se borró la referencia a una perilla de portal
+ * (`portalBalanceStaleTtlMinutes`) que este comentario nombraba pero que NUNCA
+ * se implementó en el repo (verificado: cero matches en `src/`, y el refresh
+ * on-demand de `ListPortalInvoices` que la habría necesitado tampoco se cableó
+ * — `app.ts` construye `ListPortalInvoices(customerAdapter)` con un solo
+ * argumento). Si el portal estrena su propio refresh on-demand más adelante,
+ * necesita una perilla PROPIA con su propio clamp — no ésta.
  *
  * Antes se parseaba el MISMO env dos veces con límites distintos (piso 60 s en la
  * copia del clamp, piso 1 h en el valor real) ⇒ dos fuentes de verdad para la
@@ -108,11 +116,18 @@ export const config = {
       min: 1,
       max: 1440,
     }),
-    /** Max ms for on-demand GR balance request before falling back to stored value. */
+    /**
+     * Max ms for on-demand GR balance request before falling back to stored value.
+     *
+     * customer-balance-unmask (Decisión 4) — techo 10.000ms, NO 60.000: este
+     * timeout corre DENTRO del flujo de un mensaje de WhatsApp (ClienteSaldoResolver),
+     * y un env mal seteado a 60s sería un cuelgue real del bot, no un margen de
+     * seguridad. Clamp al lado seguro, aditivo — el default (4000) no cambia.
+     */
     balanceRefreshTimeoutMs: parsePositiveInt(process.env.BALANCE_REFRESH_TIMEOUT_MS, {
       default: 4000,
       min: 500,
-      max: 60_000,
+      max: 10_000,
     }),
     /**
      * Interval (ms) between balance-lane runs (default: 1h).
