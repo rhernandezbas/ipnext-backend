@@ -6,9 +6,11 @@ import { FinanceInvoiceTypeClassificationRepository } from '@domain/ports/Financ
 import { FinanceReceiptSyncConfigRepository } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { FinanceReceiptItemRepository } from '@domain/ports/FinanceReceiptItemRepository';
 import { FinanceReceiptRetencionRepository } from '@domain/ports/FinanceReceiptRetencionRepository';
-import { mapGrReceipt, receiptIdentityHolds } from './mapGrReceipt';
 import { previousYearMonth, compareYearMonth, yearMonthToGrRange, arYearMonth, isValidYearMonth } from './financeDates';
 import { FinanceReceiptPersistenceError } from './financeIngestErrors';
+import { mapAndGuardReceiptPage, persistReceiptPage } from './financeReceiptPageIngest';
+
+const LANE = 'backfill';
 
 /** SyncState entity key for the resumable receipt-backfill watermark. */
 const BACKFILL_ENTITY = 'finance-receipts-backfill';
@@ -133,12 +135,12 @@ export class SyncGrReceiptsBackfillBatch {
         );
       }
 
-      // Persist the page: receipts, applications, and auto-alta any unseen grType.
-      const mapped = receipts.map(mapGrReceipt);
+      // gr-receipt-annulment (design.md Decision 4/8) — map + systemic guard,
+      // BEFORE any write. The backfill lane already has `syncConfig` wired
+      // (it needs `backfillFloorYearMonth`), so — unlike delta — it uses the
+      // LIVE, reloadable guard thresholds.
+      const mapped = mapAndGuardReceiptPage(receipts, config, LANE);
       const receiptRows = mapped.map((m) => m.receipt);
-      const applicationRows = mapped.flatMap((m) => m.applications);
-      const itemRows = mapped.flatMap((m) => m.items);
-      const retencionRows = mapped.flatMap((m) => m.retenciones);
 
       // fix-wave-2 LOW (F3 residual, DEUDA declarada — not fixed, documented):
       // F3 only guards against GR reporting its OWN error with HTTP 200
@@ -153,29 +155,12 @@ export class SyncGrReceiptsBackfillBatch {
       const monthExhausted = cursorOffset + this.pageSize >= total;
       const itemsSynced = (prior?.itemsSynced ?? 0) + receiptRows.length;
 
-      // fix-wave-3 R8 — everything from here on is PERSISTENCE, never the GR
-      // fetch itself. Same rationale as `SyncGrReceiptsDelta` — see
-      // `financeIngestErrors.ts`.
+      // fix-wave-3 R8 / gr-receipt-annulment Decision 8 — everything from
+      // here on is PERSISTENCE, never the GR fetch itself. Same rationale as
+      // `SyncGrReceiptsDelta` — see `financeIngestErrors.ts`.
       let outcome: BackfillPageResult;
       try {
-        await this.receiptRepo.upsertBatch(receiptRows);
-        await this.applicationRepo.upsertBatch(applicationRows);
-        await this.itemRepo.upsertBatch(itemRows);
-        await this.retencionRepo.upsertBatch(retencionRows);
-
-        // fix-wave-2 R1 — same data-integrity guard as the delta lane.
-        for (const m of mapped) {
-          if (!receiptIdentityHolds(m)) {
-            console.warn(
-              `[finance-receipts-backfill] identity mismatch on receipt ${m.receipt.grReceiptId}: aplicaciones != items+retenciones`,
-            );
-          }
-        }
-
-        const seenTypes = new Set(applicationRows.map((a) => a.grType));
-        for (const grType of seenTypes) {
-          if (grType) await this.invoiceTypes.upsertIfAbsent(grType);
-        }
+        await persistReceiptPage(mapped, { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes }, LANE);
 
         if (monthExhausted && compareYearMonth(cursorYearMonth, config.backfillFloorYearMonth) <= 0) {
           await this.state.save({
@@ -208,7 +193,7 @@ export class SyncGrReceiptsBackfillBatch {
           outcome = { pageProcessed: receiptRows.length, monthAdvanced: false, done: false };
         }
       } catch (err) {
-        throw new FinanceReceiptPersistenceError(err);
+        throw err instanceof FinanceReceiptPersistenceError ? err : new FinanceReceiptPersistenceError(err);
       }
       return outcome;
     } catch (err) {

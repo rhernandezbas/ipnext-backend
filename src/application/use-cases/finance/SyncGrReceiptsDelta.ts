@@ -5,9 +5,12 @@ import { FinanceReceiptApplicationRepository } from '@domain/ports/FinanceReceip
 import { FinanceInvoiceTypeClassificationRepository } from '@domain/ports/FinanceInvoiceTypeClassificationRepository';
 import { FinanceReceiptItemRepository } from '@domain/ports/FinanceReceiptItemRepository';
 import { FinanceReceiptRetencionRepository } from '@domain/ports/FinanceReceiptRetencionRepository';
-import { mapGrReceipt, receiptIdentityHolds } from './mapGrReceipt';
+import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { grDateAr, isValidGrDate } from './financeDates';
 import { FinanceReceiptPersistenceError } from './financeIngestErrors';
+import { mapAndGuardReceiptPage, persistReceiptPage } from './financeReceiptPageIngest';
+
+const LANE = 'delta';
 
 /** SyncState entity key for the receipt-delta watermark. */
 const DELTA_ENTITY = 'finance-receipts-delta';
@@ -139,46 +142,38 @@ export class SyncGrReceiptsDelta {
         );
       }
 
-      const mapped = receipts.map(mapGrReceipt);
+      // gr-receipt-annulment (design.md Decision 4/8) — map + systemic guard,
+      // BEFORE any write. The delta lane has no `syncConfig` collaborator
+      // (deliberate: adding one would change this class's constructor
+      // signature, breaking `finance-receipts-ingest-seam.test.ts`'s and
+      // `SyncGrReceiptsDelta.test.ts`'s existing call sites — the Fase 9
+      // gate this refactor must not touch). The guard still runs on delta
+      // using the DEFAULT thresholds (5%/min 5, the SAME values the
+      // singleton config row starts with) rather than a live-reloadable
+      // config — delta's pages are small ("today" only) and the defaults
+      // are already the safe values (design.md Decision 7), so this is a
+      // deliberate, documented narrowing of Decision 4's "los tres carriles"
+      // for this ONE lane, not a silent skip.
+      const mapped = mapAndGuardReceiptPage(receipts, FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS, LANE);
       const receiptRows = mapped.map((m) => m.receipt);
-      const applicationRows = mapped.flatMap((m) => m.applications);
-      const itemRows = mapped.flatMap((m) => m.items);
-      const retencionRows = mapped.flatMap((m) => m.retenciones);
 
       const itemsSynced = (prior?.itemsSynced ?? 0) + receiptRows.length;
       const hasPendingPages = offset + this.pageSize < total;
 
-      // fix-wave-3 R8 — everything from here on is PERSISTENCE (repo writes +
-      // classification + the success-path SyncState.save), never the GR fetch
-      // itself. Wrapped separately and rethrown as `FinanceReceiptPersistenceError`
-      // so `FinanceReceiptIngestScheduler` can tell "GR is unwell" apart from
-      // "a repo write failed while GR was perfectly healthy" — the shared
-      // request-pacing backoff must respond ONLY to the former (see
+      // fix-wave-3 R8 / gr-receipt-annulment Decision 8 — everything from
+      // here on is PERSISTENCE (repo writes + classification + the
+      // success-path SyncState.save), never the GR fetch itself.
+      // `persistReceiptPage` already wraps its own failures as
+      // `FinanceReceiptPersistenceError`; this catch only needs to wrap
+      // whatever ELSE can fail in this block (the `state.save` call) without
+      // double-wrapping an already-wrapped error — so
+      // `FinanceReceiptIngestScheduler` can tell "GR is unwell" apart from "a
+      // repo write failed while GR was perfectly healthy" (see
       // `financeIngestErrors.ts`). The outer catch below still records
       // `lastResult: error:` in SyncState regardless of which one this is —
       // that observability is unchanged.
       try {
-        await this.receiptRepo.upsertBatch(receiptRows);
-        await this.applicationRepo.upsertBatch(applicationRows);
-        await this.itemRepo.upsertBatch(itemRows);
-        await this.retencionRepo.upsertBatch(retencionRows);
-
-        // fix-wave-2 R1 — data-integrity guard: SUM(aplicaciones) must equal
-        // SUM(items) + SUM(retenciones) (ground truth: exact identity, 0
-        // mismatches across 4.839 real June-2026 receipts). A mismatch is
-        // logged, never silently swallowed nor a reason to abort ingestion.
-        for (const m of mapped) {
-          if (!receiptIdentityHolds(m)) {
-            console.warn(
-              `[finance-receipts-delta] identity mismatch on receipt ${m.receipt.grReceiptId}: aplicaciones != items+retenciones`,
-            );
-          }
-        }
-
-        const seenTypes = new Set(applicationRows.map((a) => a.grType));
-        for (const grType of seenTypes) {
-          if (grType) await this.invoiceTypes.upsertIfAbsent(grType);
-        }
+        await persistReceiptPage(mapped, { receiptRepo: this.receiptRepo, applicationRepo: this.applicationRepo, itemRepo: this.itemRepo, retencionRepo: this.retencionRepo, invoiceTypes: this.invoiceTypes }, LANE);
 
         if (hasPendingPages) {
           await this.state.save({
@@ -198,7 +193,7 @@ export class SyncGrReceiptsDelta {
           });
         }
       } catch (err) {
-        throw new FinanceReceiptPersistenceError(err);
+        throw err instanceof FinanceReceiptPersistenceError ? err : new FinanceReceiptPersistenceError(err);
       }
 
       if (hasPendingPages) {

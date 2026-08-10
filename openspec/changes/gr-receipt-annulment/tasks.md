@@ -67,20 +67,26 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 3 — Guard sistémico con clase de error propia
 
-- [ ] 3.1 RED `financeAnnulmentGuard.test.ts` (nuevo) — frontera: `0/100` no dispara, `5/100` no
+- [x] 3.1 RED `financeAnnulmentGuard.test.ts` (nuevo) — frontera: `0/100` no dispara, `5/100` no
       (`>` estricto), `6/100` sí, `3/4` (75%) no (piso `minCount=5`), `total=0` no dispara (scenarios
       20, 21).
-- [ ] 3.2 GREEN `financeAnnulmentGuard.ts` (application, pura, sin I/O) — fórmula exacta de Decisión 4.
-- [ ] 3.3 RED `FinanceReceiptAnnulmentGuardError` NO debe ser leído por `trackGrHealth` como fallo de
+- [x] 3.2 GREEN `financeAnnulmentGuard.ts` (application, pura, sin I/O) — fórmula exacta de Decisión 4.
+- [x] 3.3 RED `FinanceReceiptAnnulmentGuardError` NO debe ser leído por `trackGrHealth` como fallo de
       GR: lanzar la excepción y verificar que `grConsecutiveFailures`/`effectiveIntervalMs` NO escalan.
-- [ ] 3.4 GREEN clase base `FinanceReceiptPostFetchError` (abstract); `FinanceReceiptPersistenceError` y
+- [x] 3.4 GREEN clase base `FinanceReceiptPostFetchError` (abstract); `FinanceReceiptPersistenceError` y
       `FinanceReceiptAnnulmentGuardError` la extienden; `trackGrHealth` chequea
       `instanceof FinanceReceiptPostFetchError`. Confirmar que `instanceof FinanceReceiptPersistenceError`
       sigue siendo `true` en todo el código existente (cero regresión).
-- [ ] 3.5 Extraer `mapAndGuardReceiptPage`/`persistReceiptPage` a `financeReceiptPageIngest.ts`
+- [x] 3.5 Extraer `mapAndGuardReceiptPage`/`persistReceiptPage` a `financeReceiptPageIngest.ts`
       (application) — Decisión 8. Gate inmediato: correr `SyncGrReceiptsDelta.test.ts`,
       `SyncGrReceiptsBackfillBatch.test.ts`, `finance-receipts-ingest-seam.test.ts` SIN modificarlos —
       deben seguir en verde. Si hace falta tocar alguno, PARAR: el refactor cambió comportamiento.
+      **GATE PASADO** (44 tests, sin tocar los 3 archivos). **Desvío anotado**: el carril delta NO
+      recibió un `syncConfig` inyectado (hubiera roto la firma del constructor y el gate de arriba) —
+      el guard corre igual sobre delta pero con los thresholds DEFAULT hardcodeados
+      (`FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS`), no live-reloadable. Backfill y reconcile sí usan la
+      config viva. Es una lectura deliberada de la celda "Los tres" de la Decisión 4 — sdd-verify debe
+      confirmarla o pedir que se abra la config al delta con un change aparte.
 
 ## Fase 4 — Carril `reconcile`: `SyncState`, cursor, use case, seam
 

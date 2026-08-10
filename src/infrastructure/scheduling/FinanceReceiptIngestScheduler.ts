@@ -3,7 +3,7 @@ import { DistributedLock } from '@domain/ports/DistributedLock';
 import { FinanceReceiptSyncConfigRepository, FinanceReceiptSyncConfig, FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { SyncGrReceiptsDelta, DeltaPageResult, deltaCursorHasPendingPages } from '@application/use-cases/finance/SyncGrReceiptsDelta';
 import { SyncGrReceiptsBackfillBatch, BackfillPageResult } from '@application/use-cases/finance/SyncGrReceiptsBackfillBatch';
-import { FinanceReceiptPersistenceError } from '@application/use-cases/finance/financeIngestErrors';
+import { FinanceReceiptPostFetchError } from '@application/use-cases/finance/financeIngestErrors';
 import { FinancePacingStatusDto } from '@application/dto/financeGrowth.dto';
 
 const LOCK_KEY = 'finance-receipts-ingest';
@@ -382,14 +382,15 @@ export class FinanceReceiptIngestScheduler {
 
   /**
    * fix-wave-3 R8 — the ONLY place `grConsecutiveFailures` is incremented.
-   * `FinanceReceiptPersistenceError` means the GR fetch inside that
-   * `execute()` call already succeeded (persistence failed AFTER it) — GR
-   * itself is proven healthy THIS tick, so this RESETS the streak instead of
-   * growing it. Any other error (the fetch itself, or anything upstream of
-   * persistence) is attributed to GR and grows the streak.
+   * `FinanceReceiptPostFetchError` (persistence OR, gr-receipt-annulment, the
+   * systemic annulment guard) means the GR fetch inside that `execute()` call
+   * already succeeded (something AFTER it failed/aborted) — GR itself is
+   * proven healthy THIS tick, so this RESETS the streak instead of growing
+   * it. Any other error (the fetch itself, or anything upstream) is
+   * attributed to GR and grows the streak.
    */
   private trackGrHealth(err: unknown): void {
-    if (err instanceof FinanceReceiptPersistenceError) {
+    if (err instanceof FinanceReceiptPostFetchError) {
       this.grConsecutiveFailures = 0;
     } else {
       this.grConsecutiveFailures++;

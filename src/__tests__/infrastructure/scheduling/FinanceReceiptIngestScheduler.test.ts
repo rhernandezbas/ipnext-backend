@@ -5,7 +5,7 @@ import { InMemoryFinanceReceiptSyncConfigRepository } from '@infrastructure/adap
 import { FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS } from '@domain/ports/FinanceReceiptSyncConfigRepository';
 import { DeltaPageResult } from '@application/use-cases/finance/SyncGrReceiptsDelta';
 import { BackfillPageResult } from '@application/use-cases/finance/SyncGrReceiptsBackfillBatch';
-import { FinanceReceiptPersistenceError } from '@application/use-cases/finance/financeIngestErrors';
+import { FinanceReceiptPersistenceError, FinanceReceiptAnnulmentGuardError } from '@application/use-cases/finance/financeIngestErrors';
 
 const DELTA_ENTITY = 'finance-receipts-delta';
 
@@ -843,6 +843,39 @@ describe('FinanceReceiptIngestScheduler', () => {
       await scheduler.tick();
 
       expect(scheduler.status.effectiveIntervalMs).toBe(20000); // GR answered fine this tick — backoff clears
+    });
+
+    // ── gr-receipt-annulment (design.md Decision 4, task 3.3) — the systemic
+    // guard's abort must NOT be read as "GR is unwell" either, same
+    // criterion as a persistence failure. Exercised here on the delta lane
+    // (the guard's own carrier, `SyncGrReceiptsReconcileWindow`, doesn't
+    // exist yet at this point in the build — but `trackGrHealth` is generic
+    // over ANY lane's thrown error, so this pins the classifier itself).
+    it('a FinanceReceiptAnnulmentGuardError (the systemic guard aborting) never escalates effectiveIntervalMs — GR is not culpable', async () => {
+      const { scheduler, syncConfig } = makeHarness();
+      await seedConfig(syncConfig, { requestIntervalMs: 20000, maxRequestIntervalMs: 300000, deltaStarvationThreshold: 100 });
+      (scheduler as unknown as { syncDelta: { execute: jest.Mock } }).syncDelta = {
+        execute: jest.fn(async () => { throw new FinanceReceiptAnnulmentGuardError('ABORT anulados=63/100'); }),
+      } as never;
+
+      for (let i = 0; i < 4; i++) {
+        const r = await scheduler.tick();
+        expect(r.error).toBeDefined();
+        expect(scheduler.status.effectiveIntervalMs).toBe(20000);
+      }
+    });
+
+    it('a FinanceReceiptAnnulmentGuardError still counts toward per-lane health (/sync/status degraded)', async () => {
+      const { scheduler, syncConfig } = makeHarness();
+      await seedConfig(syncConfig, { requestIntervalMs: 20000, maxRequestIntervalMs: 300000, deltaCheckIntervalMs: 300000 });
+      (scheduler as unknown as { syncDelta: { execute: jest.Mock } }).syncDelta = {
+        execute: jest.fn(async () => { throw new FinanceReceiptAnnulmentGuardError('ABORT anulados=63/100'); }),
+      } as never;
+
+      await scheduler.tick();
+
+      expect(scheduler.status.degraded).toBe(true);
+      expect(scheduler.status.consecutiveFailures).toBeGreaterThan(0);
     });
   });
 
