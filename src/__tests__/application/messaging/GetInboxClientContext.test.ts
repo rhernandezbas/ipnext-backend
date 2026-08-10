@@ -29,6 +29,7 @@ import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memo
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { Customer, Contract } from '@domain/entities/customer';
 import type { Invoice } from '@domain/entities/billing';
+import { customerFrom } from '../../helpers/customerFixture';
 
 function makeCustomer(overrides: Partial<Customer> & Pick<Customer, 'id' | 'name'>): Customer {
   return {
@@ -891,5 +892,64 @@ describe('GetInboxClientContext', () => {
     expect(result.client?.recentClosedTickets).toEqual([]);
     expect(result.client?.recentTickets).toHaveLength(1);
     expect(result.client?.openTicketsCount).toBe(1);
+  });
+
+  // ─── customer-balance-unmask (Fase 3) — spec inbox-client-balance ──────────
+  // Fixtures via `customerFrom()` (design.md Decisión 7): a diferencia del resto
+  // del archivo (que fakea `CustomerRepository.findById` directo, sin pasar por
+  // `toCustomer` — nunca certificó el masking bug porque nunca corrió el mapper
+  // real), estos escenarios existen para pinear la consistencia CON el mapper
+  // real, que es lo que las otras dos superficies (ficha, bot) sí consumen.
+
+  it('S28 — active client with real debt: balance.due refleja el balanceDue del mapper real, isDebtor:true', async () => {
+    const customer = customerFrom({
+      id: 'c1', status: 'active', grClienteId: '100011', balanceDue: 45000, balanceCurrency: 'ARS',
+      lastBalanceAt: new Date(),
+    });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 41, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.balance.due).toBe(45000);
+    expect(result.client?.balance.isDebtor).toBe(true);
+  });
+
+  it('S29 — mismo lastBalanceAt/TTL: balance.stale del DTO coincide con customer.balanceStale (regresión — ya no puede discrepar del mapper)', async () => {
+    const now = () => new Date('2026-08-10T12:00:00.000Z');
+    const staleAt = new Date(now().getTime() - 3 * 60 * 60 * 1000); // 3h, > TTL 60min
+    const customer = customerFrom(
+      { id: 'c1', status: 'active', grClienteId: '100011', balanceDue: 1000, balanceCurrency: 'ARS', lastBalanceAt: staleAt },
+      { ttlMinutes: 60, now },
+    );
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo, ttlMinutes: 60, now });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 42, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(customer.balanceStale).toBe(true); // sanity: el mapper también lo juzga stale
+    expect(result.client?.balance.stale).toBe(customer.balanceStale);
+  });
+
+  it('S30 — no GR link: balance.due:null (regresión, vía mapper real esta vez)', async () => {
+    const customer = customerFrom({ id: 'c1', status: 'active', grClienteId: null });
+    const customerRepo = makeCustomerRepo({
+      listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),
+      findById: jest.fn().mockResolvedValue(customer),
+    });
+    const { uc, conversationRepo } = buildUseCase({ customerRepo });
+    const conv = await conversationRepo.upsertByChatwootId({ chatwootConversationId: 43, contactPhone: '+5492324421234' });
+
+    const result = await uc.execute(conv.id);
+
+    expect(result.client?.balance.due).toBeNull();
   });
 });
