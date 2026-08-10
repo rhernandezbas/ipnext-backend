@@ -2,7 +2,7 @@ import { GetClientDetail } from '../../application/use-cases/GetClientDetail';
 import { RefreshClientBalanceIfStale } from '../../application/use-cases/RefreshClientBalanceIfStale';
 import type { CustomerRepository } from '../../domain/ports/CustomerRepository';
 import type { Customer } from '../../domain/entities/customer';
-import { customerFrom } from '../helpers/customerFixture';
+import { customerFrom, FIXED_NOW } from '../helpers/customerFixture';
 
 const mockCustomer: Customer = {
   id: '42',
@@ -110,7 +110,10 @@ describe('GetClientDetail', () => {
     it('S23 — active client with real debt, fresh: GET /api/clients/:id (via execute()) responde balanceDue real, no el 0 hardcoded viejo', async () => {
       const freshCustomer = customerFrom({
         id: '42', status: 'active', grClienteId: '100011', balanceDue: 45000, balanceCurrency: 'ARS',
-        lastBalanceAt: new Date(),
+        // fix wave F11(c) — FIXED_NOW, no `new Date()`: el mapper del helper juzga
+        // la frescura contra FIXED_NOW, así que un reloj real acá es una bomba de
+        // tiempo (`fdd05af0`, "reloj fijo al gate del journey").
+        lastBalanceAt: FIXED_NOW,
       });
       const repo = makeRepo({ findById: jest.fn().mockResolvedValue(freshCustomer) });
       const uc = new GetClientDetail(repo); // sin refresh collaborator — no debe hacer falta
@@ -124,7 +127,7 @@ describe('GetClientDetail', () => {
     it('S25 — GR unreachable within the refresh timeout: fallback al balanceDue guardado + balanceStale:true, NUNCA throwea', async () => {
       const staleCustomer = customerFrom({
         id: '42', status: 'active', grClienteId: '100011', balanceDue: 8000, balanceCurrency: 'ARS',
-        lastBalanceAt: new Date(Date.now() - 3 * 60 * 60 * 1000), // 3h — stale contra cualquier TTL razonable
+        lastBalanceAt: new Date(FIXED_NOW.getTime() - 3 * 60 * 60 * 1000), // 3h — stale contra el TTL del carril rápido
       });
       const repo = makeRepo({ findById: jest.fn().mockResolvedValue(staleCustomer) });
       const refresh = { execute: jest.fn().mockResolvedValue(false) } as unknown as RefreshClientBalanceIfStale; // GR caído/timeout ⇒ RefreshClientBalanceIfStale.execute nunca throwea, resuelve false
@@ -137,7 +140,7 @@ describe('GetClientDetail', () => {
     });
 
     it('S26 — stale-but-known balance ships all three fields together (balanceDue + balanceStale:true + el lastBalanceAt viejo)', async () => {
-      const oldTimestamp = new Date(Date.now() - 3 * 60 * 60 * 1000);
+      const oldTimestamp = new Date(FIXED_NOW.getTime() - 3 * 60 * 60 * 1000);
       const staleCustomer = customerFrom({
         id: '42', status: 'active', grClienteId: '100011', balanceDue: 12000, balanceCurrency: 'ARS',
         lastBalanceAt: oldTimestamp,

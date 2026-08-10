@@ -71,6 +71,29 @@ describe('toCustomer — balance fields', () => {
     expect(c.balanceDue).toBe(500);
   });
 
+  /**
+   * fix wave F12(c) — `hasGrLink` compara contra `null`/`undefined` EXPLÍCITOS,
+   * nunca truthiness. Un revisor vio una mutación transitoria a
+   * `Boolean(row.grClienteId)`; esto la deja pineada.
+   *
+   * La diferencia importa: `grClienteId: ''` es un dato SUCIO, no "sin link".
+   * Anularle el balance sería inventar una regla que nadie escribió — y con la
+   * misma forma que el bug original: el mapper decidiendo por su cuenta que un
+   * número real no vale.
+   */
+  it('F12c — grClienteId:"" (string vacío, dato sucio) NO es "sin link": el balance pasa (comparación explícita, no truthiness)', () => {
+    const row = { ...BASE_ROW, status: 'active', grClienteId: '', balanceDue: dec(500), balanceCurrency: 'ARS' };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceDue).toBe(500);
+    expect(c.balanceCurrency).toBe('ARS');
+  });
+
+  it('F12c — grClienteId:undefined (columna ausente) SÍ es "sin link"', () => {
+    const row = { ...BASE_ROW, status: 'active', grClienteId: undefined, balanceDue: dec(500), balanceCurrency: 'ARS' };
+    const c = toCustomer(row, TTL_MINUTES);
+    expect(c.balanceDue).toBeNull();
+  });
+
   it('S7 — non-ARS currency survives: row.balanceCurrency:"DOL" ⇒ balanceCurrency:"DOL" (nunca default a ARS)', () => {
     const row = { ...BASE_ROW, status: 'active', grClienteId: 'GR123', balanceDue: dec(15), balanceCurrency: 'DOL' };
     const c = toCustomer(row, TTL_MINUTES);

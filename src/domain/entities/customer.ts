@@ -25,11 +25,35 @@ export interface Customer {
   /** Outstanding debt amount, as reported by GR. 0 = no debt, null = never
    * fetched (or no grClienteId link) — never a stand-in for "no debt". */
   balanceDue?: number | null;
-  /** Currency code as GR reports it (e.g. "ARS", "DOL"). Null until first fetch. */
+  /**
+   * Moneda del `balanceDue`.
+   *
+   * ⚠️ fix wave F12(a) — este docstring decía "as GR reports it". **GR NO
+   * reporta la moneda**: el nodo `cuentas` sólo trae `debt`. La sintetiza
+   * NUESTRO parser (`parseClientBalanceResponse`) como
+   * `amount > 0 ? 'ARS' : null`, y eso es lo que queda en la columna.
+   *
+   * Consecuencias, que no son cosmética: hoy vale `'ARS'` o `null`, y
+   * **`null` significa "no hay monto positivo que denominar"** (o sea: el
+   * cliente está al día), NO "GR no nos dijo la moneda". Leerlo al revés fue
+   * exactamente el CRITICAL de F1 — un guard que trataba ese `null` como
+   * "moneda dudosa" y derivaba a un humano a todo cliente sin deuda.
+   *
+   * Una fila con `balanceDue > 0` y moneda `null` SÍ es "no confirmada", pero
+   * es legacy: el parser actual no la produce.
+   */
   balanceCurrency?: string | null;
   /** ISO timestamp of the last balance refresh. */
   lastBalanceAt?: string | null;
-  /** True when the balance is older than the TTL or has never been fetched — status-agnostic. */
+  /**
+   * True when the balance is older than its lane's TTL, or has never been fetched.
+   *
+   * Status-agnóstico en cuanto a la REGLA (la misma comparación de edad para
+   * todos), pero el TTL sale del CARRIL del status (fix wave F7,
+   * `balanceTtlMinutesForStatus`): el carril rápido usa el TTL configurado
+   * (~60min) y el lento (bajas, que se refrescan 1×/día) usa 26h. Con un TTL
+   * único, el 62% de la base salía `true` de forma permanente.
+   */
   balanceStale?: boolean;
   // client-geolocation — Prominense-owned GPS (NOT from GR). GR sync NEVER writes these.
   lat?: number | null;

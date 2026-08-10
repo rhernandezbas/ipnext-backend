@@ -4,7 +4,11 @@ import type { Customer } from '@domain/entities/customer';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { AssistantSubjectContext } from '@domain/ports/AssistantDataSourceRegistry';
 import { MOTIVO_GUIA, type AssistantMotivo } from '@infrastructure/adapters/assistant/assistantMotivoGuia';
-import { customerFrom, grBalanceRow, FIXED_NOW, type FixtureRow } from '../../../helpers/customerFixture';
+import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
+import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
+import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
+import { parseClientBalanceResponse } from '@infrastructure/adapters/gestion-real/GestionRealClient';
+import { customerFrom, grBalanceRow, grBalancePayload, FIXED_NOW, type FixtureRow } from '../../../helpers/customerFixture';
 
 /**
  * ai-assistant-multiagent — el resolver de saldo.
@@ -113,14 +117,51 @@ describe('ClienteSaldoResolver', () => {
     expect(JSON.stringify(facts)).not.toContain('45000');
   });
 
-  it('S20 — no GR link: NO emite nada cuando el saldo nunca se consultó', async () => {
-    const unlinked = customerFrom({ ...CUSTOMER_ROW, grClienteId: null });
+  /**
+   * ⚠️ fix wave F10 — **la fixture vieja era degenerada.** Usaba
+   * `{...CUSTOMER_ROW, grClienteId: null}`, que heredaba `lastBalanceAt:
+   * FRESH_AT`: un cliente SIN link GR con un balance recién refrescado. En prod
+   * eso no existe — ningún carril de sync toca una fila sin `grClienteId`, así
+   * que el no-linkeado llega con `lastBalanceAt: null` (⇒ `balanceStale: true`).
+   *
+   * Con la fixture degenerada el mutante M1 (invertir el orden de los dos
+   * guards) sobrevivía los 10 tests: como `balanceStale` era `false`, el guard
+   * de stale no atrapaba nada y el veredicto salía igual por el otro camino. La
+   * fila REAL activa los DOS guards a la vez — y ahí el orden pasa a importar.
+   */
+  it('S20/F10 — no GR link (fila REAL: lastBalanceAt null): saldo_nunca_consultado, y el ORDEN de los guards es el que decide', async () => {
+    const unlinked = customerFrom({ ...CUSTOMER_ROW, grClienteId: null, lastBalanceAt: null });
+    // Sanity: la fila real dispara AMBOS guards. Sin esto el test no discrimina.
+    expect(unlinked.balanceDue).toBeNull();
+    expect(unlinked.balanceStale).toBe(true);
+
     const resolver = new ClienteSaldoResolver(repoOf(unlinked));
 
+    // "Nunca lo consultamos" es más honesto —y más accionable— que "está
+    // desactualizado": no hay nada desactualizado, no hay NADA. Invertir los
+    // guards le haría decir al bot que el saldo está viejo sobre un cliente del
+    // que jamás tuvimos un saldo.
     await expect(resolver.resolve(ctx)).resolves.toEqual({
       disponible: false,
       motivo: 'saldo_nunca_consultado',
       guia: MOTIVO_GUIA.saldo_nunca_consultado,
+    });
+  });
+
+  it('S20b/F10 — edge: sin link GR pero con lastBalanceAt real (cliente DESVINCULADO) — el guard de balanceDue null va PRIMERO igual', async () => {
+    // Posible: un cliente que tuvo link GR y se desvinculó conserva el
+    // `lastBalanceAt` en la columna, pero el mapper le anula `balanceDue`
+    // (spec `customer-balance-truth`: sin link no hay dato verificado). El
+    // veredicto sigue siendo "nunca consultado" — no tenemos un saldo suyo
+    // que podamos afirmar, viejo o nuevo.
+    const desvinculado = customerFrom({ ...CUSTOMER_ROW, grClienteId: null, lastBalanceAt: FRESH_AT });
+    expect(desvinculado.balanceDue).toBeNull();
+    expect(desvinculado.balanceStale).toBe(false);
+
+    const resolver = new ClienteSaldoResolver(repoOf(desvinculado));
+
+    await expect(resolver.resolve(ctx)).resolves.toMatchObject({
+      motivo: 'saldo_nunca_consultado',
     });
   });
 
@@ -149,6 +190,30 @@ describe('ClienteSaldoResolver', () => {
       motivo: 'saldo_desactualizado',
     });
     expect(execute).toHaveBeenCalledWith({ grClienteId: 'GR1', lastBalanceAt: STALE_AT.toISOString() });
+  });
+
+  /**
+   * fix wave F11(b) — mutante M2: quitarle el `customer.balanceStale &&` al
+   * gate del refresh. Sobrevivía porque NINGÚN test asserteaba la NO-invocación
+   * — sólo la invocación (P3). El costo del mutante no es un test rojo: es una
+   * llamada a GR por CADA mensaje de WhatsApp de un cliente ya fresco, o sea el
+   * TTL entero convertido en decoración.
+   */
+  it('F11b — balance FRESCO: el refresh NO se invoca (el TTL sirve para algo)', async () => {
+    const execute = jest.fn().mockResolvedValue(true);
+    const resolver = new ClienteSaldoResolver(repoOf(CUSTOMER_BASE), { execute } as never);
+
+    await expect(resolver.resolve(ctx)).resolves.toMatchObject({ disponible: true });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('F11b — sin grClienteId tampoco se invoca (no hay a quién preguntarle)', async () => {
+    const execute = jest.fn();
+    const unlinked = customerFrom({ ...CUSTOMER_ROW, grClienteId: null, lastBalanceAt: null });
+    const resolver = new ClienteSaldoResolver(repoOf(unlinked), { execute } as never);
+
+    await resolver.resolve(ctx);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('conversación sin cliente identificado no aporta hechos', async () => {
@@ -217,7 +282,7 @@ describe('ClienteSaldoResolver', () => {
       },
       {
         motivo: 'saldo_nunca_consultado',
-        resolver: () => new ClienteSaldoResolver(repoOf(customerFrom({ ...CUSTOMER_ROW, grClienteId: null }))),
+        resolver: () => new ClienteSaldoResolver(repoOf(customerFrom({ ...CUSTOMER_ROW, grClienteId: null, lastBalanceAt: null }))),
         ctx,
       },
       {
@@ -253,6 +318,54 @@ describe('ClienteSaldoResolver', () => {
         ]),
       ).not.toThrow();
     });
+  });
+
+  /**
+   * fix wave F4 — **el efecto lateral DECLARADO** (spec `assistant-balance-guard`,
+   * requirement "resolving `cliente.saldo` may mutate the invoice mirror").
+   *
+   * Resolver el saldo del bot puede disparar un replace-all de las facturas
+   * espejadas del cliente, DENTRO del flujo del webhook de Chatwoot. La decisión
+   * fue declararlo, no removerlo: es la misma mutación que la ficha ya hacía,
+   * del mismo payload, por la misma instancia del colaborador. El espejo
+   * poniéndose al día con la verdad. Suprimir la mitad de las facturas dejaría
+   * saldo y facturas en desacuerdo — el split-brain que F3 cierra.
+   *
+   * Este test NO mockea el refresh: usa el colaborador REAL con GR y mirror
+   * in-memory, porque lo que hay que pinear es justamente el efecto de punta a
+   * punta, no que alguien lo haya llamado.
+   */
+  it('F4 — el cliente que pagó: el bot resuelve el saldo ⇒ el espejo de facturas se VACÍA y responde "al día"', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    // GR ahora dice deuda 0 y NINGUNA factura: el caso autoritativo de "pagó todo".
+    gr.balancesByClient.GR1 = parseClientBalanceResponse('GR1', grBalancePayload('0.00', { grClienteId: 'GR1' }));
+    // El espejo todavía tiene la factura vieja del cliente.
+    await mirror.upsertInvoices('GR1', [{
+      tipo: 'FB', sucursal: '00010', numero: '0001', moneda: 'PES',
+      fecha: '26-06-2026', fechaVto: '07-07-2026', importe: 45000, saldo: 45000,
+      urlPdf: null, cuponPdf: null, paymentUrl: null,
+    }], STALE_AT);
+    expect(mirror.invoices).toHaveLength(1); // premisa: había algo que borrar
+
+    const refresh = new RefreshClientBalanceIfStale(gr, mirror, {
+      now: () => FIXED_NOW,
+      ttlMinutes: 60,
+    });
+    // Primer findById: stale con deuda. Segundo (post-refresh): al día.
+    const stale = customerFrom({ ...CUSTOMER_ROW, lastBalanceAt: STALE_AT });
+    const alDia = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('0.00', FIXED_NOW) });
+    let call = 0;
+    const repo = { findById: async () => (call++ === 0 ? stale : alDia) } as unknown as CustomerRepository;
+
+    const facts = await new ClienteSaldoResolver(repo, refresh).resolve(ctx);
+
+    // (1) el efecto lateral declarado ocurrió...
+    expect(gr.balanceCalls).toEqual(['GR1']);
+    expect(mirror.balances.get('GR1')?.amount).toBe(0);
+    expect(mirror.invoices).toHaveLength(0);
+    // (2) ...y el bot responde al día, sin exigir moneda (F1).
+    expect(facts).toMatchObject({ disponible: true, tieneDeuda: false, saldo: 0 });
   });
 
   it('S22 — regression: confirmed currency still emits normally', async () => {

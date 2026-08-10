@@ -29,7 +29,7 @@ import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memo
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { Customer, Contract } from '@domain/entities/customer';
 import type { Invoice } from '@domain/entities/billing';
-import { customerFrom } from '../../helpers/customerFixture';
+import { customerFrom, FIXED_NOW } from '../../helpers/customerFixture';
 
 function makeCustomer(overrides: Partial<Customer> & Pick<Customer, 'id' | 'name'>): Customer {
   return {
@@ -905,7 +905,8 @@ describe('GetInboxClientContext', () => {
   it('S28 — active client with real debt: balance.due refleja el balanceDue del mapper real, isDebtor:true', async () => {
     const customer = customerFrom({
       id: 'c1', status: 'active', grClienteId: '100011', balanceDue: 45000, balanceCurrency: 'ARS',
-      lastBalanceAt: new Date(),
+      // fix wave F11(c) — FIXED_NOW, no `new Date()` (ver GetClientDetail.test.ts S23).
+      lastBalanceAt: FIXED_NOW,
     });
     const customerRepo = makeCustomerRepo({
       listActiveContacts: jest.fn().mockResolvedValue([{ id: 'c1', name: 'Juan', phone: '+5492324421234', email: null }]),

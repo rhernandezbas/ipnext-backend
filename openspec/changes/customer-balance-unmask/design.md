@@ -32,10 +32,23 @@ balanceCurrency: row.balanceCurrency ?? null,
 - **AUDITADO en el schema** (`prisma/schema.prisma:184-186`): `balanceDue Decimal? @db.Decimal(12,2)`,
   `balanceCurrency String?`, `lastBalanceAt DateTime?` — **ya son nullable**. El `null` de D2 del
   proposal NO requiere migración ni derivación: es la columna que nunca nadie escribió.
-- **`toCustomer` NO necesita saber si hay `grClienteId`.** Los únicos que escriben esas tres
-  columnas son `updateClientBalance` (fast/slow lane + refresh on-demand), y todos entran por
-  `grClienteId`. Cliente sin link GR ⇒ columna virgen ⇒ `null`. Meter `grClienteId` en el mapper
-  sería reintroducir una inferencia — el defecto exacto que este change borra.
+- **⚠️ CORREGIDO en la fix wave (F12b) — la implementación SÍ mira `grClienteId`, y se queda
+  así.** Este bullet decía "`toCustomer` NO necesita saber si hay `grClienteId`" con este
+  argumento: los únicos que escriben esas tres columnas son `updateClientBalance` (fast/slow lane
+  + refresh on-demand) y todos entran por `grClienteId`, así que un cliente sin link tiene la
+  columna virgen ⇒ `null` sale solo. El razonamiento es correcto sobre los caminos de escritura
+  ACTUALES, pero apoya la garantía en que nadie escriba nunca esas columnas por otra vía (import,
+  fixture, backfill manual, un `create()` futuro). El gate explícito
+  (`hasGrLink = row.grClienteId !== null && row.grClienteId !== undefined`) la apoya en la fila
+  que el mapper tiene delante. Es más conservador y no cuesta nada: los 4 call sites del mapper
+  traen la fila COMPLETA.
+  - **Riesgo documentado**: si algún día un `select` acotado deja de traer `grClienteId`,
+    `hasGrLink` daría `false` y el mapper anularía balances REALES — un enmascaramiento nuevo,
+    con la misma forma que el bug original. Un `select` que incluya `balanceDue` DEBE incluir
+    `grClienteId`.
+  - **NO es truthiness**: la comparación es contra `null`/`undefined` explícitos, no
+    `Boolean(row.grClienteId)`. Un `grClienteId: ''` es un dato sucio, no "sin link", y anularle
+    el balance sería inventar una regla que nadie escribió. Pineado por test (F12c).
 - Se borra el `isDebtor` del mapper por completo (era su única razón de existir).
 - **No se normaliza la moneda** (`normalizeGrCurrency` NO se aplica acá): D6 del proposal. El
   mapper devuelve lo que GR escribió.
