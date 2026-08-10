@@ -14,7 +14,7 @@ const DELTA_ENTITY = 'finance-receipts-delta';
 const DEFAULT_PAGE_SIZE = 100;
 
 export interface DeltaPageResult {
-  /** Receipts persisted THIS page (post-annulment-exclusion). */
+  /** Receipts persisted THIS page (includes annulled ones — gr-receipt-annulment stopped excluding them; they're flagged `anulado: true` instead, not skipped). */
   pageProcessed: number;
   /** True when the "hasta hoy" range still has unpaged pages left (cursor stayed composite). */
   hasPendingPages: boolean;

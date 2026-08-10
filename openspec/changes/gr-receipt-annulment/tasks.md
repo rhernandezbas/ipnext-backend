@@ -34,26 +34,34 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 2 — Parser deja de saltear + `isRealAnnulment` endurecido
 
-- [ ] 2.1 RED reescribir `financeDates.test.ts:86` (hoy ISO → `false`) a ISO → `true`, con comentario
-      explicando que pineaba el bug fail-open (scenario 17).
-- [ ] 2.2 RED completar `financeDates.test.ts` con la tabla entrada→salida de la Decisión 5: centinela
+- [x] 2.1 RED reescribir `financeDates.test.ts:86` (hoy ISO → `false`) a ISO → `true`, con comentario
+      explicando que pineaba el bug fail-open (scenario 17). **Desvío anotado**: `specs/finance-growth/
+      spec.md`'s scenario 17 dice literalmente `THEN devuelve false` — contradice su propia nota
+      "(Previously: ... devolvía false)" (leído literal, el scenario no cambia nada) Y el Decision 5
+      de design.md (`Nuevo: true`, fila marcada ⚠️ como "cuenta plata anulada como cobrada en
+      silencio"). Implementado per design.md (true = anulado real). sdd-verify debe corregir el texto
+      del spec.
+- [x] 2.2 RED completar `financeDates.test.ts` con la tabla entrada→salida de la Decisión 5: centinela
       todo-ceros en cualquier ancho/orden (scenario 18), DD-MM-AAAA válida, ISO válida, fechas
       imposibles `32-13-2026`/`2026-13-45` ⇒ `true`+warn, residuo basura (`'nota de credito'`, `'N/A'`)
       ⇒ `true`+warn (scenarios 17, 18, 19 parcial — ver Fase 4.10/3.1 para el residuo a nivel de página).
-- [ ] 2.3 GREEN `financeDates.ts` — aceptar ISO (desambiguación: primer componente de 4 dígitos ⇒ ISO,
+- [x] 2.3 GREEN `financeDates.ts` — aceptar ISO (desambiguación: primer componente de 4 dígitos ⇒ ISO,
       si no DD-MM-AAAA), residuo no vacío/no-centinela/no-parseable ⇒ `true`+warn, mensaje del warn
       actualizado ("tratado como ANULADO").
-- [ ] 2.4 RED reescribir `mapGrReceipt.test.ts:28` (hoy `toBe(false)` incondicional) a: `anulado` se
+- [x] 2.4 RED reescribir `mapGrReceipt.test.ts:28` (hoy `toBe(false)` incondicional) a: `anulado` se
       deriva de `isRealAnnulment(r.fechaAnulacion, r.grReceiptId)`, con comentario explicando el porqué
       de la reescritura.
-- [ ] 2.5 GREEN `mapGrReceipt.ts:33` — `anulado: isRealAnnulment(r.fechaAnulacion, r.grReceiptId)`.
-- [ ] 2.6 RED reescribir `GestionRealClient.receipts.test.ts:101-112` (hoy "excludes...") a "**incluye**
+- [x] 2.5 GREEN `mapGrReceipt.ts:33` — `anulado: isRealAnnulment(r.fechaAnulacion, r.grReceiptId)`.
+- [x] 2.6 RED reescribir `GestionRealClient.receipts.test.ts:101-112` (hoy "excludes...") a "**incluye**
       el recibo anulado, lleva `fechaAnulacion` cruda, y sus `aplicaciones`/`items`/`retenciones` siguen
-      viniendo" — con comentario explicando el porqué (scenario 1).
-- [ ] 2.7 GREEN `GestionRealClient.ts:811` — sacar `if (isRealAnnulment(...)) continue;`; línea `:825`
+      viniendo" — con comentario explicando el porqué (scenario 1). También se actualizó el test vecino
+      ("centinela exacto") que asumía `fechaAnulacion: null` hardcodeado — ahora espera el string crudo
+      del centinela.
+- [x] 2.7 GREEN `GestionRealClient.ts:811` — sacar `if (isRealAnnulment(...)) continue;`; línea `:825`
       `fechaAnulacion: null` → `fechaAnulacion: str(raw.fecha_anulacion)`. El sobre de error (`:784-788`)
-      y los guards F1/F2/F11/F12 NO se tocan.
-- [ ] 2.8 Actualizar docblocks que mienten: `mapGrReceipt.ts:18-24`, `FinancePaymentReceiptRepository.ts:
+      y los guards F1/F2/F11/F12 NO se tocan. Bonus DIP: el import de `isRealAnnulment` (application/) en
+      este adapter de infrastructure/ quedó sin uso y se sacó — el parser ya no decide sobre el dominio.
+- [x] 2.8 Actualizar docblocks que mienten: `mapGrReceipt.ts:18-24`, `FinancePaymentReceiptRepository.ts:
       12-16` ("Always false in practice"), `schema.prisma:2662-2663`, comentarios
       `"post-annulment-exclusion"` en `DeltaPageResult`/`BackfillPageResult`.
 

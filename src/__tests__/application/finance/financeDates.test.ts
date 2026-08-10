@@ -55,36 +55,87 @@ describe('financeDates', () => {
       expect(isRealAnnulment('00/00/0000')).toBe(false);
     });
 
-    it('F10: a genuinely unparseable garbage string is NOT proof of annulment either (fail-open)', () => {
-      expect(isRealAnnulment('not-a-date')).toBe(false);
-    });
-
-    it('F10: an out-of-range but non-zero "date" is NOT proof of annulment (fail-open, not a real calendar date)', () => {
-      expect(isRealAnnulment('99-99-9999')).toBe(false);
-    });
-
     it('F10: a real, valid, non-zero annulment date still counts as annulled', () => {
       expect(isRealAnnulment('20-06-2026')).toBe(true);
       expect(isRealAnnulment('20-06-2026 12:00:00')).toBe(true);
     });
 
-    // ── fix-wave-2 LOW (F10 residual) — the fail-open direction ("more
-    // revenue counted") means a FUTURE GR format drift (e.g. switching to
-    // ISO) would silently make real annulments ingest as collected revenue.
-    // A WARNING is the cheap, non-blocking signal an operator can act on.
-    describe('F10 residual: a WARNING fires for unparseable-but-non-sentinel values', () => {
+    // ── gr-receipt-annulment (design.md Decision 5) — three layers on top of
+    // F10: (1) accept ISO as a SECOND valid non-annulled format, (2) flip the
+    // residual fail-OPEN direction to fail-CLOSED PER ROW (residue that is
+    // non-empty, non-centinela, and unparseable in EITHER format now counts
+    // as annulled — "GR no llena ese campo por gusto"), (3) a systemic guard
+    // over the whole page (financeAnnulmentGuard, Fase 3) for when the
+    // residue stops being residue (a centinela format drift). The two tests
+    // deleted here ("genuinely unparseable garbage is NOT proof" / "out-of-
+    // range non-zero date is NOT proof") pinned the OLD fail-open behavior —
+    // superseded below, not silently dropped.
+    // ── sdd-verify NOTE (spec/design conflict, resolved per design.md) ──
+    // `specs/finance-growth/spec.md`'s "ISO-formatted fecha_anulacion..."
+    // scenario says `THEN devuelve false`, but its OWN "(Previously: ...
+    // isRealAnnulment('2026-06-15 10:00:00') devolvía false)" note describes
+    // that EXACT SAME return value as the bug being fixed — i.e. the spec
+    // scenario, read literally, asserts NO behavior change at all. design.md
+    // Decision 5's table is explicit and internally consistent: this ISO row
+    // is marked `Hoy: false ⚠️ | Nuevo: true` and is one of the "tres filas
+    // marcadas ⚠️ son las que hoy contarían plata anulada como cobrada en
+    // silencio" — the whole point of the fix. Implemented per design.md
+    // (true = genuinely annulled); flagged for sdd-verify to fix the spec text.
+    describe('gr-receipt-annulment: ISO accepted as a second valid annulment-date format (design.md Decision 5 — see spec-conflict note above)', () => {
+      it('a real ISO annulment date with a time component is recognized as annulled, WITHOUT a warning', () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        // This is the EXACT value that pinned the fail-open bug at the old
+        // financeDates.test.ts:86 ("ISO -> false" was the OLD, WRONG behavior
+        // this rewrite closes — a real ISO annulment silently counted as cash).
+        expect(isRealAnnulment('2026-06-15 10:00:00')).toBe(true);
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
+      });
+
+      it('a date-only ISO value ("2026-06-15") is also recognized as annulled', () => {
+        expect(isRealAnnulment('2026-06-15')).toBe(true);
+      });
+
+      it('the all-zeros ISO-shaped sentinel ("0000-00-00 00:00:00") is STILL the known-good sentinel, not misread as an ISO date', () => {
+        expect(isRealAnnulment('0000-00-00 00:00:00')).toBe(false);
+      });
+
+      it('a real ISO annulment date (a genuine drift-to-ISO scenario) counts as annulled', () => {
+        expect(isRealAnnulment('2026-06-20 12:00:00')).toBe(true);
+        expect(isRealAnnulment('2026-06-20')).toBe(true);
+      });
+    });
+
+    describe('gr-receipt-annulment: unparseable residue now marks the ROW as annulled (scenario 19), never the whole page', () => {
       let warnSpy: jest.SpyInstance;
       beforeEach(() => { warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {}); });
       afterEach(() => warnSpy.mockRestore());
 
-      it('warns for a genuinely unparseable garbage string', () => {
-        expect(isRealAnnulment('not-a-date')).toBe(false);
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/fecha_anulacion.*not-a-date.*NOT annulled/));
+      it('a genuinely unparseable garbage string ("basura"/"N/A"/"-") counts as annulled, with a warning', () => {
+        expect(isRealAnnulment('not-a-date')).toBe(true);
+        expect(isRealAnnulment('N/A')).toBe(true);
+        expect(isRealAnnulment('-')).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
       });
 
-      it('warns for an ISO-shaped date that fails the DD-MM-YYYY range check (the exact GR-format-drift scenario)', () => {
-        expect(isRealAnnulment('2026-06-15 10:00:00')).toBe(false);
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('2026-06-15 10:00:00'));
+      it('scenario 19 fixture — "nota de credito" counts as annulled, with a warning', () => {
+        expect(isRealAnnulment('nota de credito')).toBe(true);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/nota de credito.*ANULADO/));
+      });
+
+      it('an out-of-range DD-MM-YYYY ("32-13-2026") counts as annulled, with a warning', () => {
+        expect(isRealAnnulment('32-13-2026')).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
+      });
+
+      it('an out-of-range ISO date ("2026-13-45") counts as annulled, with a warning', () => {
+        expect(isRealAnnulment('2026-13-45')).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
+      });
+
+      it('a value with too many date-like components ("2026-2026-2026") counts as annulled, with a warning', () => {
+        expect(isRealAnnulment('2026-2026-2026')).toBe(true);
+        expect(warnSpy).toHaveBeenCalled();
       });
 
       it('includes the receipt key in the warning when provided, for triage', () => {
@@ -92,15 +143,22 @@ describe('financeDates', () => {
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('receipt 9001'));
       });
 
-      it('does NOT warn for the known-good all-zeros sentinel (any separator/spacing)', () => {
+      it('the warning message now says "tratado como ANULADO", not "NOT annulled" (fail-open language is gone)', () => {
+        isRealAnnulment('basura');
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/ANULADO/));
+        expect(warnSpy).not.toHaveBeenCalledWith(expect.stringMatching(/NOT annulled/));
+      });
+
+      it('does NOT warn for the known-good all-zeros sentinel (any separator/spacing/format)', () => {
         isRealAnnulment(GR_NULL_DATE_SENTINEL);
         isRealAnnulment('0000-00-00 00:00:00');
         isRealAnnulment('00/00/0000');
         expect(warnSpy).not.toHaveBeenCalled();
       });
 
-      it('does NOT warn for a real, valid, parseable annulment date', () => {
+      it('does NOT warn for a real, valid, parseable annulment date (DD-MM-YYYY or ISO)', () => {
         isRealAnnulment('20-06-2026');
+        isRealAnnulment('2026-06-20');
         expect(warnSpy).not.toHaveBeenCalled();
       });
 

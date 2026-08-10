@@ -98,7 +98,14 @@ describe('GestionRealClient.parseReceiptsResponse', () => {
     expect(r9002.applications.every((a) => a.fecha === '16-06-2026')).toBe(true);
   });
 
-  it('excludes a receipt whose fecha_anulacion differs from the GR centinela (real annulment)', () => {
+  // gr-receipt-annulment (design.md Decision 3.1, scenario 1) — REWRITTEN:
+  // this test used to be "excludes a receipt whose fecha_anulacion differs
+  // from the GR centinela", pinning the exact bug this change exists to fix
+  // (`GestionRealClient.ts:811`'s `if (isRealAnnulment(...)) continue;` — a
+  // recibo anulado nunca llegaba al mapper, so `anulado` stayed hardcoded
+  // `false` forever). The parser no longer decides on the domain: it passes
+  // `fecha_anulacion` through RAW and lets `mapGrReceipt` derive the flag.
+  it('INCLUDES a receipt whose fecha_anulacion differs from the GR centinela (real annulment), carrying fechaAnulacion raw, with its children still parsed', () => {
     const withVoided = {
       error: 0,
       resultados: '2',
@@ -112,18 +119,38 @@ describe('GestionRealClient.parseReceiptsResponse', () => {
           fecha_anulacion: '20-06-2026 12:00:00', // REAL annulment
           observaciones: null,
           aplicaciones: { '1': { tipo: 'FB', sucursal: '00010', numero: '999', importe: 100, fecha: '18-06-2026' } },
+          items: { '1': { banco: 'BANCO', caja_cuenta_id: '1', destino: 'CTA', fecha: '18-06-2026', importe: 100, moneda: 'PES', numero_transferencia: '1', tipo: 'transferencia' } },
+          retenciones: { '1': { tipo: 'retgan', importe: 10, fecha: '18-06-2026' } },
         },
       },
     };
     const { receipts } = parseReceiptsResponse(withVoided);
-    expect(receipts.map((r) => r.grReceiptId)).toEqual(['9001']);
+
+    // PRESENCE first (the revert-probe discipline — a probe whose only
+    // assertion is an absence gives false confidence against a world where
+    // the row never existed at all).
+    expect(receipts.map((r) => r.grReceiptId).sort()).toEqual(['9001', '9099']);
+    const voided = receipts.find((r) => r.grReceiptId === '9099')!;
+    expect(voided.fechaAnulacion).toBe('20-06-2026 12:00:00'); // carried RAW — the parser no longer decides
+    // Children still parsed — no evidence destroyed (design.md 3.1, "las
+    // hijas... se parsean y se persisten igual").
+    expect(voided.applications).toHaveLength(1);
+    expect(voided.items).toHaveLength(1);
+    expect(voided.retenciones).toHaveLength(1);
   });
 
-  it('includes a receipt whose fecha_anulacion equals the centinela exactly (not voided)', () => {
+  // gr-receipt-annulment (design.md Decision 3.1) — REWRITTEN: `fechaAnulacion`
+  // used to be hardcoded `null` by the parser (line :825, `fechaAnulacion: null`)
+  // for EVERY receipt, voided or not — this test's OLD assertion
+  // (`toBeNull()`) was true only because of that hardcode, not because the
+  // centinela specifically maps to null. Now the raw value passes through
+  // verbatim; `isRealAnnulment` (called downstream, in the mapper) is what
+  // decides the centinela means "not annulled".
+  it('a receipt whose fecha_anulacion equals the centinela exactly carries the RAW centinela string, not null', () => {
     const { receipts } = parseReceiptsResponse(RECIBOS_DICT_ROOT_DICT_APLICACIONES);
     const r9001 = receipts.find((r) => r.grReceiptId === '9001');
     expect(r9001).toBeDefined();
-    expect(r9001?.fechaAnulacion).toBeNull();
+    expect(r9001?.fechaAnulacion).toBe('00-00-0000 00:00:00');
   });
 
   it('tolerates an empty recibos node without throwing', () => {

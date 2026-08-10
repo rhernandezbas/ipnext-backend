@@ -10,9 +10,13 @@ export interface FinancePaymentReceipt {
   fechaRecibo: Date | null;
   fechaConfirmacion: Date | null;
   /**
-   * Always `false` in practice — a receipt with a REAL annulment is excluded
-   * entirely by the GR-client parser and never reaches this port
-   * (design.md Decision 0, gotcha 3). Auditing column, not a runtime filter.
+   * gr-receipt-annulment (design.md Decision 3) — TRUE when GR reports a real
+   * `fecha_anulacion` for this receipt (derived by `mapGrReceipt` via
+   * `isRealAnnulment`). NO LONGER "always false in practice": the parser used
+   * to exclude annulled receipts before they ever reached this port — now
+   * they're persisted WITH the flag, and the four dashboard readers
+   * (`finance-dashboard-annulment-filter`) + `PrismaPortalPaymentsReader`
+   * filter `anulado: false` at read time.
    */
   anulado: boolean;
   observaciones: string | null;

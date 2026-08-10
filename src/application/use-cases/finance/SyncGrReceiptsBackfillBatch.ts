@@ -15,7 +15,7 @@ const BACKFILL_ENTITY = 'finance-receipts-backfill';
 const DEFAULT_PAGE_SIZE = 100;
 
 export interface BackfillPageResult {
-  /** Receipts persisted THIS page (post-annulment-exclusion). */
+  /** Receipts persisted THIS page (includes annulled ones — gr-receipt-annulment stopped excluding them; they're flagged `anulado: true` instead, not skipped). */
   pageProcessed: number;
   /** True when this call moved the cursor to the previous calendar month. */
   monthAdvanced: boolean;

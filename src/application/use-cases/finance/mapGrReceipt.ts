@@ -4,7 +4,7 @@ import { FinanceReceiptApplication } from '@domain/ports/FinanceReceiptApplicati
 import { FinanceReceiptItem } from '@domain/ports/FinanceReceiptItemRepository';
 import { FinanceReceiptRetencion } from '@domain/ports/FinanceReceiptRetencionRepository';
 import { grInvoiceId, parseGrInvoiceDate } from '@application/use-cases/mapGrInvoice';
-import { grDateTimeDatePart } from './financeDates';
+import { grDateTimeDatePart, isRealAnnulment } from './financeDates';
 
 export interface MappedGrReceipt {
   receipt: FinancePaymentReceipt;
@@ -20,8 +20,14 @@ export interface MappedGrReceipt {
  * `mapGrInvoice.ts` — reuses `grInvoiceId()`/`parseGrInvoiceDate()` from there
  * so the composite identity and AR date parsing behave IDENTICALLY to the
  * existing `gr-invoices-sync` feature (task 1.15 — never reimplement the AR
- * date parsing). A `GrReceipt` reaching this mapper is NEVER voided — real
- * annulments are excluded upstream by `GestionRealClient.parseReceiptsResponse`.
+ * date parsing).
+ *
+ * gr-receipt-annulment (design.md Decision 3.2) — `anulado` is DERIVED here
+ * from `isRealAnnulment(r.fechaAnulacion, r.grReceiptId)`, not hardcoded. A
+ * `GrReceipt` reaching this mapper CAN be voided now: the parser
+ * (`GestionRealClient.parseReceiptsResponse`) stopped excluding annulled
+ * receipts upstream — the mapper is where the domain decides the flag, the
+ * parser only passes the raw date through.
  */
 export function mapGrReceipt(r: GrReceipt): MappedGrReceipt {
   const receipt: FinancePaymentReceipt = {
@@ -30,7 +36,7 @@ export function mapGrReceipt(r: GrReceipt): MappedGrReceipt {
     recaudador: r.recaudador,
     fechaRecibo: parseGrInvoiceDate(grDateTimeDatePart(r.fechaRecibo)),
     fechaConfirmacion: parseGrInvoiceDate(grDateTimeDatePart(r.fechaConfirmacion)),
-    anulado: false,
+    anulado: isRealAnnulment(r.fechaAnulacion, r.grReceiptId),
     observaciones: r.observaciones,
   };
 

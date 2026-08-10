@@ -2681,8 +2681,10 @@ model FinancePaymentReceipt {
   recaudador        String?
   fechaRecibo       DateTime?
   fechaConfirmacion DateTime?
-  /// Auditoría, no filtro en runtime — un recibo con anulación REAL nunca
-  /// llega hasta acá (excluido por el parser de GestionRealClient).
+  /// gr-receipt-annulment (design.md Decision 3) — TRUE cuando GR reporta una
+  /// anulación real (derivado por mapGrReceipt via isRealAnnulment). Filtrado
+  /// en runtime por los 4 lectores del dashboard (finance-dashboard-annulment-
+  /// filter) y por PrismaPortalPaymentsReader.
   anulado           Boolean   @default(false)
   observaciones     String?
   createdAt         DateTime  @default(now())

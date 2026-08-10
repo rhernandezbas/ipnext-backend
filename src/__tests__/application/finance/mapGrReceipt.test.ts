@@ -25,7 +25,31 @@ describe('mapGrReceipt', () => {
     expect(receipt.recaudador).toBe('mercadopago');
     expect(receipt.fechaRecibo?.toISOString()).toBe('2026-06-15T03:00:00.000Z');
     expect(receipt.fechaConfirmacion?.toISOString()).toBe('2026-06-15T03:00:00.000Z');
+    // gr-receipt-annulment (design.md Decision 3.2) — this used to be an
+    // UNCONDITIONAL `toBe(false)`: the mapper hardcoded `anulado: false`
+    // because a real annulment never reached this far (the parser dropped it
+    // upstream). Rewritten: `anulado` is now DERIVED from
+    // `isRealAnnulment(fechaAnulacion, grReceiptId)` — the base fixture's
+    // `fechaAnulacion: null` still resolves to `false` (no annulment), so this
+    // assertion's VALUE is unchanged, but it now exercises the real derivation
+    // instead of a hardcoded literal (see the two new tests below for the
+    // `true` branch, which the old hardcoded version could never produce).
     expect(receipt.anulado).toBe(false);
+  });
+
+  // ── gr-receipt-annulment (design.md Decision 3.2, scenario 1) ──
+  describe('anulado is DERIVED from isRealAnnulment, never hardcoded', () => {
+    it('a receipt with a real fechaAnulacion maps to anulado: true', () => {
+      const r = baseReceipt({ fechaAnulacion: '20-06-2026 12:00:00' });
+      const { receipt } = mapGrReceipt(r);
+      expect(receipt.anulado).toBe(true);
+    });
+
+    it('a receipt whose fechaAnulacion is the GR sentinel string maps to anulado: false', () => {
+      const r = baseReceipt({ fechaAnulacion: '00-00-0000 00:00:00' });
+      const { receipt } = mapGrReceipt(r);
+      expect(receipt.anulado).toBe(false);
+    });
   });
 
   it('maps each application with the composite grInvoiceId, reusing the same identity as Invoice.grInvoiceId', () => {

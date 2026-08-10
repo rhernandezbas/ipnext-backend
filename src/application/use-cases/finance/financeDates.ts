@@ -13,29 +13,30 @@ export const GR_NULL_DATE_SENTINEL = '00-00-0000 00:00:00';
 /**
  * True when `rawFechaAnulacion` represents a REAL annulment.
  *
- * fix-wave-1 F10: this was fail-CLOSED (anything non-empty and not EXACTLY
- * equal to `GR_NULL_DATE_SENTINEL` counted as annulled) — a sentinel variant
- * GR never shows today but could tomorrow ("00-00-0000" without a time,
- * "0000-00-00 00:00:00" reversed field order, a double space before the time)
- * would have silently excluded EVERY receipt matching it (cero ingesta, cero
- * error, cursor avanzando). Flipped to fail-OPEN: only a value that parses as
- * a genuine, non-all-zeros, in-range calendar date counts as a real
- * annulment. Missing/empty/garbage/all-zeros (any width/separator/spacing) →
- * NOT annulled.
- */
-/**
- * `receiptKeyForLogging` (fix-wave-2 LOW, F10 residual) — this function is
- * fail-OPEN by design (F10): anything non-empty that DOESN'T parse as a real
- * calendar date is treated as "not annulled", never as a crash or a reason
- * to drop the receipt. The blind spot: fail-open in the direction of "more
- * revenue counted" means a FUTURE format change on GR's side (e.g. switching
- * to ISO `"2026-06-15 10:00:00"` — `dd=2026 > 31` fails the range check)
- * would make every REALLY-annulled receipt matching that shape silently
- * ingest as collected revenue, with F12's empty-page warning never firing
- * (the page still parses non-zero receipts). A cheap WARNING here — logged
- * only for values that are non-empty AND non-all-zeros AND still fail to
- * parse — gives an operator a chance to notice the format drift before it
- * quietly overstates money for however long it takes to notice.
+ * fix-wave-1 F10: this was originally fail-CLOSED (anything non-empty and not
+ * EXACTLY equal to `GR_NULL_DATE_SENTINEL` counted as annulled) — a sentinel
+ * variant GR never shows today but could tomorrow ("00-00-0000" without a
+ * time, "0000-00-00 00:00:00" reversed field order, a double space before
+ * the time) would have silently excluded EVERY receipt matching it. F10
+ * flipped the SENTINEL check to be format-agnostic (all-zeros in any
+ * width/order/separator → NOT annulled, still the case below) — that part is
+ * unchanged.
+ *
+ * gr-receipt-annulment (design.md Decision 5) rewrites what happens to
+ * everything that ISN'T the sentinel, in three layers:
+ *
+ * 1. **Two accepted date formats**, not one: `DD-MM-YYYY[ HH:MM:SS]` (GR's
+ *    native format) AND `YYYY-MM-DD[ HH:MM:SS]` (ISO — the plausible drift).
+ *    Disambiguated by the FIRST component's width: 4 digits → ISO (year
+ *    first), otherwise DD-MM-YYYY.
+ * 2. **Residue → annulled** (flips F10's fail-open residual to fail-CLOSED
+ *    PER ROW): a value that is non-empty, non-sentinel, and unparseable in
+ *    EITHER format now counts as a REAL annulment — "GR no llena ese campo
+ *    por gusto". This is a per-ROW decision; it does NOT abort the page (see
+ *    `financeAnnulmentGuard` for the systemic guard over a WHOLE page/run).
+ * 3. A loud `console.warn` fires for every row landing in bucket 2 — the
+ *    diagnostic signal that turns a centinela-format-drift incident into a
+ *    10-second read (design.md Decision 4's log sample).
  */
 export function isRealAnnulment(rawFechaAnulacion: unknown, receiptKeyForLogging?: string): boolean {
   const s = typeof rawFechaAnulacion === 'string' ? rawFechaAnulacion.trim() : '';
@@ -44,30 +45,34 @@ export function isRealAnnulment(rawFechaAnulacion: unknown, receiptKeyForLogging
   const datePart = grDateTimeDatePart(s);
   if (!datePart) {
     warnUnparseableAnnulmentDate(s, receiptKeyForLogging);
-    return false;
+    return true;
   }
 
   const parts = datePart.split(/[-/.]/);
   if (parts.length !== 3) {
     warnUnparseableAnnulmentDate(s, receiptKeyForLogging);
-    return false;
+    return true;
   }
-  const [a, b, c] = parts.map((p) => Number(p));
-  if (![a, b, c].every((n) => Number.isInteger(n))) {
+  const [p0, p1, p2] = parts.map((p) => Number(p));
+  const rawParts = parts as [string, string, string];
+  if (![p0, p1, p2].every((n) => Number.isInteger(n))) {
     warnUnparseableAnnulmentDate(s, receiptKeyForLogging);
-    return false;
+    return true;
   }
 
-  // All-zeros sentinel, any field order/width — NOT an annulment. This is
-  // the KNOWN-GOOD case, never warned about.
-  if (a === 0 && b === 0 && c === 0) return false;
+  // All-zeros sentinel, any field order/width — NOT an annulment. Checked
+  // BEFORE format disambiguation, exactly as F10 left it: this is the
+  // KNOWN-GOOD case, never warned about, regardless of which format it LOOKS
+  // like (a bare "0000-00-00 00:00:00" would otherwise misparse as ISO).
+  if (p0 === 0 && p1 === 0 && p2 === 0) return false;
 
-  // A day-month-year triple that isn't even a valid calendar date is not
-  // proof of anything either (fail-open: only a REAL date counts).
-  const [dd, mm] = [a, b]; // GR's own convention is DD-MM-YYYY.
-  if (dd < 1 || dd > 31 || mm < 1 || mm > 12) {
+  // Format disambiguation: a 4-digit FIRST component means ISO
+  // (year-month-day); anything else is GR's native DD-MM-YYYY.
+  const isIsoShaped = rawParts[0].length === 4;
+  const [dd, mm] = isIsoShaped ? [p2, p1] : [p0, p1];
+  if (dd === undefined || mm === undefined || dd < 1 || dd > 31 || mm < 1 || mm > 12) {
     warnUnparseableAnnulmentDate(s, receiptKeyForLogging);
-    return false;
+    return true;
   }
 
   return true;
@@ -75,9 +80,9 @@ export function isRealAnnulment(rawFechaAnulacion: unknown, receiptKeyForLogging
 
 function warnUnparseableAnnulmentDate(raw: string, receiptKeyForLogging?: string): void {
   console.warn(
-    `[finance-receipts] fecha_anulacion "${raw}" is non-empty and NOT the all-zeros sentinel, but does NOT parse as a valid DD-MM-YYYY date${
+    `[finance-receipts] fecha_anulacion "${raw}" is non-empty and NOT the all-zeros sentinel, but does NOT parse as a valid DD-MM-YYYY or ISO date${
       receiptKeyForLogging ? ` (receipt ${receiptKeyForLogging})` : ''
-    } — treated as NOT annulled (fail-open, F10). If GR changed date formats, this may be silently counting a REAL annulment as collected revenue.`,
+    } — tratado como ANULADO (sin dato verificable no se cuenta la plata). If GR changed date formats, revisar YA — the systemic guard may abort the ingest if this becomes widespread.`,
   );
 }
 

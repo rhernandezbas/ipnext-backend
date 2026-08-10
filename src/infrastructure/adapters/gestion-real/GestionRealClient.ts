@@ -22,8 +22,6 @@ import {
   GrReceiptRetencion,
   GrServiceOrder,
 } from '@domain/entities/gestionReal';
-import { isRealAnnulment } from '@application/use-cases/finance/financeDates';
-
 export interface GestionRealClientOptions {
   baseUrl: string;
   cuit: string;
@@ -754,10 +752,17 @@ function toEntriesList(node: unknown): Array<{ key: string; value: unknown }> {
 /**
  * Parse the GR `recibos` action response (finance-growth Fase 1, design.md
  * Decision 0). Defensive against dict-keyed-by-id OR array root/aplicaciones
- * nodes (gotcha #2). A receipt with a REAL annulment (`fecha_anulacion`
- * distinct from the GR centinela `"00-00-0000 00:00:00"`) is EXCLUDED
- * entirely here — neither it nor its applications ever reach the application
- * layer (spec.md "A voided receipt is excluded from ingestion").
+ * nodes (gotcha #2).
+ *
+ * gr-receipt-annulment (design.md Decision 3.1) — a receipt with a REAL
+ * annulment (`fecha_anulacion` distinct from the GR centinela
+ * `"00-00-0000 00:00:00"`) is NO LONGER excluded here. This parser is
+ * `infrastructure/` — it should not decide domain business rules; it now
+ * passes `fecha_anulacion` through RAW (`fechaAnulacion`) and lets
+ * `mapGrReceipt` (application/, via `isRealAnnulment`) derive the `anulado`
+ * flag. This was the ACTUAL bug the card described ("recibo anulado sigue
+ * visible"): a voided receipt never reached the mapper at all, so `anulado`
+ * stayed hardcoded `false` forever, even after this parser skipped it.
  *
  * fix-wave-1 F3: GR reports ITS OWN errors with HTTP 200 — measured live:
  * `POST {action:"cuenta_corriente"}` → 200 `{"error":"91","descripcion":"No Se
@@ -808,8 +813,6 @@ export function parseReceiptsResponse(data: unknown, pageOffset = 0): FetchRecei
     if (!value || typeof value !== 'object') continue;
     const raw = value as Record<string, unknown>;
 
-    if (isRealAnnulment(raw.fecha_anulacion, key)) continue;
-
     // F2: the client id is NESTED at `cliente.cliente_id` — measured 100/100
     // live recibos, NEVER at the receipt root as `cliente_id`.
     const grReceiptId = str(raw.id) ?? (rootIsArray ? `page${pageOffset}-${key}` : key);
@@ -822,7 +825,10 @@ export function parseReceiptsResponse(data: unknown, pageOffset = 0): FetchRecei
       // produced a null `DateTime?` on every row (no throw, no signal).
       fechaRecibo: str(raw.fecha_recibo),
       fechaConfirmacion: str(raw.fecha_confirmacion),
-      fechaAnulacion: null,
+      // gr-receipt-annulment (design.md Decision 3.1) — RAW pass-through, no
+      // longer hardcoded `null`. `mapGrReceipt` derives `anulado` from this
+      // via `isRealAnnulment`.
+      fechaAnulacion: str(raw.fecha_anulacion),
       observaciones: decodeEntities(str(raw.observaciones)),
       applications: parseReceiptApplications(raw.aplicaciones, grReceiptId),
       // fix-wave-2 R1: `items`/`retenciones` were previously discarded entirely
