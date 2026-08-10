@@ -100,9 +100,16 @@ El sistema MUST correr un tercer carril `reconcile` en `FinanceReceiptIngestSche
 GR una ventana móvil de `FinanceReceiptSyncConfig.reconcileWindowDays` días hacia atrás desde hoy, y
 re-upsertea cada recibo de esa ventana (una página GR por tick, mismo criterio de cursor reanudable que
 delta/backfill: `"{fechaDesde}:{fechaHasta}:{offset}"`, `SyncState` propio `finance-receipts-reconcile`).
-`reconcileWindowDays` MUST ser ≥ la ventana que el rebuild nocturno de snapshots recomputa (mes corriente +
-mes anterior); el valor por defecto es `35`. `reconcileCheckIntervalMs` MUST ser configurable en DB, default
-`21600000` (6 h).
+`reconcileWindowDays` es un knob de COBERTURA en `[1, 90]`, default `35` — cuán tarde puede llegar una
+confirmación/anulación y todavía ser cazada. NO es un invariante de corrección: la visibilidad en el
+dashboard la garantiza el encolado de rebuild (ver el requirement "Out-of-horizon annulments queue their
+month"), no el ancho de la ventana. `reconcileCheckIntervalMs` MUST ser configurable en DB, default
+`21600000` (6 h), con piso `3600000` (1 h) — por debajo, el carril queda permanentemente "due" y se lleva
+~71% del presupuesto compartido de GR, matando de hambre al backfill.
+
+La ventana MUST terminar AYER, no hoy (`[ayer-(N-1), ayer]`): un límite superior "hoy" hace crecer el
+result set MIENTRAS el barrido pagina, y los offsets del cursor dejan de significar lo mismo (recibos que
+se leen dos veces, recibos que se saltean). Hoy es exactamente lo que cubre el carril delta.
 
 #### Scenario: Reconcile catches a receipt confirmed after the delta's overlap window
 - GIVEN un recibo con `fecha_recibo` de hace 3 días, ausente del espejo porque su `fecha_confirmacion`
@@ -117,12 +124,67 @@ mes anterior); el valor por defecto es `35`. `reconcileCheckIntervalMs` MUST ser
 - THEN el upsert por `grReceiptId` reescribe las mismas filas — no se crean duplicados en
   `FinancePaymentReceipt`/`FinanceReceiptItem`/`FinanceReceiptApplication`/`FinanceReceiptRetencion`
 
-#### Scenario: The window-vs-rebuild invariant is enforced
-- GIVEN `FinanceReceiptSyncConfig.reconcileWindowDays` se intenta configurar por debajo de la ventana que
-  recomputa el rebuild nocturno de snapshots (mes corriente + mes anterior)
+#### Scenario: The reconcile window is a coverage knob, not a correctness invariant
+- GIVEN `FinanceReceiptSyncConfig.reconcileWindowDays` se configura en `20` (dentro de `[1, 90]`, por
+  debajo del default)
 - WHEN se guarda la config
-- THEN la escritura se rechaza o se acota al mínimo válido — un recibo reparado fuera de la ventana de
-  rebuild nunca llegaría al dashboard sin un backfill de snapshots manual
+- THEN se acepta tal cual — la visibilidad en el dashboard NO depende de este número
+- AND un valor fuera de `[1, 90]` (0, negativo, no entero, > 90) cae al default seguro `35`, nunca clampeado
+  (nota: la versión anterior de este scenario exigía un piso efectivo de `35` "porque el rebuild nocturno
+  cubre 35 días". La aritmética es falsa: el rebuild recomputa `[mes anterior, mes corriente]`, que
+  garantiza **28** días — el 1 de marzo cubre desde el 1 de febrero. El invariante estaba INVERTIDO y el
+  número inventado; la corrección se movió al encolado de meses, abajo.)
+
+### Requirement: Out-of-horizon annulments queue their month for a snapshot rebuild
+
+Cuando el espejo pasa un recibo de `anulado: false` a `anulado: true` (un FLIP — el recibo ya estaba
+espejado, así que su plata YA fue contada por un snapshot), y el mes de su `fechaRecibo` cae FUERA del
+horizonte que el job nocturno recomputa (`[mes anterior, mes corriente]`), el sistema MUST encolar ese mes
+para reconstrucción explícita. El job nocturno MUST reconstruir los meses encolados ADEMÁS de su horizonte,
+y MUST desencolar sólo los que reconstruyó con éxito.
+
+#### Scenario: An annulment on a closed month repairs that month's snapshot
+- GIVEN un recibo del 31-01 ya espejado y contado en el snapshot de `2026-01`
+- AND GR lo reporta anulado el 01-03 (29 días después — dentro de la ventana del reconcile)
+- WHEN el carril reconcile lo re-consulta y el espejo lo flipea a `anulado: true`
+- THEN `2026-01` queda encolado en `SyncState` (`finance-snapshot-rebuild-queue`)
+- AND la siguiente corrida del job nocturno recomputa `2026-01` y lo desencola — el dashboard deja de
+  contar esa plata
+
+#### Scenario: A flip inside the nightly horizon queues nothing
+- GIVEN un recibo del mes corriente o del anterior que flipea a anulado
+- WHEN se persiste
+- THEN NO se encola nada — el job nocturno ya recomputa esos dos meses todas las noches
+
+#### Scenario: A failed rebuild keeps the month queued
+- GIVEN `2026-01` encolado
+- WHEN el job nocturno falla al reconstruirlo
+- THEN el mes SIGUE encolado — se reintenta la noche siguiente, nunca se descarta en silencio
+
+### Requirement: The annulled flag is a one-way latch
+
+El upsert del espejo MUST escribir `anulado: true` cuando GR reporta una anulación sobre un recibo ya
+espejado (el FLIP que justifica el carril reconcile), y MUST NO escribir `anulado: false` sobre una fila ya
+anulada. Cada flip MUST loguearse con el id del recibo y el valor CRUDO de `fecha_anulacion`.
+
+#### Scenario: A mirrored receipt flips to annulled
+- GIVEN un recibo espejado con `anulado: false`
+- WHEN un barrido posterior lo trae con `fecha_anulacion` real
+- THEN la MISMA fila queda `anulado: true` (no se duplica) y se emite el log del flip
+
+#### Scenario: GR blanking fecha_anulacion never un-annuls the mirror
+- GIVEN un recibo ya espejado con `anulado: true`
+- WHEN un barrido posterior lo trae con el centinela todo-ceros (drift de formato, respuesta parcial)
+- THEN la fila SIGUE `anulado: true` — el resto de los campos sí se refresca
+- AND revertir una anulación falsa es una acción HUMANA por SQL, no un efecto silencioso de una página de GR
+  (una des-anulación masiva es indistinguible de datos sanos aguas abajo: ningún guard podría cazarla)
+
+#### Scenario: Three consecutive guard aborts abandon the sweep
+- GIVEN el guard sistémico aborta la misma página del reconcile tres veces seguidas
+- WHEN se registra el tercer abort
+- THEN el barrido se ABANDONA (cursor → `null`, `lastRunAt` = ahora), el carril queda degradado con el
+  ABORT en `lastResult`, y el próximo intento espera la cadencia normal en vez de repetir la misma página
+  en cada tick para siempre
 
 #### Scenario: GR's error envelope during reconcile never degrades to an empty write
 - GIVEN GR responde `{"error": "N"}` (N != "0") a una página del reconcile
@@ -130,19 +192,26 @@ mes anterior); el valor por defecto es `35`. `reconcileCheckIntervalMs` MUST ser
 - THEN tira excepción (mismo comportamiento que delta/backfill hoy) — el reconcile NUNCA interpreta el
   sobre de error como "cero recibos en la ventana" ni escribe nada para esa página
 
-### Requirement: isRealAnnulment classifies annulment per row, without failing the whole batch
+### Requirement: A non-empty, non-sentinel fecha_anulacion means annulled — the format only decides whether to warn
 
-`isRealAnnulment` MUST aceptar tanto `DD-MM-AAAA[ HH:MM:SS]` como ISO (`AAAA-MM-DD[ HH:MM:SS]`) como
-formatos de fecha válida no anulada. Un `fecha_anulacion` no vacío, no-centinela, y no parseable en
-NINGUNO de los dos formatos MUST clasificarse `anulado: true` para ESA fila únicamente, con un warning —
-NUNCA MUST abortar la página completa ni las demás filas de la respuesta.
+`isRealAnnulment` MUST devolver `true` para CUALQUIER `fecha_anulacion` no vacío que no sea el centinela
+todo-ceros: GR no llena ese campo por gusto. El FORMATO no cambia la clasificación, sólo el ruido: los dos
+formatos reconocidos (`DD-MM-AAAA[ HH:MM:SS]` y el ISO `AAAA-MM-DD[ HH:MM:SS]`) se aceptan en silencio;
+cualquier otro valor no vacío y no-centinela también cuenta como anulado, pero con un `console.warn`
+ruidoso. El fail-closed es POR FILA: NUNCA MUST abortar la página completa ni las demás filas de la
+respuesta (eso es trabajo del guard sistémico, sobre la proporción de la página).
+El centinela todo-ceros, en cualquier ancho/orden/separador, MUST devolver `false` sin warning.
 (Previously: fail-open — cualquier valor no parseable se trataba como "no anulado" con solo un
-`console.warn`; `isRealAnnulment('2026-06-15 10:00:00')` devolvía `false`.)
+`console.warn`.)
 
-#### Scenario: ISO-formatted fecha_anulacion is recognized as a valid non-annulled date
+#### Scenario: ISO-formatted fecha_anulacion is a real annulment, recognized without noise
 - GIVEN `fecha_anulacion` = `"2026-06-15 10:00:00"` (ISO, no centinela)
 - WHEN se evalúa `isRealAnnulment`
-- THEN devuelve `false` (fecha válida, recibo no anulado) — sin warning
+- THEN devuelve `true` (GR reporta una anulación real) y NO se emite warning — el formato es uno de los
+  dos reconocidos
+  (nota: la versión anterior de este scenario decía "devuelve `false`", contradiciendo tanto al design como
+  a la implementación. Una fecha de anulación VÁLIDA es la forma más clara posible de "este recibo está
+  anulado"; leerla como "no anulado" habría sido justamente el fail-open que este change vino a cerrar.)
 
 #### Scenario: The all-zero sentinel in any width/order is still "not annulled"
 - GIVEN `fecha_anulacion` = `"00-00-0000 00:00:00"` (o variantes de ancho/orden ya generalizadas)
@@ -158,11 +227,22 @@ NUNCA MUST abortar la página completa ni las demás filas de la respuesta.
 
 ### Requirement: Systemic guard aborts a run when the annulled ratio spikes
 
-El sistema MUST comparar, al final de cada página/corrida, la proporción de recibos marcados `anulado:
-true` contra `FinanceReceiptSyncConfig.annulmentAbortThresholdPct` (configurable, default conservador
-recomendado 5%, valor final de diseño). Si la proporción de la corrida IGUALA O SUPERA el umbral, el
-sistema MUST abortar SIN persistir ninguna fila de esa corrida y MUST loguear el abort con el conteo y el
-umbral.
+El sistema MUST comparar, ANTES de escribir nada de cada página, la proporción de recibos marcados
+`anulado: true` contra `FinanceReceiptSyncConfig.annulmentGuardMaxPct` (configurable en DB, default 5).
+Si la proporción SUPERA ESTRICTAMENTE el umbral (`>`, no `>=`: el nombre del knob es "máximo permitido", así
+que 5/100 pasa y 6/100 aborta — aritmética entera, sin punto flotante que pueda correr la frontera) Y la
+cantidad absoluta de anulados alcanza `annulmentGuardMinCount` (piso `>=`: exactamente 5 de 20 YA dispara),
+el sistema MUST abortar SIN persistir ninguna fila de esa página.
+El piso absoluto existe para que una página de cola con 1-2 anulaciones legítimas no trabe el carril para
+siempre.
+El sistema MUST loguear el abort con el conteo, el umbral, el `rango` y el `offset` de la página, y una
+muestra de hasta 5 valores CRUDOS de `fecha_anulacion` en formato `id="valor"` — valores idénticos indican
+drift del centinela (NO subir el knob); fechas variadas y verosímiles indican un pico legítimo (subir el
+knob). Los `grReceiptId` solos no responden ninguna de las dos preguntas.
+El guard MUST correr en los TRES carriles con la config VIVA de DB — un umbral hardcodeado en el carril
+delta deja la perilla inerte justo sobre la caja del día.
+(Previously: el texto decía `annulmentAbortThresholdPct` e "IGUALA O SUPERA" — ni el nombre del campo ni la
+comparación coincidían con el design ni con la implementación.)
 
 #### Scenario: A normal run with zero or few annulments persists as usual
 - GIVEN una corrida de 500 recibos con 0 marcados `anulado: true`

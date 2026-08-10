@@ -665,7 +665,7 @@ Debe aparecer la fila `finance-receipts-reconcile` con `lastResult` de página o
 
 ### 2. Catch-up (cero código)
 
-1. `POST /api/finance/sync/rearm-backfill` (permiso `finance:sync`).
+1. `POST /api/finance/growth/sync/rearm-backfill` (permiso `finance:sync`).
 2. Camina ago→jul→jun→may: ~20.000 recibos ≈ 200 páginas ≈ **67 min de carril**.
    Como el reconcile tiene prioridad sobre el backfill, un barrido de reconcile lo puede
    demorar hasta ~1,7× (≈ 2 h en total). **Se deja correr**: apagar el reconcile durante el
@@ -706,7 +706,7 @@ SELECT count(*) FROM "FinancePaymentReceipt" WHERE anulado = true;
 
 ### 4. Snapshots
 
-`POST /api/finance/sync/backfill-snapshots` acotado a `2026-05..2026-08`, one-shot. Recién
+`POST /api/finance/growth/sync/backfill-snapshots` acotado a `2026-05..2026-08`, one-shot. Recién
 después de que (b) dé 102. Verificación: la caja cobrada de `2026-08` **sube** respecto del
 valor previo al catch-up (anotarlo ANTES de disparar; si no cambia, la plata reparada no
 llegó al dashboard y algo está mal en la cadena).

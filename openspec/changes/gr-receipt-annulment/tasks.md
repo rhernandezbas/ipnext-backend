@@ -23,10 +23,12 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
       `domain/ports/FinanceReceiptSyncConfigRepository.ts`, llamado desde `get()` en Prisma e in-memory.
 - [x] 1.7 RED/GREEN caso `reconcileWindowDays` por debajo del piso de la invariante ventana-vs-rebuild
       (p.ej. `20`, dentro de `[1,90]` pero por debajo del peor caso de 35 días del rebuild mensual) — la
-      escritura se rechaza / cae al mínimo válido `35` (scenario 15, `finance-growth`). **Nota de
-      diseño**: la tabla de Decisión 7 declara el rango `[1, 90]`, que por sí solo NO alcanza para este
-      invariante — acá se interpreta el mínimo efectivo como `35`. Dejar constancia en el test de que
-      `sdd-verify` debe confirmar esta lectura contra el design.
+      escritura cae al mínimo válido. **REVERTIDO por la fix-wave (RF3)**: el piso efectivo `35` se
+      ELIMINÓ. Certificaba una regla falsa — el rebuild nocturno recomputa `[mes anterior, mes
+      corriente]`, o sea 28 días GARANTIZADOS, no 35; la invariante estaba invertida y el número
+      inventado. Hoy el rango es el nominal `[1, 90]` (default 35) y la corrección la aporta el
+      encolado de meses fuera de horizonte (`financeSnapshotRebuildQueue`), que no depende del ancho
+      de la ventana.
 - [x] 1.8 RED `existingIds(grReceiptIds: string[]): Promise<Set<string>>` — método obligatorio nuevo en
       el port `FinancePaymentReceiptRepository`; sin implementarlo en algún adapter, no compila.
 - [x] 1.9 GREEN `existingIds` en Prisma (`findMany({ where: { grReceiptId: { in } }, select:
@@ -40,7 +42,9 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
       "(Previously: ... devolvía false)" (leído literal, el scenario no cambia nada) Y el Decision 5
       de design.md (`Nuevo: true`, fila marcada ⚠️ como "cuenta plata anulada como cobrada en
       silencio"). Implementado per design.md (true = anulado real). sdd-verify debe corregir el texto
-      del spec.
+      del spec. **HECHO por la fix-wave (RF14)**: el texto del scenario 17 dice ahora `true`, y el
+      título del requirement se reescribió honesto (cualquier cadena no vacía no-centinela ⇒ anulado;
+      el formato sólo decide si se emite el warn).
 - [x] 2.2 RED completar `financeDates.test.ts` con la tabla entrada→salida de la Decisión 5: centinela
       todo-ceros en cualquier ancho/orden (scenario 18), DD-MM-AAAA válida, ISO válida, fechas
       imposibles `32-13-2026`/`2026-13-45` ⇒ `true`+warn, residuo basura (`'nota de credito'`, `'N/A'`)
@@ -81,12 +85,13 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
       (application) — Decisión 8. Gate inmediato: correr `SyncGrReceiptsDelta.test.ts`,
       `SyncGrReceiptsBackfillBatch.test.ts`, `finance-receipts-ingest-seam.test.ts` SIN modificarlos —
       deben seguir en verde. Si hace falta tocar alguno, PARAR: el refactor cambió comportamiento.
-      **GATE PASADO** (44 tests, sin tocar los 3 archivos). **Desvío anotado**: el carril delta NO
-      recibió un `syncConfig` inyectado (hubiera roto la firma del constructor y el gate de arriba) —
-      el guard corre igual sobre delta pero con los thresholds DEFAULT hardcodeados
-      (`FINANCE_RECEIPT_SYNC_CONFIG_DEFAULTS`), no live-reloadable. Backfill y reconcile sí usan la
-      config viva. Es una lectura deliberada de la celda "Los tres" de la Decisión 4 — sdd-verify debe
-      confirmarla o pedir que se abra la config al delta con un change aparte.
+      **GATE PASADO** (44 tests, sin tocar los 3 archivos). **Desvío CERRADO por la fix-wave (RF2)**:
+      el carril delta SÍ recibe ahora `syncConfig` (posicional, obligatorio, mismo slot que backfill y
+      reconcile) y el guard corre con la config VIVA en los tres carriles. El desvío original tenía
+      como única justificación no romper las firmas que el gate de esta tarea protegía — una razón de
+      forma de los tests decidiendo comportamiento de producción, sobre la caja del día. Los call sites
+      de los tests se actualizaron con el colaborador nuevo; el comportamiento con config default es
+      idéntico.
 
 ## Fase 4 — Carril `reconcile`: `SyncState`, cursor, use case, seam
 
@@ -307,13 +312,19 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
       (evita ~18 h de carril).
 - [ ] 10.3 Deploy: `prisma migrate deploy` + código. Verificar a los ~2 min que aparece la fila
       `finance-receipts-reconcile` en `SyncState` con `lastResult` de página o barrido.
-- [ ] 10.4 Catch-up: `POST /api/finance/sync/rearm-backfill` (permiso `finance:sync`). Monitorear avance
-      mes a mes (`finance-receipts-backfill` en `SyncState`), ~67 min a ~2 h.
+- [ ] 10.4 Catch-up: `POST /api/finance/growth/sync/rearm-backfill` (permiso `finance:sync`). Monitorear
+      avance mes a mes (`finance-receipts-backfill` en `SyncState`), ~67 min a ~2 h.
+      **OJO** (fix-wave RF15): el router se monta en `/api/finance/growth`, NO en `/api/finance` — las
+      tres URLs de este runbook decían `/api/finance/sync/...` y habrían dado 404 a las 3 AM.
 - [ ] 10.5 Verificación discriminante de los 102 IDs: tomar la lista de los 102 `grReceiptId` faltantes
       del 05-08 desde el engram `gr/recibos-confirmacion-tardia` (o el artefacto/output crudo del probe
       del orquestador del 2026-08-10) — NO recalcular de cero. Correr
-      `SELECT count(*) FROM "FinancePaymentReceipt" WHERE "grReceiptId" IN (…102 ids…);` — esperado
-      exactamente `102`. El conteo agregado del día (299) NO alcanza como evidencia por sí solo.
+      `SELECT count(*) FILTER (WHERE anulado = false) AS vivos, count(*) AS total FROM "FinancePaymentReceipt" WHERE "grReceiptId" IN ('345867', '345868', …102 ids…);`
+      — esperado `vivos = 102`. Dos precisiones de la fix-wave RF15: `grReceiptId` es **String**, así que
+      los ids van ENTRE COMILLAS SIMPLES (sin comillas, Postgres tira `operator does not exist: text = integer`);
+      y el conteo tiene que filtrar `anulado = false`, porque una fila espejada-y-anulada cuenta igual en
+      un `count(*)` pelado y taparía justo el caso que este change vino a distinguir. El conteo agregado
+      del día (299) NO alcanza como evidencia por sí solo.
 - [ ] 10.6 Verificar el faltante suelto del 01-07: `SELECT * FROM "FinancePaymentReceipt" WHERE
       "grReceiptId" = '345867';` — esperado 1 fila (prueba que no es efecto de un solo día).
 - [ ] 10.7 Verificar que el espejo NO se volcó: `SELECT count(*) FROM "FinancePaymentReceipt" WHERE
@@ -321,12 +332,35 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 - [ ] 10.8 Verificación del guard en logs: si el guard disparó durante el catch-up, confirmar en logs que
       el pacing de GR (`effectiveIntervalMs`) NO escaló a `maxRequestIntervalMs` (evidencia de que
       `trackGrHealth` no lo culpó — Decisión 4/3.3-3.4).
-- [ ] 10.9 `POST /api/finance/sync/backfill-snapshots` acotado a `2026-05..2026-08`, recién después de
-      que 10.5 dé `102`. Verificar que la caja cobrada de `2026-08` SUBE respecto del valor anotado
+- [ ] 10.9 `POST /api/finance/growth/sync/backfill-snapshots` acotado a `2026-05..2026-08`, recién después
+      de que 10.5 dé `102`. Verificar que la caja cobrada de `2026-08` SUBE respecto del valor anotado
       antes del catch-up.
 - [ ] 10.10 Régimen: a las ~6 h del deploy, confirmar `lastResult = 'sweep ok …'` en
-      `finance-receipts-reconcile`; revisar logs por `masViejoReparado >= 32d` (borde de ventana) — si
-      aparece, subir `reconcileWindowDays` por SQL.
+      `finance-receipts-reconcile`; revisar logs por `masViejoReparado >= 32d` (borde de ventana).
+      **Qué significa ahora ese warning** (fix-wave RF3): es una señal de COBERTURA, no de corrección.
+      Subir `reconcileWindowDays` por SQL sigue siendo lo correcto si aparece seguido (querés cazar
+      confirmaciones más tardías), pero ya NO hay riesgo de que un recibo reparado "no llegue al
+      dashboard": una anulación sobre un mes fuera de `[mes anterior, mes corriente]` encola ese mes en
+      `SyncState('finance-snapshot-rebuild-queue')` y el job nocturno lo reconstruye solo.
+- [ ] 10.11 **Auditoría de flips** (fix-wave RF1 — el latch es de un solo sentido, así que una anulación
+      FALSA queda pegada hasta que un humano la revierta). Rutina:
+      1. Buscar en logs las líneas `ANULACION recibo=… anulado:false->true fecha_anulacion_cruda="…"`.
+         Valores crudos IDÉNTICOS en varios recibos = drift del centinela, NO son anulaciones reales.
+      2. Cruzar contra GR el/los recibos sospechosos.
+      3. Revertir a mano, explícitamente:
+         `UPDATE "FinancePaymentReceipt" SET anulado = false WHERE "grReceiptId" IN ('…');`
+      4. Recomputar el mes afectado: `POST /api/finance/growth/sync/backfill-snapshots` con
+         `from`/`to` = ese mes.
+      Conteo rápido de anulados por mes, para detectar un salto:
+      `SELECT to_char("fechaRecibo", 'YYYY-MM') AS mes, count(*) FILTER (WHERE anulado) AS anulados, count(*) AS total FROM "FinancePaymentReceipt" GROUP BY 1 ORDER BY 1 DESC LIMIT 6;`
+- [ ] 10.12 Cola de rebuild (fix-wave RF3): `SELECT cursor, "lastResult", "lastRunAt" FROM "SyncState" WHERE entity = 'finance-snapshot-rebuild-queue';`
+      — normalmente vacía o con 1-2 meses que desaparecen tras la corrida nocturna. Meses que se quedan
+      pegados varias noches = el rebuild de ese mes está fallando; mirar `finance-snapshot-job.lastResult`.
+- [ ] 10.13 Guard trabado (fix-wave RF4): si el guard sistémico aborta la misma página del reconcile 3
+      veces seguidas, el barrido se ABANDONA solo (`cursor = null`, `lastResult` con `barrido ABANDONADO`)
+      y reintenta uno nuevo en la cadencia normal. Ver ese texto en `finance-receipts-reconcile` NO
+      requiere acción manual sobre el cursor; el diagnóstico está en el mensaje del ABORT
+      (`rango=`, `offset=`, y la muestra `id="valor_crudo"`).
 
 ---
 
@@ -349,10 +383,10 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 | 11 | Delta avanza con overlap en cadencia real-time | 9.1 (existente, gate) |
 | 12 | Fallos repetidos degradan el pacing compartido de los 3 carriles | 5.7, 5.8, 9.1 |
 | 13 | Reconcile caza confirmado tarde | 4.4 |
-| 14 | Re-barrer la misma ventana no duplica filas | 4.8 |
-| 15 | Invariante ventana-vs-rebuild se hace cumplir | 1.7 (**ver nota de hueco abajo**) |
+| 14 | Re-barrer la misma ventana REESCRIBE sin duplicar (RF12: antes lo pasaba un carril que no escribía) | 4.8 |
+| 15 | Ventana del reconcile = knob de cobertura; la corrección la da el encolado de rebuild (RF3) | 1.7, RF3 |
 | 16 | Sobre de error de GR durante reconcile nunca degrada a escritura vacía | 4.9 |
-| 17 | ISO reconocido como fecha válida no anulada | 2.1, 2.2 |
+| 17 | ISO reconocido como anulación real, sin warning (RF14: el texto decía `false`) | 2.1, 2.2 |
 | 18 | Centinela todo-ceros en cualquier ancho/orden sigue "no anulado" | 2.2 |
 | 19 | Residuo no parseable marca solo esa fila | 2.2, 3.1, 4.10 |
 | 20 | Corrida normal con 0/pocos anulados persiste normal | 3.1 |

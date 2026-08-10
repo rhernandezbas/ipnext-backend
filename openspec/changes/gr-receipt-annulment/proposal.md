@@ -176,14 +176,14 @@ Los huecos de mayo→hoy ya son permanentes: el delta nunca vuelve a pedir esos 
 backfill no re-barre un mes que ya cerró. Se reparan **operativamente**, con dos endpoints
 que ya están construidos, testeados y cableados:
 
-1. **`POST /api/finance/sync/rearm-backfill`** (`RearmFinanceReceiptsBackfill`, permiso
+1. **`POST /api/finance/growth/sync/rearm-backfill`** (`RearmFinanceReceiptsBackfill`, permiso
    `finance:sync`) — resetea el cursor del backfill a `{mesCorriente}:0` y lo hace caminar de
    nuevo mes a mes hacia atrás hasta `backfillFloorYearMonth`. Con el piso en `2026-05`
    (el que fijó `portal-payments`), eso re-barre **exactamente** ago→jul→jun→may. Idempotente
    por `grReceiptId`. Y como corre **después** de la pieza 2, de paso retro-marca cualquier
    anulado que GR exponga en ese rango.
    **Costo**: ~4 meses × ~5.000 recibos = ~20.000 → ~200 páginas → **~67 min** de carril.
-2. **`POST /api/finance/sync/backfill-snapshots`** para `2026-05..2026-08` — recomputa los
+2. **`POST /api/finance/growth/sync/backfill-snapshots`** para `2026-05..2026-08` — recomputa los
    snapshots mensuales para que el dashboard refleje la caja reparada (el rebuild nocturno
    solo toca los dos meses más recientes).
 
