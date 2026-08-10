@@ -67,7 +67,17 @@ export class RegisterTvJobRunner {
       // El mensaje es LO ÚNICO que el operador va a ver (decisión de producto: "el error y ya").
       // Por eso se persiste el texto del error de dominio tal cual, sin aplastarlo en un genérico.
       const error = err instanceof Error ? err.message : String(err);
-      await this.registerStatus.setStatus(customerId, { status: 'failed', result: { error }, startedAt });
+      // Y el `code` viaja también: cuando el alta era síncrona, NO_CIC_AVAILABLE / TV_POOL_POISONED
+      // / TV_EMAIL_OWNED_BY_OTHER llegaban al FE por HTTP y le permitían distinguir "el pool está
+      // envenenado, llamá al admin" de "reintentá en unos segundos". Volverla asíncrona no puede
+      // costar esa distinción en silencio.
+      const rawCode = (err as { code?: unknown } | null)?.code;
+      const code = typeof rawCode === 'string' ? rawCode : undefined;
+      await this.registerStatus.setStatus(customerId, {
+        status: 'failed',
+        result: code !== undefined ? { error, code } : { error },
+        startedAt,
+      });
     }
   }
 }

@@ -23,6 +23,8 @@ import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-m
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
 import { InMemoryClientTvCancelStatusRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancelStatusRepository';
+import { InMemoryClientTvRegisterStatusRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvRegisterStatusRepository';
+import { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRunner';
 import { InMemoryTvActivationEventRepository } from '@infrastructure/adapters/in-memory/InMemoryTvActivationEventRepository';
 
 import { GetGigaredConfig, GIGARED_FLAG } from '@application/use-cases/gigared/GetGigaredConfig';
@@ -93,6 +95,14 @@ async function buildApp(opts: BuildOpts = {}) {
   const contractLookup = { findById: async (id: string) => ({ id, clientId: 'cust-1' }) };
   const tvCancellation = new InMemoryClientTvCancellationRepository();
   const cancelStatus = new InMemoryClientTvCancelStatusRepository();
+  // gigared-alta-asincrona (W2) — el alta ahora es asincrona: el router recibe el runner y el
+  // repo de estado en vez del use case. Este archivo no ejercita el alta; lo cablea para
+  // satisfacer el contrato del router (los tests del alta viven en gigared.register-async.routes).
+  const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+  const registerTvRunner = new RegisterTvJobRunner(
+    new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+    registerStatus,
+  );
   const eventRepo = opts.eventRepo ?? new InMemoryTvActivationEventRepository();
 
   const cancelTv = new CancelTv(port, csRepo, catalog, contractLookup, customerLookup, tvCancellation);
@@ -107,7 +117,6 @@ async function buildApp(opts: BuildOpts = {}) {
     listAccounts:       new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
     linkCustomerToCic:  new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-    registerAccount:    new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
     addTvService:       new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService:    new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus:       new SetOttStatus(port, customerLookup),
@@ -128,6 +137,8 @@ async function buildApp(opts: BuildOpts = {}) {
     gigaredProbeReady:  createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),
     cancelTvRunner:     runner,
     cancelStatus,
+    registerTvRunner,
+    registerStatus,
     customerLookup,
     contractLookup,
     listActivationHistory: listHistory,

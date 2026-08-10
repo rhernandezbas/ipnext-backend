@@ -100,4 +100,41 @@ describe('Gigared composition root (#47)', () => {
     const rem = appSrc.match(/new RemoveTvService\(([^)]*)\)/);
     expect(rem![1]).toMatch(/gigaredContractLookup/);
   });
+
+  /**
+   * gigared-alta-asincrona (W2/W3) — el alta asíncrona depende ENTERAMENTE de dos líneas de
+   * wiring. Si `registerTvRunner` o `registerStatus` no se inyectan, el router no compila… pero
+   * si se inyectaran con un repo NUEVO en vez del que corre el runner, o si el runner recibiera
+   * otro use case, la feature quedaría muerta en producción con toda la suite en verde: los tests
+   * de ruta arman su propio wiring y jamás miran app.ts. Es la trampa de la W6 del EPIC #38, la
+   * misma que ya se pinneó para la reutilización de CICs. NO borrar.
+   */
+  describe('(j) gigared-alta-asincrona: wiring del alta asíncrona', () => {
+    it('el runner del alta se construye con el use case Y el repo de estado', () => {
+      const m = appSrc.match(/new RegisterTvJobRunner\(([^)]*)\)/);
+      expect(m).not.toBeNull();
+      expect(m![1]).toMatch(/gigaredRegisterAccount/);
+      expect(m![1]).toMatch(/gigaredTvRegisterStatus/);
+    });
+
+    it('el use case del alta conserva sus deps posicionales de reuso de CIC + auditoría', () => {
+      const m = appSrc.match(/const gigaredRegisterAccount = new RegisterGigaredAccount\(([^)]*)\)/);
+      expect(m).not.toBeNull();
+      expect(m![1]).toMatch(/gigaredCicReuseEligibility/);
+      expect(m![1]).toMatch(/auditEventRepo/);
+      expect(m![1]).toMatch(/gigaredTvActivation\b/);
+    });
+
+    it('el router recibe EL MISMO repo de estado que el runner (si no, el polling lee otra tabla)', () => {
+      const idx = appSrc.indexOf('createGigaredRouter(');
+      expect(idx).toBeGreaterThan(-1);
+      const bloque = appSrc.slice(idx, idx + 4000);
+      expect(bloque).toMatch(/registerTvRunner:\s*gigaredRegisterTvRunner/);
+      expect(bloque).toMatch(/registerStatus:\s*gigaredTvRegisterStatus/);
+    });
+
+    it('el repo de estado del alta es el adapter Prisma (no queda en memoria)', () => {
+      expect(appSrc).toMatch(/const gigaredTvRegisterStatus = new PrismaClientTvRegisterStatusRepository\(\)/);
+    });
+  });
 });

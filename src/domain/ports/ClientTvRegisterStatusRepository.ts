@@ -37,9 +37,20 @@ export interface TvRegisterJobResult {
   recovered: boolean;
 }
 
+/**
+ * Fallo del job. El `code` es el del error de DOMINIO (NO_CIC_AVAILABLE, TV_POOL_POISONED,
+ * TV_EMAIL_OWNED_BY_OTHER…): cuando el alta era síncrona viajaba por HTTP y el FE ramificaba con
+ * él. Se persiste para que volverla asíncrona no degrade eso a un string suelto. Ausente cuando el
+ * error no es de dominio (un Error pelado no inventa un code).
+ */
+export interface TvRegisterJobError {
+  error: string;
+  code?: string;
+}
+
 export interface TvRegisterStatusRow {
   status: TvRegisterStatusValue;
-  result?: TvRegisterJobResult | { error: string };
+  result?: TvRegisterJobResult | TvRegisterJobError;
   startedAt?: Date;
 }
 

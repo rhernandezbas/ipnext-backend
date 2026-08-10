@@ -252,6 +252,34 @@ describe('RegisterTvJobRunner — transiciones de estado (W3.1/W3.2)', () => {
     expect(row?.startedAt).toBeInstanceOf(Date);
   });
 
+  /**
+   * El `code` del error de dominio también se persiste. Sin él, el polling degradaría lo que HOY
+   * viaja por HTTP (NO_CIC_AVAILABLE, TV_POOL_POISONED, TV_EMAIL_OWNED_BY_OTHER…) a un string
+   * suelto, y el FE perdería en silencio la capacidad de distinguir "el pool está envenenado,
+   * llamá al admin" de "reintentá en unos segundos". Volver asíncrono el alta no puede costar eso.
+   */
+  it('fallo: persiste TAMBIÉN el code del error de dominio, no sólo el texto', async () => {
+    const sim = new PartnerSim([]); // pool vacío → NoCicAvailableError
+    const { runner, registerStatus } = await build({ sim });
+
+    await runner.run(CUSTOMER, input());
+
+    const row = await registerStatus.getStatus(CUSTOMER);
+    expect(row?.status).toBe('failed');
+    expect(row!.result as { code?: string }).toMatchObject({ code: 'NO_CIC_AVAILABLE' });
+  });
+
+  it('fallo sin code (Error pelado): persiste sólo el mensaje, sin inventar un code', async () => {
+    const registerAccount = { execute: jest.fn(async () => { throw new Error('db down'); }) } as unknown as RegisterGigaredAccount;
+    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+    const runner = new RegisterTvJobRunner(registerAccount, registerStatus);
+
+    await runner.run(CUSTOMER, input());
+
+    const row = await registerStatus.getStatus(CUSTOMER);
+    expect(row!.result).toEqual({ error: 'db down' });
+  });
+
   it('NUNCA lanza: el runner es fire-and-forget y un throw sería un unhandled rejection', async () => {
     const registerAccount = { execute: jest.fn(async () => { throw new Error('boom'); }) } as unknown as RegisterGigaredAccount;
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
