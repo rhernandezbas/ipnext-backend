@@ -882,3 +882,41 @@ describe('BuildFinanceMonthlySnapshot — persistence, orphan guard, F9 unclassi
     expect(snap.unpricedContractsActive).toBe(1); // the orphan contract — no plan, no price, correctly flagged (F2), never crashed
   });
 });
+
+// ── gr-receipt-annulment (design.md Decision 6, `finance-dashboard-annulment-filter`
+// spec.md scenario 22/24 at the aggregate level, D5) — closes deuda #7: an
+// anulado receipt's items/applications must NOT reach revenueTotalArs or
+// unclassifiedAmountArs. Fixture has AT LEAST 2 receipts with DISTINCT
+// amounts — a single-element fixture would let the mutant "the filter
+// doesn't filter" survive (the lesson behind "fixtures degenerados ocultan
+// invariantes").
+describe('gr-receipt-annulment: an anulado receipt is excluded from the monthly snapshot (D5)', () => {
+  it('a voided receipt\'s items are excluded from revenueTotalArs, and its applications from unclassifiedAmountArs — the healthy sibling still counts', async () => {
+    const env = await makeEnv();
+    env.clock.now = new Date('2026-03-05T15:00:00.000Z');
+    await env.activate('c1', 'client-1', 'GR-1');
+
+    await env.seedCash('GR-1', '2026-03-10T15:00:00.000Z', 5000); // healthy — becomes receipt-1
+    await env.seedCash('GR-1', '2026-03-11T15:00:00.000Z', 8000); // will be voided — becomes receipt-2
+
+    // Void receipt-2 AFTER seeding it — upsert re-writes the SAME row (the
+    // exact re-upsert path the reconcile lane's "flip" exercises).
+    await env.receiptRepo.upsertBatch([
+      { grReceiptId: 'receipt-2', clientGrId: 'GR-1', recaudador: null, fechaRecibo: new Date('2026-03-11T15:00:00.000Z'), fechaConfirmacion: null, anulado: true, observaciones: null },
+    ]);
+
+    env.classificationRepo.seed('FB', 'revenue');
+    await env.applicationRepo.upsertBatch([
+      { grApplicationId: 'app-sano', receiptId: 'receipt-1', grInvoiceId: 'XZ-1-1', grType: 'XZ', amount: 900, appliedDate: null },
+      { grApplicationId: 'app-anulado', receiptId: 'receipt-2', grInvoiceId: 'XZ-2-2', grType: 'XZ', amount: 1200, appliedDate: null },
+    ]);
+
+    const snap = await env.useCase.execute('2026-03');
+
+    // Cash (items): ONLY the healthy receipt's 5000 — the voided receipt's
+    // 8000 must NOT leak through, even though its own item row still exists.
+    expect(snap.revenueTotalArs).toBe(5000);
+    // unclassifiedAmountArs: ONLY the healthy receipt's 900 application.
+    expect(snap.unclassifiedAmountArs).toBe(900);
+  });
+});

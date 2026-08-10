@@ -61,21 +61,21 @@ export class PrismaFinanceReceiptApplicationRepository implements FinanceReceipt
     await prisma.$transaction(ops);
   }
 
-  /** finance-growth Fase 3 rework (F9) — cuts by `receipt.fechaRecibo` (JOIN), NOT this row's own nullable `appliedDate`. Mirrors `PrismaFinanceReceiptItemRepository`'s fix-wave-4 W2 fix. */
+  /** finance-growth Fase 3 rework (F9) — cuts by `receipt.fechaRecibo` (JOIN), NOT this row's own nullable `appliedDate`. Mirrors `PrismaFinanceReceiptItemRepository`'s fix-wave-4 W2 fix. gr-receipt-annulment (design.md Decision 6, spec.md D3) adds `receipt.anulado: false`. */
   async listByMonth(yearMonth: string): Promise<FinanceReceiptApplication[]> {
     const { start, endExclusive } = yearMonthToDateRange(yearMonth);
     const rows: ApplicationRow[] = await this.table.findMany({
-      where: { receipt: { fechaRecibo: { gte: start, lt: endExclusive } } },
+      where: { receipt: { fechaRecibo: { gte: start, lt: endExclusive }, anulado: false } },
     });
     return rows.map(toEntity);
   }
 
-  /** finance-growth Fase 3 rework (F9) — same `receipt.fechaRecibo` cut as `listByMonth`, plus the client join. */
+  /** finance-growth Fase 3 rework (F9) — same `receipt.fechaRecibo` cut as `listByMonth`, plus the client join. gr-receipt-annulment (D4) adds `receipt.anulado: false`. */
   async listByClientAndMonth(clientGrId: string, yearMonth: string): Promise<FinanceReceiptApplication[]> {
     const { start, endExclusive } = yearMonthToDateRange(yearMonth);
     const rows: ApplicationRow[] = await this.table.findMany({
       where: {
-        receipt: { fechaRecibo: { gte: start, lt: endExclusive }, clientGrId },
+        receipt: { fechaRecibo: { gte: start, lt: endExclusive }, clientGrId, anulado: false },
       },
     });
     return rows.map(toEntity);

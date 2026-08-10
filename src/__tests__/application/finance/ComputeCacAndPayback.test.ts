@@ -55,11 +55,12 @@ async function makeEnv() {
     clientLinks.grClienteIdByClientId.set(clientId, grClienteId);
   }
   let receiptSeq = 0;
-  async function seedCash(clientGrId: string, iso: string, amount: number) {
+  /** gr-receipt-annulment — `anulado` defaults to `false` (existing call sites unaffected). */
+  async function seedCash(clientGrId: string, iso: string, amount: number, anulado = false) {
     receiptSeq += 1;
     const grReceiptId = `receipt-${receiptSeq}`;
     await receiptRepo.upsertBatch([
-      { grReceiptId, clientGrId, recaudador: null, fechaRecibo: new Date(iso), fechaConfirmacion: null, anulado: false, observaciones: null },
+      { grReceiptId, clientGrId, recaudador: null, fechaRecibo: new Date(iso), fechaConfirmacion: null, anulado, observaciones: null },
     ]);
     await itemRepo.upsertBatch([
       { grItemId: `${grReceiptId}-item-1`, receiptId: grReceiptId, banco: null, cajaCuentaId: null, destino: null, fecha: new Date(iso), amount, moneda: null, numeroTransferencia: null, tipo: null },
@@ -269,5 +270,27 @@ describe('ComputeCacAndPayback (design.md HTTP Contract "GET /cac")', () => {
 
     expect(result.altasDelMes.find((a) => a.contractId === 'lowercase-tech')).toBeDefined();
     expect(result.altasDelMesSinTecnologia).toBe(0);
+  });
+
+  // ── gr-receipt-annulment (design.md Decision 6, `finance-dashboard-annulment-filter`
+  // spec.md scenario 25, D5-equivalent) — closes deuda #7 for the CAC/payback
+  // attribution path (`itemRepo.listByClientAndMonth`). Fixture has TWO
+  // receipts with DISTINCT amounts for the SAME client — a single-receipt
+  // fixture would let "the filter doesn't filter" survive undetected.
+  it("gr-receipt-annulment: an anulado receipt's cash does NOT participate in this client's mrrAtribuidoArs — only the healthy receipt counts", async () => {
+    const env = await makeEnv();
+    await env.defineCost('Fibra', { costoVentaArs: 20000, costoInstalacionArs: 10000, costoMensualServicioArs: 0, comisionVentaPct: 0 });
+    await env.definePrice('IP-30', 10000);
+    env.seedContract('c1', 'client-1', 'Fibra');
+    await env.activateWithPlan('c1', 'IP-30');
+    env.linkClient('client-1', 'GR-1');
+    await env.seedCash('GR-1', '2026-03-15T12:00:00.000Z', 10000); // healthy
+    await env.seedCash('GR-1', '2026-03-16T12:00:00.000Z', 8000, true); // voided — must NOT be attributed
+
+    const result = await env.useCase.execute('Fibra', '2026-03');
+
+    const alta = result.altasDelMes.find((a) => a.contractId === 'c1');
+    expect(alta).toBeDefined();
+    expect(alta?.mrrAtribuidoArs).toBe(10000); // NOT 18000
   });
 });

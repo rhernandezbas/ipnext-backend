@@ -178,28 +178,31 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 7 — Filtros del dashboard + gemelos in-memory
 
-- [ ] 7.1 RED D1 `PrismaFinanceReceiptItemRepository.listByMonth` — espía `prisma.financeReceiptItem.
+- [x] 7.1 RED D1 `PrismaFinanceReceiptItemRepository.listByMonth` — espía `prisma.financeReceiptItem.
       findMany`, exige `where.receipt.anulado === false` junto a `fechaRecibo` (scenario 22).
-- [ ] 7.2 RED D2 `.listByClientAndMonth` idem + `clientGrId` (scenario 23).
-- [ ] 7.3 RED D3 `PrismaFinanceReceiptApplicationRepository.listByMonth` (scenario 24).
-- [ ] 7.4 RED D4 `.listByClientAndMonth` idem + `clientGrId` (scenario 25).
-- [ ] 7.5 GREEN agregar `anulado: false` a los 4 `where` Prisma.
-- [ ] 7.6 RED gemelos in-memory (`InMemoryFinanceReceiptItemRepository`,
+- [x] 7.2 RED D2 `.listByClientAndMonth` idem + `clientGrId` (scenario 23).
+- [x] 7.3 RED D3 `PrismaFinanceReceiptApplicationRepository.listByMonth` (scenario 24).
+- [x] 7.4 RED D4 `.listByClientAndMonth` idem + `clientGrId` (scenario 25).
+- [x] 7.5 GREEN agregar `anulado: false` a los 4 `where` Prisma.
+- [x] 7.6 RED gemelos in-memory (`InMemoryFinanceReceiptItemRepository`,
       `InMemoryFinanceReceiptApplicationRepository`) — mismos 4 casos, semántica IDÉNTICA al Prisma
       (scenario 26, evita el bug W2: el gemelo replicando el filtro equivocado).
-- [ ] 7.7 GREEN de 7.6 — agregar `&& !receipt.anulado` en el mismo `filter` que ya resuelve el padre.
-- [ ] 7.8 RED D5 `BuildFinanceMonthlySnapshot.test.ts` — fixture con AL MENOS 2 recibos (uno sano, uno
+- [x] 7.7 GREEN de 7.6 — agregar `&& !receipt.anulado` en el mismo `filter` que ya resuelve el padre.
+- [x] 7.8 RED D5 `BuildFinanceMonthlySnapshot.test.ts` — fixture con AL MENOS 2 recibos (uno sano, uno
       anulado, montos DISTINTOS): el anulado con items NO entra en la caja cobrada del mes ni sus
       aplicaciones en `unclassifiedAmountArs` (scenario 24 a nivel agregado; fixture no-degenerado).
-- [ ] 7.9 GREEN/confirmar 7.8 (probablemente ya satisfecho por 7.5/7.7; verificar integración).
-- [ ] 7.10 RED `ComputeCacAndPayback.test.ts` — recibo anulado aplicado a un contrato NO participa de la
+- [x] 7.9 GREEN/confirmar 7.8 — confirmado: pasó en VERDE en el primer intento, ya satisfecho por 7.5/7.7
+      (el use case no necesitó cambios, solo lee el port).
+- [x] 7.10 RED `ComputeCacAndPayback.test.ts` — recibo anulado aplicado a un contrato NO participa de la
       atribución de cobranza (scenario 25).
-- [ ] 7.11 GREEN/confirmar 7.10.
-- [ ] 7.12 RED `PrismaPortalPaymentsReader.test.ts` — fixture con recibo `anulado: true` real y monto
+- [x] 7.11 GREEN/confirmar 7.10 — confirmado: pasó en VERDE en el primer intento, mismo motivo que 7.9.
+- [x] 7.12 RED `PrismaPortalPaymentsReader.test.ts` — fixture con recibo `anulado: true` real y monto
       ≠ 0: exige PRESENCIA en el fixture antes de assertear su AUSENCIA del resultado (scenarios 27, 28);
       más un caso de recibo `anulado: false` que sigue apareciendo con la misma forma sin cambios
       (`date`/`amounts`/`method`/`appliedTo`, scenario 29 — el `WHERE` ya existe y NO se toca, esto es
-      gate, no RED nuevo sobre código nuevo).
+      gate, no RED nuevo sobre código nuevo). **Nota**: el test PAY-1.5 preexistente solo chequeaba la
+      FORMA del `where`, nunca probó que el filtro excluye de verdad — el mock nuevo aplica
+      `where.anulado`/`where.clientGrId` como un Prisma real, cerrando ese hueco de cobertura.
 
 ## Fase 8 — Contrafáctico + revert-probes
 

@@ -62,20 +62,21 @@ export class PrismaFinanceReceiptItemRepository implements FinanceReceiptItemRep
    * has its own index (`FinancePaymentReceipt_fechaRecibo_idx`) that this
    * JOIN actually uses.
    */
+  /** gr-receipt-annulment (design.md Decision 6, spec.md D1) — `receipt.anulado: false` closes deuda #7: without it, marking `anulado` on the ingest side changes nothing on the dashboard. */
   async listByMonth(yearMonth: string): Promise<FinanceReceiptItem[]> {
     const { start, endExclusive } = yearMonthToDateRange(yearMonth);
     const rows: ItemRow[] = await this.table.findMany({
-      where: { receipt: { fechaRecibo: { gte: start, lt: endExclusive } } },
+      where: { receipt: { fechaRecibo: { gte: start, lt: endExclusive }, anulado: false } },
     });
     return rows.map(toEntity);
   }
 
-  /** fix-wave-4 W2 — same `receipt.fechaRecibo` cut as `listByMonth`, plus the client join. */
+  /** fix-wave-4 W2 — same `receipt.fechaRecibo` cut as `listByMonth`, plus the client join. gr-receipt-annulment (D2) adds `receipt.anulado: false`. */
   async listByClientAndMonth(clientGrId: string, yearMonth: string): Promise<FinanceReceiptItem[]> {
     const { start, endExclusive } = yearMonthToDateRange(yearMonth);
     const rows: ItemRow[] = await this.table.findMany({
       where: {
-        receipt: { fechaRecibo: { gte: start, lt: endExclusive }, clientGrId },
+        receipt: { fechaRecibo: { gte: start, lt: endExclusive }, clientGrId, anulado: false },
       },
     });
     return rows.map(toEntity);

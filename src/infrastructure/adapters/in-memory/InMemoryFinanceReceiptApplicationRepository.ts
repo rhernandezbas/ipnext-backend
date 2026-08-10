@@ -33,11 +33,12 @@ export class InMemoryFinanceReceiptApplicationRepository implements FinanceRecei
    * `unclassifiedAmountArs` — the watchdog that exists so misclassified
    * money never disappears silently — inherited that exact blind spot).
    */
+  /** gr-receipt-annulment (design.md Decision 6, spec.md D3) — `&& !receipt.anulado` in the SAME filter that already resolves the parent, mirroring the real Prisma adapter's `receipt.anulado: false`. */
   async listByMonth(yearMonth: string): Promise<FinanceReceiptApplication[]> {
     this.assertReceiptsWired('listByMonth');
     return Array.from(this.rows.values()).filter((a) => {
-      const fechaRecibo = this.receipts!.rows.get(a.receiptId)?.fechaRecibo;
-      return !!fechaRecibo && arYearMonth(fechaRecibo) === yearMonth;
+      const receipt = this.receipts!.rows.get(a.receiptId);
+      return !!receipt?.fechaRecibo && arYearMonth(receipt.fechaRecibo) === yearMonth && !receipt.anulado;
     });
   }
 

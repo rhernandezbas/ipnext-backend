@@ -83,4 +83,46 @@ describe('InMemoryFinanceReceiptApplicationRepository — read path (F9: cut by 
     expect(rows).toHaveLength(1);
     expect(rows[0]?.amount).toBe(1200);
   });
+
+  // ── gr-receipt-annulment (design.md Decision 6, spec.md D3/D4) — the
+  // in-memory gemelo must be IDENTICAL in semantics to the real Prisma
+  // adapter; a divergence here is the exact bug W2 documents (the double
+  // replicating the WRONG filter, so its own tests never caught the
+  // regression).
+  describe('gr-receipt-annulment: anulado filter (scenario 26)', () => {
+    it('D3-in-memory — listByMonth excludes an anulado receipt\'s applications, with a non-degenerate fixture (two receipts, distinct amounts)', async () => {
+      const receipts = new InMemoryFinancePaymentReceiptRepository();
+      await receipts.upsertBatch([
+        { grReceiptId: 'R-sano', clientGrId: '100011', recaudador: 'mercadopago', fechaRecibo: new Date('2026-06-01T03:00:00Z'), fechaConfirmacion: null, anulado: false, observaciones: null },
+        { grReceiptId: 'R-anulado', clientGrId: '100022', recaudador: 'mercadopago', fechaRecibo: new Date('2026-06-02T03:00:00Z'), fechaConfirmacion: null, anulado: true, observaciones: null },
+      ]);
+      const repo = new InMemoryFinanceReceiptApplicationRepository(receipts);
+      await repo.upsertBatch([
+        { grApplicationId: 'A-sano', receiptId: 'R-sano', grInvoiceId: 'FB-1-1', grType: 'FB', amount: 5000, appliedDate: null },
+        { grApplicationId: 'A-anulado', receiptId: 'R-anulado', grInvoiceId: 'FB-2-2', grType: 'FB', amount: 8000, appliedDate: null },
+      ]);
+
+      const rows = await repo.listByMonth('2026-06');
+
+      expect(rows.map((a) => a.grApplicationId)).toEqual(['A-sano']);
+      expect(rows.reduce((s, a) => s + a.amount, 0)).toBe(5000);
+    });
+
+    it('D4-in-memory — listByClientAndMonth excludes an anulado receipt for that same client', async () => {
+      const receipts = new InMemoryFinancePaymentReceiptRepository();
+      await receipts.upsertBatch([
+        { grReceiptId: 'R-sano', clientGrId: '100011', recaudador: 'mercadopago', fechaRecibo: new Date('2026-06-01T03:00:00Z'), fechaConfirmacion: null, anulado: false, observaciones: null },
+        { grReceiptId: 'R-anulado', clientGrId: '100011', recaudador: 'mercadopago', fechaRecibo: new Date('2026-06-02T03:00:00Z'), fechaConfirmacion: null, anulado: true, observaciones: null },
+      ]);
+      const repo = new InMemoryFinanceReceiptApplicationRepository(receipts);
+      await repo.upsertBatch([
+        { grApplicationId: 'A-sano', receiptId: 'R-sano', grInvoiceId: 'FB-1-1', grType: 'FB', amount: 3000, appliedDate: null },
+        { grApplicationId: 'A-anulado', receiptId: 'R-anulado', grInvoiceId: 'FB-2-2', grType: 'FB', amount: 9000, appliedDate: null },
+      ]);
+
+      const rows = await repo.listByClientAndMonth('100011', '2026-06');
+
+      expect(rows.map((a) => a.grApplicationId)).toEqual(['A-sano']);
+    });
+  });
 });

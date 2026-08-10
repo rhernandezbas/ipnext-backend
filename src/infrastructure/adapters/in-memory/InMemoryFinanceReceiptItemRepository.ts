@@ -33,11 +33,12 @@ export class InMemoryFinanceReceiptItemRepository implements FinanceReceiptItemR
    * arYearMonth(i.fecha) === ym` filter — and this in-memory double replicated
    * that SAME wrong filter, so it never caught the regression).
    */
+  /** gr-receipt-annulment (design.md Decision 6, spec.md D1) — `&& !receipt.anulado` in the SAME filter that already resolves the parent, mirroring the real Prisma adapter's `receipt.anulado: false`. */
   async listByMonth(yearMonth: string): Promise<FinanceReceiptItem[]> {
     this.assertReceiptsWired('listByMonth');
     return Array.from(this.rows.values()).filter((i) => {
-      const fechaRecibo = this.receipts!.rows.get(i.receiptId)?.fechaRecibo;
-      return !!fechaRecibo && arYearMonth(fechaRecibo) === yearMonth;
+      const receipt = this.receipts!.rows.get(i.receiptId);
+      return !!receipt?.fechaRecibo && arYearMonth(receipt.fechaRecibo) === yearMonth && !receipt.anulado;
     });
   }
 
