@@ -48,10 +48,34 @@ export function isReopen(
 }
 
 /**
+ * MEDIUM-1 (fix wave 3 W1a) — ¿este sello está VACÍO, o sea no es un sello?
+ *
+ * Los cuatro campos en null es EXACTAMENTE la fila PRE-migración: `generalStatus='closed'`
+ * con las cuatro columnas de cierre sin escribir (son nuevas y no hubo backfill — el mismo
+ * discriminador que usa FIX-A en `applyTaskClosure`). No puede confundirse con un cierre
+ * real: `closeTaskIfOpen` siempre escribe `closureOrigin` (es requerido en su input) y
+ * `closedAt = now()`, así que un sello post-migración tiene al menos esos dos.
+ */
+export function isEmptyClosureStamp(stamp: ClosureStamp): boolean {
+  return (
+    stamp.closureOrigin === null &&
+    stamp.closureResultCode === null &&
+    stamp.closedAt === null &&
+    stamp.closedByUserId === null
+  );
+}
+
+/**
  * Lee el sello ANTES de que la escritura lo borre. Devuelve null cuando no hay nada que
  * preservar (no es un reopen, la tarea no existe, o es una fila legacy sin sello) — el
  * caller NO debe emitir `metadata` en ese caso: un objeto con cuatro nulls diría
  * "cerrada por nadie" cuando la verdad es "no hay dato".
+ *
+ * MEDIUM-1 — esa última rama (la fila legacy) era una PROMESA DEL DOCSTRING, no código:
+ * se devolvía tal cual lo que da el adapter, y para una fila pre-migración eso es el
+ * objeto de cuatro nulls que el propio comentario dice que no hay que emitir. El descarte
+ * vive acá, en el ÚNICO consumidor del sello, y no duplicado en los dos `getClosureStamp`
+ * — así los dos adapters quedan coherentes por construcción y no hay hermano que olvidar.
  */
 export async function readClearedClosureStamp(
   repo: SchedulingRepository,
@@ -60,7 +84,9 @@ export async function readClearedClosureStamp(
   next: TaskGeneralStatus | undefined,
 ): Promise<ClosureStamp | null> {
   if (!isReopen(previous, next)) return null;
-  return repo.getClosureStamp(taskId);
+  const stamp = await repo.getClosureStamp(taskId);
+  if (stamp === null || isEmptyClosureStamp(stamp)) return null;
+  return stamp;
 }
 
 /** `{ clearedClosure }` listo para spread, o `undefined` cuando no hay sello. */

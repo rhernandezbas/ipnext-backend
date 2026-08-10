@@ -415,7 +415,19 @@ export class IngestClosedServiceOrders {
         // Sellar DESPUÉS del intento y sólo la primera vez (el adapter lo hace
         // condicional). Va acá y no en el upsert porque lo que marca es el INTENTO, no
         // el espejo: si esta línea se moviera arriba de los bails, el bug vuelve.
-        if (!alreadyAttempted) await this.closed.markClosureAttempted(s.iclassId);
+        //
+        // LOW-1 (fix wave 3 W1a) — y sólo cuando el intento fue EVALUABLE-REPORTABLE.
+        // El sello se estampaba también cuando FIX-A había callado por FILA LEGACY, y ahí
+        // no se juzgó nada: no había sello contra el cual contrastar. Gastar el único
+        // disparo del gate en ese no-evento dejaba suprimido PARA SIEMPRE el conflicto
+        // real posterior (el operador reabre → alguien re-cierra post-migración con otro
+        // código → IClass bumpea → el ingest pierde de verdad y no puede reportarlo).
+        // Sí consumen el disparo: el cierre GANADO y la derrota contra un ganador
+        // post-migración — se haya reportado o se haya silenciado por código igual /
+        // por perdedor sin código —, porque en los dos casos hubo evaluación.
+        if (!alreadyAttempted && !closeResult.legacySuppressed) {
+          await this.closed.markClosureAttempted(s.iclassId);
+        }
         if (closeResult.closed && this.recorder) {
           await this.recorder.record(task.id, 'status_changed', {
             actor: SYSTEM_ACTOR,

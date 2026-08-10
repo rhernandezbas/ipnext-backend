@@ -404,11 +404,13 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
       const row = await tx.scheduledTask.findUnique({ where: { id }, include: INCLUDE });
       return { count, row };
     }, {
-      // Knob DECIDIDO, no heredado del default implícito de Prisma (2s/5s). Son DOS
-      // sentencias sobre una fila ya lockeada: si tardan más que esto, el problema no
-      // se arregla esperando. `timeout` corto libera la conexión (y el row lock) rápido
-      // en vez de bloquear a todos los demás escritores del mismo task; `maxWait` corto
-      // hace que un pool saturado falle rápido y visible en vez de encolar cierres.
+      // FIX-δ (fix wave 3) — la verdad, sin inflar: estos valores SON los defaults
+      // actuales de Prisma (maxWait 2s / timeout 5s). Escribirlos acá no cambia el
+      // comportamiento de hoy; es un PIN contra un cambio futuro del default. Son dos
+      // sentencias sobre una fila ya lockeada: si tardan más que esto el problema no se
+      // arregla esperando, así que un `timeout` corto libera la conexión (y el row lock)
+      // rápido en vez de bloquear a los demás escritores del mismo task, y un `maxWait`
+      // corto hace que un pool saturado falle rápido y visible en vez de encolar cierres.
       maxWait: 2_000,
       timeout: 5_000,
     });

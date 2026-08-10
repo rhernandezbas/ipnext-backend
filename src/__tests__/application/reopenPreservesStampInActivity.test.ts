@@ -19,8 +19,10 @@ import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory
 import { SetTaskGeneralStatus } from '@application/use-cases/SetTaskGeneralStatus';
 import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { applyTaskClosure } from '@application/use-cases/applyTaskClosure';
+import { readClearedClosureStamp } from '@application/use-cases/reopenClosureStamp';
 import { FakeTaskActivityRecorder } from '../helpers/FakeTaskActivityRecorder';
 import { EntityLookup } from '@domain/ports/EntityLookup';
+import { ClosureStamp } from '@domain/ports/SchedulingRepository';
 
 const ACTOR = { actorId: 'user-77', actorName: 'Operadora' };
 
@@ -84,6 +86,85 @@ describe('FIX-C — SetTaskGeneralStatus: el status_changed del reopen lleva el 
 
     const ev = statusChanged(recorder);
     expect(ev.metadata ?? null).toBeNull(); // ni un objeto con cuatro nulls: NADA
+  });
+});
+
+/**
+ * ── MEDIUM-1 (fix wave 3 W1a) — el SELLO VACÍO no se emite ────────────────────────
+ *
+ * El docstring de `readClearedClosureStamp` prometía null "cuando es una fila legacy sin
+ * sello", y el spec lo fija: "cuando la tarea es una fila legacy sin sello el evento NO
+ * lleva metadata". El código NO lo cumplía: devolvía tal cual lo que da el adapter, que
+ * para una fila PRE-migración es un objeto con las CUATRO columnas en null. Eso viaja al
+ * `status_changed` como `clearedClosure: {null,null,null,null}` — que es exactamente lo
+ * que el comentario dice que hay que evitar: "cerrada por nadie" en vez de "no hay dato".
+ *
+ * El fixture era cómplice: `seedTask` SIEMPRE poblaba `closedAt` para una tarea sembrada
+ * cerrada, así que el in-memory no podía exhibir la fila de cuatro nulls que Postgres sí
+ * produce. Se habilita explícitamente con `{ legacyClosure: true }` (el default no cambia).
+ */
+describe('MEDIUM-1 — una fila LEGACY (cuatro nulls) reabre SIN metadata', () => {
+  it('in-memory: seedTask legacyClosure → el status_changed del reopen no lleva clearedClosure', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const recorder = new FakeTaskActivityRecorder();
+    repo.seedTask({ id: 't1', generalStatus: 'closed', isClosed: true }, { legacyClosure: true });
+
+    // Presencia antes que ausencia: la fila legacy EXISTE y es exactamente la de 4 nulls.
+    expect((await repo.getTask('t1'))!.generalStatus).toBe('closed');
+    expect(repo.getClosureDetails('t1')).toBeNull();
+    expect(await repo.getClosureStamp('t1')).toEqual({
+      closureOrigin: null, closureResultCode: null, closedAt: null, closedByUserId: null,
+    });
+
+    await new SetTaskGeneralStatus(repo, recorder).execute('t1', 'open', ACTOR);
+
+    const ev = statusChanged(recorder);
+    expect(ev.fromValue).toBe('closed');
+    expect(ev.toValue).toBe('open');
+    expect(ev.metadata ?? null).toBeNull(); // ni un objeto con cuatro nulls: NADA
+  });
+
+  it('camino PRISMA (mock coherente con lo que devuelve el adapter para una fila legacy)', async () => {
+    // `PrismaSchedulingRepository.getClosureStamp` sobre una fila pre-migración devuelve
+    // este objeto exacto: la fila está `closed` (no da null) pero las cuatro columnas
+    // nuevas nunca se escribieron. Se calca en un adapter que por lo demás es el real.
+    const PRISMA_LEGACY_STAMP: ClosureStamp = {
+      closureOrigin: null, closureResultCode: null, closedAt: null, closedByUserId: null,
+    };
+    class PrismaLegacyShapeRepo extends InMemorySchedulingRepository {
+      async getClosureStamp(): Promise<ClosureStamp | null> { return { ...PRISMA_LEGACY_STAMP }; }
+    }
+    const repo = new PrismaLegacyShapeRepo();
+    const recorder = new FakeTaskActivityRecorder();
+    repo.seedTask({ id: 't1', generalStatus: 'closed', isClosed: true }, { legacyClosure: true });
+    expect(await repo.getClosureStamp()).toEqual(PRISMA_LEGACY_STAMP); // presencia del shape
+
+    await new SetTaskGeneralStatus(repo, recorder).execute('t1', 'open', ACTOR);
+
+    expect(statusChanged(recorder).metadata ?? null).toBeNull();
+  });
+
+  it('UpdateTask (el hermano) sobre una fila legacy tampoco inventa clearedClosure', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const recorder = new FakeTaskActivityRecorder();
+    repo.seedTask({ id: 't1', generalStatus: 'closed', isClosed: true }, { legacyClosure: true });
+    const any = new AnyLookup();
+
+    await new UpdateTask(repo, any, any, any, any, any, recorder).execute('t1', { isClosed: false }, ACTOR);
+
+    expect(statusChanged(recorder).metadata ?? null).toBeNull();
+  });
+
+  it('el helper devuelve null para el sello vacío y PRESERVA cualquier sello con un dato', async () => {
+    const repo = new InMemorySchedulingRepository();
+    repo.seedTask({ id: 'legacy', generalStatus: 'closed', isClosed: true }, { legacyClosure: true });
+    expect(await readClearedClosureStamp(repo, 'legacy', 'closed', 'open')).toBeNull();
+
+    // CONTRASTE: un sello con UN SOLO campo poblado NO es vacío — no se descarta.
+    repo.seedTask({ id: 'parcial', generalStatus: 'closed', isClosed: true });
+    const parcial = await readClearedClosureStamp(repo, 'parcial', 'closed', 'open');
+    expect(parcial).not.toBeNull();
+    expect(typeof parcial!.closedAt).toBe('string');
   });
 });
 

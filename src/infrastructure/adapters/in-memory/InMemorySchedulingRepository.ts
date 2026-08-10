@@ -732,8 +732,21 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     return true;
   }
 
-  /** Test helper: seed a fully-formed task (lets tests set derived JOIN fields). */
-  seedTask(overrides: Partial<ScheduledTask> & Pick<ScheduledTask, 'id'>): ScheduledTask {
+  /**
+   * Test helper: seed a fully-formed task (lets tests set derived JOIN fields).
+   *
+   * MEDIUM-1 (fix wave 3 W1a) — `opts.legacyClosure` seeds the OTHER closed state that
+   * Postgres really holds: the PRE-migration row, `generalStatus='closed'` with the four
+   * closure columns in NULL (columnas nuevas, sin backfill). Sin esta opción el in-memory
+   * NO PODÍA exhibirla — el default de abajo siempre puebla `closedAt` — y un test sobre
+   * "la fila legacy no tiene sello" quedaba como fixture degenerado: verde por no poder
+   * construir el estado que quiere probar. El default NO cambia (otros tests dependen de
+   * que una tarea sembrada cerrada traiga su `closedAt`).
+   */
+  seedTask(
+    overrides: Partial<ScheduledTask> & Pick<ScheduledTask, 'id'>,
+    opts: { legacyClosure?: boolean } = {},
+  ): ScheduledTask {
     const task = makeTask({
       sequenceNumber: nextSequenceNumber++,
       title: overrides.title ?? 'Seeded task',
@@ -758,7 +771,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
     // Postgres can never hold, and a future test asserting "closing stamps closedAt"
     // would read null and be "fixed" by weakening the assertion instead of the code.
     // resultCode stays null (the seed did not claim one) unless the caller pins it.
-    if (task.generalStatus === 'closed') {
+    // MEDIUM-1 — salvo `legacyClosure`, que es justamente la fila SIN sello.
+    if (task.generalStatus === 'closed' && !opts.legacyClosure) {
       this.closureDetails.set(task.id, {
         resultCode: null,
         closedByUserId: null,

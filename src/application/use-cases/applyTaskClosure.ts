@@ -57,9 +57,43 @@ function isRealConflict(result: CloseTaskResult, loserResultCode: string | null)
   if (loserResultCode === null) return false;
   const winner = result.existingResultCode;
   // FIX-A — legacy row (neither origin nor result): nothing to contradict.
-  if (winner === null && result.existingOrigin === null) return false;
+  if (isLegacyLoss(result)) return false;
   if (winner === null) return true;
   return normalizeResultCode(winner) !== normalizeResultCode(loserResultCode);
+}
+
+/**
+ * LOW-1 (fix wave 3 W1a) — ¿esta llamada perdió contra una FILA LEGACY?
+ *
+ * Es el mismo discriminador de FIX-A, extraído porque ahora tiene DOS consumidores: el
+ * silencio del reporte (arriba) y el gate del ingest (abajo, vía `legacySuppressed`).
+ * Perder contra una fila sin sello NO es un juicio: no había con qué juzgar.
+ */
+function isLegacyLoss(result: CloseTaskResult): boolean {
+  return (
+    !result.closed &&
+    result.task !== null &&
+    result.existingOrigin === null &&
+    result.existingResultCode === null
+  );
+}
+
+/**
+ * LOW-1 (fix wave 3 W1a) — el resultado del guard MÁS lo que el caller necesita saber
+ * sobre la EVALUACIÓN. Aditivo: extiende `CloseTaskResult`, así que los callers que sólo
+ * miran `closed`/`task`/`existing*` no se enteran.
+ */
+export interface ApplyTaskClosureResult extends CloseTaskResult {
+  /**
+   * true cuando este intento perdió contra una fila LEGACY y por eso se calló: la
+   * discrepancia no se evaluó por FALTA DE DATO, no porque no la hubiera.
+   *
+   * Lo consume el gate "reportá una sola vez" del ingest (`closureAttemptedAt`): un
+   * intento no evaluable no puede consumir el único disparo del gate, o el conflicto
+   * REAL posterior (reopen → re-cierre post-migración → bump con otro código) queda
+   * suprimido para siempre.
+   */
+  legacySuppressed: boolean;
 }
 
 /**
@@ -77,7 +111,7 @@ export async function applyTaskClosure(
   repo: SchedulingRepository,
   recorder: TaskActivityRecorder | undefined,
   input: ApplyTaskClosureInput,
-): Promise<CloseTaskResult> {
+): Promise<ApplyTaskClosureResult> {
   const resultCode = input.resultCode ?? null;
   const result = await repo.closeTaskIfOpen(input.taskId, {
     origin: input.origin,
@@ -104,5 +138,5 @@ export async function applyTaskClosure(
     }
   }
 
-  return result;
+  return { ...result, legacySuppressed: isLegacyLoss(result) };
 }

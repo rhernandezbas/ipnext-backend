@@ -26,11 +26,49 @@
  * significant character cannot end an expression — because `/['"]/` would otherwise
  * look like an unterminated string and desync everything after it.
  *
+ * MEDIUM-2 (fix wave 3) — the "previous significant character" is not enough: after a
+ * KEYWORD (`return /re/`, `await /re/`, `typeof /re/`, `case /re/`…) that character is a
+ * plain LETTER, so the `/` read as a division and the literal went untokenized. With the
+ * commonest regex of all — one matching a URL, `/https:\/\//` — the last two characters
+ * of the literal are `//`, which the stripper then took for a line-comment opener and
+ * DELETED the rest of the line, taking any violation living on that same line with it.
+ * Same silent false negative as FIX-F, different door. Now a `/` also opens a regex when
+ * the preceding token is one of those keywords, matched as a WHOLE WORD (an identifier
+ * ending in `return`, or a property named `.in`, must stay a division).
+ *
  * Residual, on purpose: the heuristic is not a full JS parser. It is exercised against
  * the whole production tree on every run, and the two allowlisted adapters carry an
  * EXACT-COUNT pin (FIX-E) that goes red the moment the stripper starts swallowing their
  * closure write — that pair is the live canary for a desync, not this comment.
  */
+
+/**
+ * MEDIUM-2 — keywords after which a `/` can only start a REGEX, never a division: none of
+ * them can END an expression. Deliberately excludes anything ambiguous (an identifier, a
+ * `)`, a `]`) — when in doubt the safe side is "division", which never deletes a line.
+ */
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  'return', 'typeof', 'case', 'in', 'of', 'void',
+  'delete', 'do', 'else', 'instanceof', 'new', 'throw', 'yield', 'await',
+]);
+
+/**
+ * The trailing identifier of already-emitted text, ignoring trailing whitespace. Returns
+ * '' when there is none or when it is a PROPERTY access (`cfg.in`) — a property named like
+ * a keyword is an ordinary value and a `/` after it is a division. O(word length): it
+ * walks backwards a handful of characters, never the whole buffer.
+ */
+function trailingWord(out: string): string {
+  const isIdent = (c: string) => /[A-Za-z0-9_$]/.test(c);
+  let end = out.length;
+  while (end > 0 && /\s/.test(out[end - 1]!)) end--;
+  let start = end;
+  while (start > 0 && isIdent(out[start - 1]!)) start--;
+  if (start === end) return '';
+  if (start > 0 && out[start - 1] === '.') return ''; // cfg.in / 2 → división
+  return out.slice(start, end);
+}
+
 export function stripComments(src: string): string {
   let out = '';
   let i = 0;
@@ -38,6 +76,9 @@ export function stripComments(src: string): string {
   let lastSignificant = '';
   const canPrecedeRegex = (ch: string): boolean =>
     ch === '' || '([{,;:=!&|?+-*%~^<>'.includes(ch);
+  /** MEDIUM-2 — …or the previous TOKEN is a keyword that cannot end an expression. */
+  const inRegexPosition = (): boolean =>
+    canPrecedeRegex(lastSignificant) || REGEX_PRECEDING_KEYWORDS.has(trailingWord(out));
 
   while (i < src.length) {
     const ch = src[i]!;
@@ -74,7 +115,7 @@ export function stripComments(src: string): string {
     }
 
     // ── regex literal: `/['"]/` must not look like an unterminated string ──
-    if (ch === '/' && canPrecedeRegex(lastSignificant)) {
+    if (ch === '/' && inRegexPosition()) {
       let j = i + 1;
       let closed = false;
       let inClass = false;

@@ -32,6 +32,7 @@ import { applyTaskClosure } from '@application/use-cases/applyTaskClosure';
 import { FakeTaskActivityRecorder } from '../helpers/FakeTaskActivityRecorder';
 import { Stage } from '@domain/entities/workflow';
 import { ClosedServiceOrderSummary, SoStatusHistoryEntry } from '@domain/entities/iclass-closed-order';
+import { ScheduledTask } from '@domain/entities/scheduling';
 
 const REGISTRADO: Stage = { id: 'st-reg', workflowId: 'wf', name: 'Registrado en IClass', code: 'registered_in_iclass', category: 'nuevo', order: 5, color: null };
 const INSTALADO: Stage = { id: 'st-inst', workflowId: 'wf', name: 'Instalado', code: 'instalado', category: 'hecho', order: 8, color: null };
@@ -59,7 +60,10 @@ function summary(overrides: Partial<ClosedServiceOrderSummary> = {}): ClosedServ
   };
 }
 
-function harness() {
+function harness(
+  taskOverrides: Partial<ScheduledTask> = {},
+  seedOpts: { legacyClosure?: boolean } = {},
+) {
   const stages = new InMemoryStageRepository();
   stages.addDirect(REGISTRADO);
   stages.addDirect(INSTALADO);
@@ -70,7 +74,7 @@ function harness() {
   const state = new InMemorySyncStateRepository();
   const recorder = new FakeTaskActivityRecorder();
 
-  scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+  scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id, ...taskOverrides }, seedOpts);
   iclass.serviceOrders = [summary()];
   iclass.historyByOrder['900'] = HISTORY_CLOSED;
 
@@ -207,5 +211,106 @@ describe('FIX-B — el intento queda PERSISTIDO en el espejo (no es un flag en m
     const state = await h.closed.findSyncStateByIclassId('900');
     expect(state).not.toBeNull(); // el espejo está…
     expect(state!.closureAttemptedAt).toBeNull(); // …pero el intento no ocurrió
+  });
+
+  // ── FIX-δ(d) (fix wave 3) — el bail #41 G2 estaba SÓLO en el docstring ────────────
+  // El otro bail que se saltea el cierre (la tarea `dismissed`: espejo sí, side-effects
+  // no) motivó FIX-B en prosa pero nunca tuvo test. Sin él, mover el `markClosureAttempted`
+  // arriba de ese `return` — el bug exacto que FIX-B arregló — pasaba en verde.
+  it('una ingesta que BAILA por tarea DISMISSED tampoco sella el intento', async () => {
+    const h = harness({ generalStatus: 'dismissed' });
+    await h.mapResultCode();
+
+    await h.useCase.execute();
+
+    const state = await h.closed.findSyncStateByIclassId('900');
+    expect(state).not.toBeNull(); // el espejo SÍ se escribe (#41 G2: mirror-only)
+    expect(state!.closureAttemptedAt).toBeNull(); // …y el cierre nunca se intentó
+    expect(h.conflicts()).toHaveLength(0);
+
+    // Y el derecho a reportar SIGUE INTACTO: el operador reabre, el staff cierra con
+    // otro resultado y el siguiente tick por fin intenta cerrar → la discrepancia sale.
+    await h.scheduling.updateTask('t1', { generalStatus: 'open' });
+    await h.staffWinsWith('REAGENDADO');
+    h.bumpUpdatedAt('2026-05-22T10:00:00.000Z');
+    await h.useCase.execute();
+
+    expect(h.conflicts()).toHaveLength(1);
+  });
+});
+
+/**
+ * ── LOW-1 (fix wave 3 W1a) — la supresión LEGACY no consume el derecho a reportar ───
+ *
+ * FIX-A hizo bien en CALLAR contra una fila legacy (cuatro columnas en null = "no hay
+ * dato", no "un ganador que cerró sin resultado"). Pero el sello del gate se estampaba
+ * IGUAL, aunque no se hubiera juzgado nada: el único disparo del gate se gastaba en un
+ * no-evento. El conflicto REAL posterior — el operador reabre, alguien cierra POST
+ * migración con otro resultado, IClass bumpea — quedaba suprimido para siempre.
+ *
+ * Regla: el sello se consume sólo cuando el intento fue EVALUABLE-REPORTABLE (cierre
+ * ganado, o derrota contra un ganador post-migración, se haya reportado o no).
+ */
+describe('LOW-1 — la derrota contra una fila LEGACY no gasta el gate', () => {
+  it('backfill legacy (silencio, sin sello) → el conflicto real POSTERIOR sí se reporta, una vez', async () => {
+    const h = harness({ generalStatus: 'closed', isClosed: true }, { legacyClosure: true });
+    await h.mapResultCode();
+
+    // Corrida 1 — el backfill sobre la tarea cerrada hace meses.
+    await h.useCase.execute();
+    const afterBackfill = await h.closed.findSyncStateByIclassId('900');
+    expect(afterBackfill).not.toBeNull(); // presencia: el flujo corrió de verdad (espejo escrito)
+    expect(h.conflicts()).toHaveLength(0); // FIX-A: silencio contra la fila legacy
+    expect(afterBackfill!.closureAttemptedAt).toBeNull(); // …y NO consumió el derecho a reportar
+
+    // Post-migración: el operador reabre y el staff cierra con OTRO resultado.
+    await h.scheduling.updateTask('t1', { generalStatus: 'open' });
+    await h.staffWinsWith('REAGENDADO');
+    h.bumpUpdatedAt('2026-05-22T10:00:00.000Z');
+
+    await h.useCase.execute();
+
+    expect(h.conflicts()).toHaveLength(1);
+    expect(h.conflicts()[0]!.payload.metadata).toMatchObject({
+      winnerOrigin: 'staff',
+      winnerResultCode: 'REAGENDADO',
+      loserOrigin: 'iclass',
+      loserResultCode: RESULT_CODE,
+    });
+    expect(loggedConflict()).toBe(true);
+    // AHORA sí se selló: el intento fue evaluable.
+    expect(typeof (await h.closed.findSyncStateByIclassId('900'))!.closureAttemptedAt).toBe('string');
+
+    // Y una vez consumido, FIX-4(d) sigue vivo: ni un reporte más.
+    h.bumpUpdatedAt('2026-05-23T10:00:00.000Z');
+    await h.useCase.execute();
+    expect(h.conflicts()).toHaveLength(1);
+  });
+
+  it('re-ingesta repetida de la MISMA fila legacy: silencio siempre, y ni un sello fantasma', async () => {
+    const h = harness({ generalStatus: 'closed', isClosed: true }, { legacyClosure: true });
+    await h.mapResultCode();
+
+    for (const iso of ['2026-05-22T10:00:00.000Z', '2026-05-23T10:00:00.000Z', '2026-05-24T10:00:00.000Z']) {
+      h.bumpUpdatedAt(iso);
+      await h.useCase.execute();
+    }
+
+    expect(h.conflicts()).toHaveLength(0);
+    expect(loggedConflict()).toBe(false);
+    expect((await h.closed.findSyncStateByIclassId('900'))!.closureAttemptedAt).toBeNull();
+  });
+
+  it('CONTRASTE: la derrota SILENCIADA por código IGUAL (ganador post-migración) SÍ gasta el gate', async () => {
+    // No hubo reporte, pero SÍ hubo juicio: el ganador tiene sello post-migración y su
+    // código coincide. Ese intento es evaluable-reportable y consume el disparo.
+    const h = harness();
+    await h.mapResultCode();
+    await h.staffWinsWith(RESULT_CODE);
+
+    await h.useCase.execute();
+
+    expect(h.conflicts()).toHaveLength(0);
+    expect(typeof (await h.closed.findSyncStateByIclassId('900'))!.closureAttemptedAt).toBe('string');
   });
 });

@@ -185,12 +185,48 @@ const ALLOWED_CLOSURE_WRITES: Record<string, ClosureWriteCounts> = {
   [CLOSURE_IMPLEMENTORS[1]!]: { "generalStatus: 'closed'": 1, 'isClosed: true': 1 },
 };
 
+/**
+ * FIX-δ (fix wave 3) — jest no acepta un mensaje en `expect`, así que la GUÍA de qué
+ * hacer cuando el pin se pone rojo se adjunta al error. Sin esto, el fallo se lee como
+ * "un número no coincide" y el arreglo obvio (y equivocado) es subir el número.
+ */
+function withGuidance(guidance: string, assertion: () => void): void {
+  try {
+    assertion();
+  } catch (e) {
+    const err = e as Error;
+    err.message = `${err.message}\n\n──────── QUÉ SIGNIFICA ESTE ROJO ────────\n${guidance}\n`;
+    throw err;
+  }
+}
+
+const PIN_GUIDANCE = [
+  'NO subas el número para poner el test en verde.',
+  '',
+  'Una escritura de cierre NUEVA en un adapter significa que hay un camino que cierra',
+  'tareas SIN pasar por closeTaskIfOpen — que es exactamente la race (read → decide en',
+  'memoria → write, sin WHERE guardado) que arregla la wave-1a. Revisá, en este orden:',
+  '',
+  '  1. ¿La escritura nueva está FUERA de closeTaskIfOpen? Entonces es el bug: rutéala',
+  '     por applyTaskClosure() → repo.closeTaskIfOpen(), como hacen los 5 escritores.',
+  '  2. ¿Es un helper "de conveniencia" dentro del mismo archivo? Mismo caso: el literal',
+  '     sólo puede vivir dentro del cuerpo del guard.',
+  '  3. ¿El guard cambió de FORMA a propósito (p.ej. dos updateMany en vez de uno)?',
+  '     Recién ahí se actualiza ALLOWED_CLOSURE_WRITES, en el MISMO commit, con el',
+  '     porqué escrito al lado.',
+  '',
+  'Y si el conteo cayó a CERO: no desapareció el guard, se desincronizó el stripper',
+  '(staticSourceScan.stripComments) y se está comiendo el cuerpo del adapter. Ver FIX-F.',
+].join('\n');
+
 describe('wave-1a — FIX-E: en los adapters allowlisted la escritura de cierre está PINEADA', () => {
   it.each(CLOSURE_IMPLEMENTORS)('%s: conteo EXACTO de literales de cierre (una segunda escritura rompe el test)', (relPath) => {
     const src = stripComments(readFileSync(join(SRC_DIR, relPath), 'utf8'));
-    expect({ file: relPath, ...countClosureWrites(src) }).toEqual({
-      file: relPath,
-      ...ALLOWED_CLOSURE_WRITES[relPath]!,
+    withGuidance(PIN_GUIDANCE, () => {
+      expect({ file: relPath, ...countClosureWrites(src) }).toEqual({
+        file: relPath,
+        ...ALLOWED_CLOSURE_WRITES[relPath]!,
+      });
     });
   });
 
@@ -199,11 +235,19 @@ describe('wave-1a — FIX-E: en los adapters allowlisted la escritura de cierre 
     const body = methodBody(src, 'closeTaskIfOpen');
     expect(body).not.toBeNull(); // presencia antes que ausencia: el método existe y se pudo aislar
     const inBody = countClosureWrites(body!);
-    // Si el cuerpo tiene MENOS que el archivo, hay una escritura de cierre AFUERA del guard.
-    expect({ file: relPath, ...inBody }).toEqual({ file: relPath, ...countClosureWrites(src) });
-    // Y el cuerpo aislado tiene que traer las escrituras de verdad (no un {} vacío).
-    expect(inBody["generalStatus: 'closed'"]).toBeGreaterThan(0);
-    expect(inBody['isClosed: true']).toBeGreaterThan(0);
+    withGuidance(PIN_GUIDANCE, () => {
+      // Si el cuerpo tiene MENOS que el archivo, hay una escritura de cierre AFUERA del guard.
+      expect({ file: relPath, ...inBody }).toEqual({ file: relPath, ...countClosureWrites(src) });
+      // Y el cuerpo aislado tiene que traer las escrituras de verdad (no un {} vacío).
+      expect(inBody["generalStatus: 'closed'"]).toBeGreaterThan(0);
+      expect(inBody['isClosed: true']).toBeGreaterThan(0);
+    });
+  });
+
+  it('FIX-δ self-test: cuando el pin falla, el error TRAE la guía (si no, nadie la lee)', () => {
+    expect(() => withGuidance(PIN_GUIDANCE, () => expect(2).toBe(1))).toThrow(/NO subas el número/);
+    // Y cuando pasa, no se inventa nada.
+    expect(() => withGuidance(PIN_GUIDANCE, () => expect(1).toBe(1))).not.toThrow();
   });
 });
 
@@ -381,6 +425,64 @@ describe('wave-1a — self-tests: every detector is discriminating', () => {
       [`const slash = /\\/\\//g;`, `await repo.updateTask(id, { generalStatus: 'closed' });`].join('\n'),
     );
     expect(extractCallArgs(bad, '.updateTask(').some(closesTheTask)).toBe(true);
+  });
+
+  // ── MEDIUM-2 (fix wave 3) — el `/` de un regex literal en posición de KEYWORD ─────
+  //
+  // `canPrecedeRegex` sólo miraba el ÚLTIMO CARÁCTER significativo (`([{,;:=!&|?+-*%~^<>`).
+  // Después de `return`, `await`, `typeof`, `case`… el carácter previo es una LETRA, así
+  // que un `/` ahí se tomaba como división y el regex quedaba sin tokenizar. Con un regex
+  // que contiene `\/` — el caso más común de todos, matchear una URL — los dos últimos
+  // caracteres del literal son `//`, y el stripper los leía como apertura de comentario:
+  // borraba desde ahí hasta el fin de la línea, LLEVÁNDOSE UNA VIOLACIÓN QUE VIVIERA EN
+  // LA MISMA LÍNEA. Falso negativo silencioso, igual que FIX-F.
+  const REGEX_KEYWORDS = [
+    'return', 'typeof', 'case', 'in', 'of', 'void',
+    'delete', 'do', 'else', 'instanceof', 'new', 'throw', 'yield', 'await',
+  ] as const;
+
+  it.each(REGEX_KEYWORDS)(
+    'MEDIUM-2: un regex terminado en \\/ después de `%s` no se come el resto de la línea',
+    (kw) => {
+      const bad = stripComments(
+        `${kw} /https:\\/\\//.test(u); await repo.updateTask(id, { generalStatus: 'closed' })`,
+      );
+      expect(bad).toContain('updateTask('); // presencia antes que ausencia: la línea sobrevivió
+      expect(extractCallArgs(bad, '.updateTask(').some(closesTheTask)).toBe(true);
+    },
+  );
+
+  it('MEDIUM-2: `)` antes de `/` SIGUE siendo división (no se rompe `(a + b) / c`)', () => {
+    const src = stripComments(
+      `const r = (a + b) / c; // un comentario de verdad\nawait repo.updateTask(id, { generalStatus: 'closed' });`,
+    );
+    expect(src).toContain('(a + b) / c'); // la división quedó intacta
+    expect(src).not.toContain('un comentario de verdad'); // y el comentario SÍ se borró
+    expect(extractCallArgs(src, '.updateTask(').some(closesTheTask)).toBe(true);
+  });
+
+  it('MEDIUM-2: un identificador que TERMINA en keyword no habilita el modo regex (`myreturn / 2`)', () => {
+    const src = stripComments(
+      `const q = myreturn / 2; // un comentario de verdad\nawait repo.updateTask(id, { isClosed: true });`,
+    );
+    expect(src).toContain('myreturn / 2');
+    expect(src).not.toContain('un comentario de verdad');
+    expect(extractCallArgs(src, '.updateTask(').some(closesTheTask)).toBe(true);
+  });
+
+  it('MEDIUM-2: una PROPIEDAD llamada como una keyword tampoco (`cfg.in / 2`)', () => {
+    const src = stripComments(
+      `const q = cfg.in / 2; // un comentario de verdad\nawait repo.updateTask(id, { isClosed: true });`,
+    );
+    expect(src).toContain('cfg.in / 2');
+    expect(src).not.toContain('un comentario de verdad');
+    expect(extractCallArgs(src, '.updateTask(').some(closesTheTask)).toBe(true);
+  });
+
+  it('MEDIUM-2: el regex tras keyword se copia ENTERO al stripped (no se parte a la mitad)', () => {
+    const stripped = stripComments(`const ok = () => { return /a\\/b/.test(x); }; // fuera`);
+    expect(stripped).toContain('/a\\/b/');
+    expect(stripped).not.toContain('fuera');
   });
 
   it('comment stripping: the bug pattern written ONLY in a comment is invisible to every detector', () => {
