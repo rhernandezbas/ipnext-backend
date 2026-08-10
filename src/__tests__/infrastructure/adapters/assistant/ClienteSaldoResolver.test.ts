@@ -3,8 +3,10 @@ import { assertFactsArePiiFree } from '@application/use-cases/assistant/assistan
 import type { Customer } from '@domain/entities/customer';
 import type { CustomerRepository } from '@domain/ports/CustomerRepository';
 import type { AssistantSubjectContext } from '@domain/ports/AssistantDataSourceRegistry';
-import { MOTIVO_GUIA, type AssistantMotivo } from '@infrastructure/adapters/assistant/assistantMotivoGuia';
+import { MOTIVO_GUIA, GUIA_SALDO_A_FAVOR, type AssistantMotivo } from '@infrastructure/adapters/assistant/assistantMotivoGuia';
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
+import { GetClientDetail } from '@application/use-cases/GetClientDetail';
+import { buildNumberWhitelist, findUnbackedNumbers } from '@application/use-cases/assistant/assistantNumberVerifier';
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import { parseClientBalanceResponse } from '@infrastructure/adapters/gestion-real/GestionRealClient';
@@ -93,17 +95,96 @@ describe('ClienteSaldoResolver', () => {
     });
   });
 
-  it('F1b — saldo a favor (debt negativa ⇒ currency null): tampoco deriva a humano', async () => {
-    const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-1500.50', FRESH_AT) });
+  /**
+   * ⚠️ **FW2-1 — el saldo NEGATIVO no se emite crudo.**
+   *
+   * El `saldo: -5000` viajaba tal cual a los hechos, y el verificador de números
+   * lo recorre para armar el whitelist: `collectFromValue(-5000)` mete `"5000"`
+   * como cifra RESPALDADA. Resultado: "tenés una deuda de 5000" pasaba la última
+   * red del sistema — el mismo número, con el signo (y la moneda, que acá es
+   * `null`) perdidos en el camino.
+   *
+   * La fila es PRODUCIBLE: `parseGrDebtStrict` acepta negativos, y el parser
+   * sintetiza `currency = amount > 0 ? 'ARS' : null` ⇒ un crédito llega SIEMPRE
+   * sin denominar. Un monto sin moneda es exactamente lo que el guard de moneda
+   * existe para no emitir.
+   */
+  it('FW2-1 — saldo a favor (debt negativa): el monto NO sale en los hechos (saldo clampeado a 0, tieneDeuda false)', async () => {
+    const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-5000.00', FRESH_AT) });
+    // Premisa: la fila real trae el crédito SIN moneda.
+    expect(aFavor.balanceDue).toBe(-5000);
     expect(aFavor.balanceCurrency).toBeNull();
 
-    const resolver = new ClienteSaldoResolver(repoOf(aFavor));
+    const facts = await new ClienteSaldoResolver(repoOf(aFavor)).resolve(ctx);
 
-    await expect(resolver.resolve(ctx)).resolves.toMatchObject({
+    expect(facts).toMatchObject({
       disponible: true,
+      saldo: 0,
+      moneda: null,
       tieneDeuda: false,
-      saldo: -1500.5,
+      // El crédito no se puede decir, pero tampoco se puede ignorar: el copy
+      // manda a un asesor en vez de dejar al modelo improvisando.
+      guia: GUIA_SALDO_A_FAVOR,
     });
+    // El pin que importa: el monto no está, ni con signo ni sin él.
+    expect(JSON.stringify(facts)).not.toContain('5000');
+    // Y la guía misma no puede meter cifras por la puerta de al lado
+    // (todo texto de los hechos alimenta el whitelist del verificador).
+    expect(GUIA_SALDO_A_FAVOR).not.toMatch(/\d{3,}/);
+  });
+
+  it('FW2-1 — el cliente al día (saldo exactamente 0) NO lleva guía de crédito: no hay nada que confirmar', async () => {
+    const alDia = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('0.00', FRESH_AT) });
+
+    const facts = await new ClienteSaldoResolver(repoOf(alDia)).resolve(ctx);
+
+    expect(facts).toEqual({
+      disponible: true,
+      saldo: 0,
+      moneda: null,
+      tieneDeuda: false,
+      estadoCliente: 'active',
+    });
+  });
+
+  /**
+   * FW2-1 (b) — **el pin del verificador**, que es donde el daño se materializaba.
+   *
+   * `buildNumberWhitelist` recorre los hechos y respalda toda secuencia de 3+
+   * dígitos que encuentre. Con el saldo crudo, `5000` quedaba autorizado y el
+   * modelo podía escribirlo en cualquier frase — incluida la inversa exacta de la
+   * verdad ("tenés una deuda de 5000" sobre un cliente con saldo A FAVOR).
+   */
+  it('FW2-1b — con esos hechos, 5000 NO está en el whitelist del verificador (y "deuda de 5000" se marca sin respaldo)', async () => {
+    const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-5000.00', FRESH_AT) });
+
+    const facts = await new ClienteSaldoResolver(repoOf(aFavor)).resolve(ctx);
+    const whitelist = buildNumberWhitelist({ facts, profileTexts: [], customerMessages: [] });
+
+    expect(whitelist.has('5000')).toBe(false);
+    expect(findUnbackedNumbers('Tenés una deuda de 5000 pesos', whitelist)).toContain('5000');
+  });
+
+  /**
+   * FW2-1 (c) — **la asimetría es DELIBERADA, no un olvido.**
+   *
+   * El bot clampa el negativo porque lo lee un modelo que va a repetir la cifra
+   * a un cliente por WhatsApp, sin moneda y sin signo. La ficha y el inbox NO lo
+   * clampan: los lee un HUMANO de soporte, para quien `-5000` es información
+   * legítima (saldo a favor) que puede interpretar y confirmar. Este test pinea
+   * las dos mitades juntas para que nadie "unifique" el criterio por prolijidad.
+   */
+  it('FW2-1c — asimetría deliberada: el bot clampa el negativo, la ficha (humano) ve el crudo', async () => {
+    const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-5000.00', FRESH_AT) });
+    const repo = repoOf(aFavor);
+
+    const facts = await new ClienteSaldoResolver(repo).resolve(ctx);
+    const ficha = await new GetClientDetail(repo).execute('client-1');
+
+    expect(facts).toMatchObject({ saldo: 0 });
+    expect(JSON.stringify(facts)).not.toContain('5000');
+    // El humano SÍ ve el crudo, con signo.
+    expect(ficha.balanceDue).toBe(-5000);
   });
 
   // ── La regla que importa ─────────────────────────────────────────────────

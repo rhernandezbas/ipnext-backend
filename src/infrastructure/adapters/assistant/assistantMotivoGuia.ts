@@ -44,6 +44,24 @@ export const MOTIVO_GUIA: Record<AssistantMotivo, string> = {
 };
 
 /**
+ * fix wave 2 (FW2-1) — guía para el `disponible:true` del SALDO A FAVOR.
+ *
+ * No es un motivo (el hecho SÍ está disponible: "no debe nada"), pero necesita
+ * copy propio por la misma razón que los motivos: el monto del crédito **no se
+ * emite** —llega sin moneda (`amount > 0 ? 'ARS' : null`), y un número sin
+ * denominar sobre la plata de alguien es justo lo que este change existe para no
+ * decir—, así que el modelo se queda con `tieneDeuda:false` y sin nada que
+ * responder si el cliente pregunta "¿cuánto tengo a favor?". Sin guía improvisa,
+ * y lo único que tiene a mano para improvisar es el hilo.
+ *
+ * ⚠️ **Sin dígitos, a propósito.** Todo texto que viaje en los hechos lo recorre
+ * `buildNumberWhitelist` y sus cifras quedan RESPALDADAS: meter un número acá
+ * sería reabrir por la puerta de al lado el agujero que FW2-1 cierra.
+ */
+export const GUIA_SALDO_A_FAVOR =
+  'El cliente no tiene deuda: tiene saldo a favor. Decile que esta al dia. Si pregunta cuanto tiene a favor, decile que un asesor se lo confirma. No menciones ningun importe.';
+
+/**
  * Construye el hecho "no disponible" COMPLETO: motivo + guía, siempre juntos.
  *
  * Que sea una función y no un objeto suelto es a propósito: un `return

@@ -92,9 +92,53 @@ them the one thing the bot already knew how to say.
 - THEN `{disponible:true, saldo:0, tieneDeuda:false, ...}` — NOT `moneda_no_confirmada`
 
 #### Scenario: credit balance (negative debt)
-- GIVEN `balanceDue < 0` (credit), `balanceCurrency: null`, balance fresh
+- GIVEN `balanceDue = -5000` (credit), `balanceCurrency: null`, balance fresh
 - WHEN `resolve()` runs
-- THEN `{disponible:true, tieneDeuda:false, ...}`
+- THEN `{disponible:true, saldo:0, moneda:null, tieneDeuda:false, estadoCliente, guia: GUIA_SALDO_A_FAVOR}`
+- AND the facts contain NO occurrence of `5000` in any field (see the next requirement)
+
+### Requirement: a signed amount NEVER reaches the facts
+When `balanceDue <= 0` the resolver MUST emit `saldo: 0` and `moneda: null` — never the stored
+amount. A negative balance MUST NOT be emitted, not even as a negative number.
+
+Two things are lost between the column and the prompt, and both are lost silently:
+- the SIGN — the model reads `-5000` as the token `5000` and can restate it as a debt;
+- the CURRENCY — a credit is `null` by construction (`amount > 0 ? 'ARS' : null`), so the figure
+  is undenominated, which is precisely what the currency guard exists to refuse.
+
+And there is no last line of defence: `buildNumberWhitelist` walks the facts, so an emitted
+`-5000` WHITELISTS the string `5000` — "tenés una deuda de 5000" would then pass the number
+verifier on a client who has that money IN THEIR FAVOUR.
+
+When `balanceDue < 0` the facts MUST additionally carry `guia: GUIA_SALDO_A_FAVOR`: the amount
+cannot be stated, so the copy tells the bot to say the client is up to date and to route the
+"how much do I have in credit?" question to a human. That `guia` MUST NOT contain any digit run
+of 3+ (it would whitelist itself).
+
+This clamp is asymmetric ON PURPOSE and the asymmetry MUST be preserved: `GetClientDetail` (the
+ficha) and `GetInboxClientContext` (the inbox) keep emitting the raw `-5000`, because a human
+support agent reads those and a signed credit is legitimate information for them. Only the bot's
+facts — read by a model that will restate them to the customer — are clamped.
+
+#### Scenario: the number verifier does not whitelist the credit
+- GIVEN the facts produced for a `balanceDue = -5000` client
+- WHEN `buildNumberWhitelist({facts, ...})` runs
+- THEN `5000` is NOT in the whitelist, and `findUnbackedNumbers('… deuda de 5000 …', wl)`
+  reports it as unbacked
+
+#### Scenario: up-to-date client (exactly zero) carries no credit guidance
+- GIVEN `balanceDue = 0`
+- THEN `{disponible:true, saldo:0, moneda:null, tieneDeuda:false, estadoCliente}` — no `guia`,
+  because nothing was left unanswered
+
+#### Scenario: the ficha still shows the credit to a human
+- GIVEN the same client (`balanceDue = -5000`)
+- WHEN `GetClientDetail.execute` runs
+- THEN `balanceDue` is `-5000` — the raw signed value, unclamped
+
+#### Contra-scenario (revert probe)
+- GIVEN the resolver goes back to emitting `saldo: customer.balanceDue` on the `<= 0` branch
+- THEN both the facts test and the whitelist pin MUST fail
 
 ### Requirement: every unavailable fact carries the copy the bot must use
 Any `disponible:false` result MUST include a `guia` field with the EXACT wording the bot is to

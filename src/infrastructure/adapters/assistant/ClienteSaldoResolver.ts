@@ -4,7 +4,7 @@ import type {
   AssistantSubjectContext,
 } from '@domain/ports/AssistantDataSourceRegistry';
 import type { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
-import { motivoNoDisponible } from './assistantMotivoGuia';
+import { motivoNoDisponible, GUIA_SALDO_A_FAVOR } from './assistantMotivoGuia';
 
 /**
  * ai-assistant-multiagent — fuente `cliente.saldo`.
@@ -36,6 +36,9 @@ import { motivoNoDisponible } from './assistantMotivoGuia';
  * **Pero sólo cuando hay un monto POSITIVO que denominar** (fix wave F1): la escritura real
  * sintetiza `currency = amount > 0 ? 'ARS' : null`, así que "moneda null" es, en los hechos,
  * el cliente AL DÍA. Un guard incondicional convertía el carril feliz en un handoff masivo.
+ * Y en esa rama el monto NO se emite (fix wave 2, FW2-1): `saldo: 0` fijo. Un crédito llega
+ * sin moneda, el signo no sobrevive al prompt, y el monto crudo whitelistearía su propia
+ * cifra en el verificador de números — "deuda de 5000" sobre plata a favor, verificada.
  *
  * Proyección EXPLÍCITA campo por campo: `Customer` trae `name`, `email`, `phone`, `address`.
  * Un spread acá sería una fuga directa (la cazaría `assertFactsArePiiFree`, pero el diseño no
@@ -83,14 +86,30 @@ export class ClienteSaldoResolver implements AssistantDataSourceResolver {
     //
     // "$0" no necesita moneda: cero pesos y cero dólares son el mismo hecho, y
     // el hecho que el bot emite es `tieneDeuda:false`, no una cifra a cobrar.
+    //
+    // fix wave 2 (FW2-1) — **el monto <= 0 NO viaja crudo.** La rama emitía
+    // `saldo: customer.balanceDue`, así que un crédito salía como `saldo: -5000`
+    // con `moneda: null`. Dos cosas se pierden en el camino al prompt: el signo
+    // (el modelo lee "5000" a secas) y la moneda (que en un crédito es SIEMPRE
+    // null por construcción del parser). Y no queda ni la última red: el
+    // verificador de números recorre los hechos para armar su whitelist, así que
+    // `-5000` **autoriza** la cadena "5000" — "tenés una deuda de 5000" pasaba
+    // verificada, sobre un cliente que tiene esa plata A FAVOR.
+    //
+    // El hecho que el bot necesita acá es `tieneDeuda:false`, no una cifra. El
+    // `saldo: 0` es literal y suficiente: no debe nada. El crédito lo confirma un
+    // humano (ver `GUIA_SALDO_A_FAVOR`).
     if (customer.balanceDue <= 0) {
       return {
         disponible: true,
-        saldo: customer.balanceDue,
-        // null cuando no hay monto que denominar — honesto, no un 'ARS' inventado.
-        moneda: customer.balanceCurrency ?? null,
+        saldo: 0,
+        // No hay monto que denominar: null siempre, nunca un 'ARS' heredado.
+        moneda: null,
         tieneDeuda: false,
         estadoCliente: customer.status,
+        // Sólo el crédito lleva guía: es el único caso donde queda algo sin
+        // responder ("¿cuánto tengo a favor?") y el bot no lo puede decir.
+        ...(customer.balanceDue < 0 ? { guia: GUIA_SALDO_A_FAVOR } : {}),
       };
     }
 
