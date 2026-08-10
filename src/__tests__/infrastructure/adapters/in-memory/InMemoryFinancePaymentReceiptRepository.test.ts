@@ -39,12 +39,55 @@ describe('InMemoryFinancePaymentReceiptRepository.upsertBatch — same one-way a
     expect(repo.rows.get('R1')?.anulado).toBe(true);
   });
 
-  it('the OTHER fields are still refreshed on an update, even while the latch holds anulado', async () => {
+  // fix-wave-2 RFX2 — this assertion used to check `recaudador` ALONE, so a
+  // twin that FROZE `observaciones`/`fechaConfirmacion` (i.e. kept `prior`'s
+  // value where Prisma writes the incoming one) passed the entire 7.167-test
+  // suite. A field-by-field twin is only worth having if EVERY field it copies
+  // is pinned: one un-asserted field is one field where the double can drift
+  // away from the SQL production runs, silently, forever.
+  //
+  // The whole row is compared at once ON PURPOSE: adding a column to the
+  // Prisma `update` block without adding it here now fails this test instead
+  // of passing unnoticed.
+  it('the update refreshes ALL FIVE fields of the Prisma `update` block, with the latch as the ONLY exception', async () => {
     const repo = new InMemoryFinancePaymentReceiptRepository();
-    await repo.upsertBatch([row('R1', true, 'mercadopago')]);
-    await repo.upsertBatch([row('R1', false, 'rapipago')]);
-    expect(repo.rows.get('R1')?.recaudador).toBe('rapipago');
-    expect(repo.rows.get('R1')?.anulado).toBe(true);
+    await repo.upsertBatch([
+      {
+        grReceiptId: 'R1',
+        clientGrId: '100011',
+        recaudador: 'mercadopago',
+        fechaRecibo: new Date('2026-07-01T13:00:00.000Z'),
+        fechaConfirmacion: new Date('2026-07-02T13:00:00.000Z'),
+        anulado: true,
+        observaciones: 'nota vieja',
+      },
+    ]);
+
+    await repo.upsertBatch([
+      {
+        grReceiptId: 'R1',
+        clientGrId: '200022',
+        recaudador: 'rapipago',
+        fechaRecibo: new Date('2026-08-05T13:00:00.000Z'),
+        fechaConfirmacion: new Date('2026-08-06T13:00:00.000Z'),
+        anulado: false,
+        // An INCOMING null OVERWRITES a previous value — verified against the
+        // real adapter: `update: { observaciones: null }` is a plain SET NULL
+        // in Prisma, not "leave as is". Only `anulado` gets the omit-on-false
+        // treatment, and it gets it EXPLICITLY.
+        observaciones: null,
+      },
+    ]);
+
+    expect(repo.rows.get('R1')).toEqual({
+      grReceiptId: 'R1',
+      clientGrId: '200022',
+      recaudador: 'rapipago',
+      fechaRecibo: new Date('2026-08-05T13:00:00.000Z'),
+      fechaConfirmacion: new Date('2026-08-06T13:00:00.000Z'),
+      anulado: true,
+      observaciones: null,
+    });
   });
 });
 
