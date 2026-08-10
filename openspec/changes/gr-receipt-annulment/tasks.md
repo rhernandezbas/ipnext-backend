@@ -27,8 +27,11 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
       ELIMINÓ. Certificaba una regla falsa — el rebuild nocturno recomputa `[mes anterior, mes
       corriente]`, o sea 28 días GARANTIZADOS, no 35; la invariante estaba invertida y el número
       inventado. Hoy el rango es el nominal `[1, 90]` (default 35) y la corrección la aporta el
-      encolado de meses fuera de horizonte (`financeSnapshotRebuildQueue`), que no depende del ancho
-      de la ventana.
+      encolado de meses ya cerrados (`financeSnapshotRebuildQueue`), que no depende del ancho
+      de la ventana. **Refinado por la fix-wave-2 (RFX1)**: el encolado tampoco depende ya del
+      horizonte nocturno — se encola todo flip cuyo mes NO sea el mes corriente (AR) al momento del
+      ingest. Consultar el horizonte con el reloj del ingest era una carrera contra el reloj del
+      nocturno, con ~21 h ciegas en cada borde de mes.
 - [x] 1.8 RED `existingIds(grReceiptIds: string[]): Promise<Set<string>>` — método obligatorio nuevo en
       el port `FinancePaymentReceiptRepository`; sin implementarlo en algún adapter, no compila.
 - [x] 1.9 GREEN `existingIds` en Prisma (`findMany({ where: { grReceiptId: { in } }, select:

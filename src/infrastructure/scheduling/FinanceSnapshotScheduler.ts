@@ -41,8 +41,8 @@ import type { BuildFinanceMonthlySnapshot } from '@application/use-cases/finance
 import type { BuildFinanceCohortSnapshot } from '@application/use-cases/finance/BuildFinanceCohortSnapshot';
 import type { DistributedLock } from '@domain/ports/DistributedLock';
 import type { SyncStateRepository } from '@domain/ports/SyncStateRepository';
-import { arYearMonth, previousYearMonth } from '@application/use-cases/finance/financeDates';
-import { readSnapshotRebuildQueue, clearSnapshotRebuildMonths } from '@application/use-cases/finance/financeSnapshotRebuildQueue';
+import { previousYearMonth } from '@application/use-cases/finance/financeDates';
+import { readSnapshotRebuildQueue, clearSnapshotRebuildMonths, nightlyRebuildHorizon } from '@application/use-cases/finance/financeSnapshotRebuildQueue';
 
 const LOCK_KEY = 'finance-snapshot-job';
 /** finance-growth Fase 3 rework (J3) — SAME entity key `GetFinanceSyncStatus.SNAPSHOT_JOB_ENTITY` reads from. */
@@ -107,8 +107,11 @@ export class FinanceSnapshotScheduler {
       }
 
       const errors: string[] = [];
-      const currentYearMonth = arYearMonth(this.now());
-      const previous = previousYearMonth(currentYearMonth);
+      // fix-wave-2 RFX1 — the horizon comes from `nightlyRebuildHorizon`, the
+      // SAME function the rebuild-queue module documents as "what the nightly
+      // covers". It used to be re-derived inline here; two expressions of one
+      // concept is how they drift.
+      const [previous, currentYearMonth] = nightlyRebuildHorizon(this.now());
 
       // gr-receipt-annulment fix-wave RF3 — months an ingest carril queued
       // because an ANNULMENT flipped a receipt belonging OUTSIDE this job's
@@ -118,7 +121,7 @@ export class FinanceSnapshotScheduler {
       // run is in flight survives the clear (`clearSnapshotRebuildMonths`
       // re-reads and subtracts).
       const queued = this.state ? await readSnapshotRebuildQueue(this.state) : [];
-      const horizon = [previous, currentYearMonth];
+      const horizon: string[] = [previous, currentYearMonth];
       const extraQueued = queued.filter((ym) => !horizon.includes(ym));
 
       const monthsComputed: string[] = [];

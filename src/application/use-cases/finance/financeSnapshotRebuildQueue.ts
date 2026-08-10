@@ -39,14 +39,27 @@ export const SNAPSHOT_REBUILD_QUEUE_ENTITY = 'finance-snapshot-rebuild-queue';
  */
 export const SNAPSHOT_REBUILD_QUEUE_MAX_MONTHS = 240;
 
-/** The months `FinanceSnapshotScheduler` recomputes on EVERY nightly run, no queue needed. */
-export function nightlyRebuildHorizon(now: Date): string[] {
+/**
+ * `[mes anterior, mes corriente]` — the months `FinanceSnapshotScheduler`
+ * recomputes on EVERY nightly run, no queue needed. THE definition of that
+ * horizon: the scheduler destructures this instead of re-deriving
+ * `arYearMonth`/`previousYearMonth` inline, so there is exactly one place
+ * where "what the nightly covers" is decided.
+ *
+ * fix-wave-2 RFX1 — there used to be an `isWithinNightlyRebuildHorizon(ym,
+ * now)` companion, used by the ingest to decide whether to queue a flip's
+ * month. It is GONE, not merely unused: asking that question with the
+ * INGEST's clock about a horizon the NIGHTLY recomputes with its own is a
+ * race that no amount of care at the call site can fix (see
+ * `financeReceiptPageIngest.persistReceiptPage` for the measured hole). The
+ * ingest now queues on a predicate that involves no second clock at all —
+ * "not the current month". This function survives only as the NIGHTLY's own
+ * statement about the NIGHTLY's own horizon, evaluated with the nightly's own
+ * clock, which is the one use that was never racy.
+ */
+export function nightlyRebuildHorizon(now: Date): [previous: string, current: string] {
   const current = arYearMonth(now);
   return [previousYearMonth(current), current];
-}
-
-export function isWithinNightlyRebuildHorizon(yearMonth: string, now: Date): boolean {
-  return nightlyRebuildHorizon(now).includes(yearMonth);
 }
 
 function parseQueue(cursor: string | null | undefined): string[] {

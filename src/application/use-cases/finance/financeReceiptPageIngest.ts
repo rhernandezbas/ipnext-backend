@@ -10,7 +10,7 @@ import { mapGrReceipt, receiptIdentityHolds, MappedGrReceipt } from './mapGrRece
 import { financeAnnulmentGuard, AnnulmentGuardPageContext } from './financeAnnulmentGuard';
 import { FinanceReceiptPersistenceError } from './financeIngestErrors';
 import { arYearMonth } from './financeDates';
-import { enqueueSnapshotRebuild, isWithinNightlyRebuildHorizon } from './financeSnapshotRebuildQueue';
+import { enqueueSnapshotRebuild } from './financeSnapshotRebuildQueue';
 
 /**
  * gr-receipt-annulment (design.md Decision 8) — the ONE fetch→map→guard→persist
@@ -44,7 +44,7 @@ export interface PersistReceiptPageRepos {
   /**
    * gr-receipt-annulment fix-wave RF3 — the SAME `SyncStateRepository` the
    * lane already uses for its own cursor. MANDATORY (never optional-trailing,
-   * R9 criterion): this is what queues an out-of-horizon month for the nightly
+   * R9 criterion): this is what queues an already-closed month for the nightly
    * snapshot rebuild, and a lost wiring would make the dashboard disagree with
    * the mirror forever, silently.
    */
@@ -103,18 +103,48 @@ export async function persistReceiptPage(
     // `anulado: true`, so it is no longer a flip) — the month would keep the
     // stale cash forever. A spurious queued month (enqueue ok, write fails)
     // costs one redundant, idempotent rebuild.
+    //
+    // ── fix-wave-2 RFX1: WHICH months get queued.
+    //
+    // This used to be "every month OUTSIDE the nightly horizon
+    // (`[mes anterior, mes corriente]`)", evaluated with the INGEST's clock.
+    // That is a race between two clocks: the nightly job recomputes its own
+    // horizon, hours later, with ITS clock. Measured hole: a flip at 20:00 ART
+    // on 28-02 for a receipt of 28-01 read the horizon as [2026-01, 2026-02],
+    // concluded "already covered", and queued NOTHING; the next nightly ran on
+    // 01-03 with horizon [2026-02, 2026-03] — January was never rebuilt and
+    // that month's snapshot overstated the cash FOREVER. ~21 h of blind window
+    // per month, silently, with every test green.
+    //
+    // The rule now ignores the horizon entirely: a flip is queued unless its
+    // month is the CURRENT one in Argentina at ingest time. The race
+    // disappears structurally rather than being narrowed — there is no longer
+    // a second clock to disagree with. The two borders:
+    //
+    //  - Flip on the PREVIOUS month: queued, even though tonight's nightly
+    //    would have rebuilt it anyway. Cost of the redundancy ≈ 0 — the queue
+    //    dedups (`enqueueSnapshotRebuild` does not even write when the month is
+    //    already pending), the nightly filters queued months already in its
+    //    horizon (`extraQueued`) so nothing is rebuilt twice, and the month is
+    //    dequeued by the same run. We pay one deduplicated string in a
+    //    `SyncState.cursor` to delete a whole class of clock race.
+    //  - Flip on the CURRENT month at 23:59 of its last day: NOT queued, and
+    //    still repaired — by the time any nightly runs, that month is either
+    //    the current one or the previous one, i.e. inside `[prev, current]` by
+    //    construction. The only way to lose it is a nightly job that does not
+    //    run at all for a FULL calendar month, and such an outage leaves every
+    //    month stale anyway (it is an outage of the metrics engine, not a hole
+    //    in this rule); `GET /sync/status` reports `finance-snapshot-job`'s
+    //    `lastRunAt` precisely so that outage is visible.
     const flips = await detectAnnulmentFlips(mapped, repos.receiptRepo);
-    const outOfHorizon = [
-      ...new Set(
-        flips
-          .map((f) => f.yearMonth)
-          .filter((ym): ym is string => ym !== null && !isWithinNightlyRebuildHorizon(ym, now)),
-      ),
+    const currentMonth = arYearMonth(now);
+    const monthsToRebuild = [
+      ...new Set(flips.map((f) => f.yearMonth).filter((ym): ym is string => ym !== null && ym !== currentMonth)),
     ];
-    if (outOfHorizon.length > 0) {
-      const queue = await enqueueSnapshotRebuild(repos.syncState, outOfHorizon, now);
+    if (monthsToRebuild.length > 0) {
+      const queue = await enqueueSnapshotRebuild(repos.syncState, monthsToRebuild, now);
       console.warn(
-        `[finance-receipts-${lane}] ${outOfHorizon.length} mes(es) FUERA del horizonte del rebuild nocturno tocados por una anulación (${outOfHorizon.join(',')}) — encolados para reconstrucción. Cola pendiente: ${queue.join(',') || '(vacía)'}`,
+        `[finance-receipts-${lane}] ${monthsToRebuild.length} mes(es) YA CERRADO(S) tocados por una anulación (${monthsToRebuild.join(',')}) — encolados para reconstrucción del snapshot. Cola pendiente: ${queue.join(',') || '(vacía)'}`,
       );
     }
 

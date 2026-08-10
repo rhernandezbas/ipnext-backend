@@ -102,8 +102,8 @@ re-upsertea cada recibo de esa ventana (una página GR por tick, mismo criterio 
 delta/backfill: `"{fechaDesde}:{fechaHasta}:{offset}"`, `SyncState` propio `finance-receipts-reconcile`).
 `reconcileWindowDays` es un knob de COBERTURA en `[1, 90]`, default `35` — cuán tarde puede llegar una
 confirmación/anulación y todavía ser cazada. NO es un invariante de corrección: la visibilidad en el
-dashboard la garantiza el encolado de rebuild (ver el requirement "Out-of-horizon annulments queue their
-month"), no el ancho de la ventana. `reconcileCheckIntervalMs` MUST ser configurable en DB, default
+dashboard la garantiza el encolado de rebuild (ver el requirement "An annulment on a closed month queues
+that month for a snapshot rebuild"), no el ancho de la ventana. `reconcileCheckIntervalMs` MUST ser configurable en DB, default
 `21600000` (6 h), con piso `3600000` (1 h) — por debajo, el carril queda permanentemente "due" y se lleva
 ~71% del presupuesto compartido de GR, matando de hambre al backfill.
 
@@ -135,13 +135,31 @@ se leen dos veces, recibos que se saltean). Hoy es exactamente lo que cubre el c
   garantiza **28** días — el 1 de marzo cubre desde el 1 de febrero. El invariante estaba INVERTIDO y el
   número inventado; la corrección se movió al encolado de meses, abajo.)
 
-### Requirement: Out-of-horizon annulments queue their month for a snapshot rebuild
+### Requirement: An annulment on a closed month queues that month for a snapshot rebuild
 
 Cuando el espejo pasa un recibo de `anulado: false` a `anulado: true` (un FLIP — el recibo ya estaba
-espejado, así que su plata YA fue contada por un snapshot), y el mes de su `fechaRecibo` cae FUERA del
-horizonte que el job nocturno recomputa (`[mes anterior, mes corriente]`), el sistema MUST encolar ese mes
-para reconstrucción explícita. El job nocturno MUST reconstruir los meses encolados ADEMÁS de su horizonte,
-y MUST desencolar sólo los que reconstruyó con éxito.
+espejado, así que su plata YA fue contada por un snapshot), y el mes de su `fechaRecibo` NO es el mes
+CORRIENTE en hora argentina al momento del ingest, el sistema MUST encolar ese mes para reconstrucción
+explícita. El job nocturno MUST reconstruir los meses encolados ADEMÁS de su horizonte
+(`[mes anterior, mes corriente]`), y MUST desencolar sólo los que reconstruyó con éxito.
+
+La condición de encolado MUST NOT depender del horizonte del job nocturno. El horizonte se recomputa con el
+reloj del NOCTURNO; consultarlo con el reloj del INGEST es una carrera entre dos relojes que se abre en cada
+borde de mes: un flip de las 20:00 ART del 28-02 sobre un recibo del 28-01 lee el horizonte como
+`[2026-01, 2026-02]`, concluye "ya cubierto" y no encola nada; el nocturno corre el 01-03 con horizonte
+`[2026-02, 2026-03]` y enero no se reconstruye NUNCA (~21 h de ventana ciega por mes, en silencio).
+Con la regla "≠ mes corriente" no hay un segundo reloj con el cual discrepar.
+(Previously: "el mes cae FUERA del horizonte que el job nocturno recomputa".)
+
+Los dos bordes de la regla nueva:
+- Un flip del mes ANTERIOR se encola aunque el nocturno de esta misma noche ya lo fuera a cubrir. La
+  redundancia cuesta ≈ 0: la cola deduplica (encolar un mes ya pendiente ni siquiera escribe), el nocturno
+  filtra los encolados que ya están en su horizonte (no reconstruye dos veces) y los desencola igual.
+- Un flip del mes CORRIENTE a las 23:59 del último día del mes NO se encola, y se repara igual: cuando
+  corra cualquier nocturno, ese mes ya es el corriente o el anterior, es decir está dentro de
+  `[mes anterior, mes corriente]` por construcción. El único modo de perderlo es un nocturno que no corra
+  en un mes calendario ENTERO — una caída del motor de métricas que deja stale a todos los meses, visible
+  en `GET /sync/status` (`finance-snapshot-job.lastRunAt`), no un agujero de esta regla.
 
 #### Scenario: An annulment on a closed month repairs that month's snapshot
 - GIVEN un recibo del 31-01 ya espejado y contado en el snapshot de `2026-01`
@@ -151,10 +169,18 @@ y MUST desencolar sólo los que reconstruyó con éxito.
 - AND la siguiente corrida del job nocturno recomputa `2026-01` y lo desencola — el dashboard deja de
   contar esa plata
 
-#### Scenario: A flip inside the nightly horizon queues nothing
-- GIVEN un recibo del mes corriente o del anterior que flipea a anulado
-- WHEN se persiste
-- THEN NO se encola nada — el job nocturno ya recomputa esos dos meses todas las noches
+#### Scenario: A flip near the month boundary is queued regardless of the nightly horizon
+- GIVEN un recibo del 28-01 ya espejado
+- WHEN flipea a anulado el 28-02 a las 20:00 ART (el mes corriente es `2026-02`, el horizonte del nocturno
+  todavía incluiría `2026-01`)
+- THEN `2026-01` SE ENCOLA igual — el nocturno que efectivamente corre lo hace el 01-03, ya sin `2026-01`
+  en su horizonte, y sólo la cola lo reconstruye
+
+#### Scenario: A flip on the CURRENT month queues nothing
+- GIVEN un recibo cuyo mes es el mes corriente en hora argentina
+- WHEN se persiste el flip
+- THEN NO se encola nada — todo nocturno recomputa el mes corriente, y cuando el mes cierre pasa a ser el
+  mes anterior, que también recomputa
 
 #### Scenario: A failed rebuild keeps the month queued
 - GIVEN `2026-01` encolado
