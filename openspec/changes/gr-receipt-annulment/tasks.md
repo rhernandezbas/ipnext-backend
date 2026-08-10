@@ -206,30 +206,69 @@ tests de `where` de los adapters Prisma espían `prisma.<tabla>.findMany`, molde
 
 ## Fase 8 — Contrafáctico + revert-probes
 
-- [ ] 8.1 Contrafáctico: sobre una copia/branch del código PRE-fix de este change (antes de las Fases
+- [x] 8.1 Contrafáctico: sobre una copia/branch del código PRE-fix de este change (antes de las Fases
       2-7), correr S1 (4.5), S2 (4.6), S5 (4.10) y D5 (7.8) — confirmar que los CUATRO FALLAN. Restaurar
-      el working tree al estado post-fix.
-- [ ] 8.2 Revert-probe: restaurar el `continue` del parser (mutante de 2.7) ⇒ S1 (4.5) debe fallar.
-      Revertir el mutante.
-- [ ] 8.3 Revert-probe: `mapGrReceipt` vuelve a `anulado: false` hardcoded (mutante de 2.5) ⇒ S1 + S2 +
-      U2 (2.4) deben fallar. Revertir.
-- [ ] 8.4 Revert-probe: se borra el guard sistémico (mutante de 3.2/4.3) ⇒ S5 (4.10) debe fallar
-      (`rows.size !== 0`). Revertir.
-- [ ] 8.5 Revert-probe: `annulmentGuardMaxPct = 100` inyectado saltando el normalizador ⇒ U5 (1.3) lo
-      rechaza Y S5 (4.10) con config default sigue abortando. Revertir.
-- [ ] 8.6 Revert-probe: se saca `anulado: false` de UNO de los cuatro lectores del dashboard (rotar los
+      el working tree al estado post-fix. **Hecho** vía `git checkout ade93a38 -- src/domain
+      src/application/use-cases src/application/dto src/infrastructure/adapters src/infrastructure/
+      scheduling` (tests quedaron en HEAD) + borrado manual de los 4 archivos nuevos que no existen
+      pre-fix (`git checkout` con pathspec de directorio NO borra archivos ausentes en el commit
+      origen — hubo que `rm` a mano). Resultado: `finance-receipts-ingest-seam.test.ts` (S1/S2/S5) NI
+      COMPILA contra pre-fix (`Cannot find module SyncGrReceiptsReconcileWindow` — la feature
+      literalmente no existe sin el fix) y D5 falla EN COMPORTAMIENTO real: `revenueTotalArs` esperado
+      `5000`, recibido `13000` (el recibo anulado de $8000 se contaba igual). Restaurado con
+      `git checkout HEAD -- <mismos paths>` + tsc limpio confirmado.
+- [x] 8.2 Revert-probe: restaurar el `continue` del parser (mutante de 2.7) ⇒ S1 (4.5) debe fallar.
+      Revertir el mutante. **Matado por**: S1 (`anulado` esperado `true`, recibido `false`) — y de
+      yapa S2 y S5 también (el `continue` se come TODOS los residuos de S5, dejando pasar la página sin
+      disparar el guard).
+- [x] 8.3 Revert-probe: `mapGrReceipt` vuelve a `anulado: false` hardcoded (mutante de 2.5) ⇒ S1 + S2 +
+      U2 (2.4) deben fallar. Revertir. **Matado por**: los 3 — S1/S2 en `finance-receipts-ingest-
+      seam.test.ts`, U2 en `mapGrReceipt.test.ts` ("a receipt with a real fechaAnulacion maps to
+      anulado: true", esperado `true` recibido `false`). S5 cae también de yapa.
+- [x] 8.4 Revert-probe: se borra el guard sistémico (mutante de 3.2/4.3) ⇒ S5 (4.10) debe fallar
+      (`rows.size !== 0`). Revertir. **Matado por**: S5 — `execute()` resuelve en vez de rechazar,
+      `receiptRepo.rows.size` queda en 100 en vez de 0.
+- [x] 8.5 Revert-probe: `annulmentGuardMaxPct = 100` inyectado saltando el normalizador ⇒ U5 (1.3) lo
+      rechaza Y S5 (4.10) con config default sigue abortando. Revertir. **Matado/confirmado por**: U5
+      (3 tests, esperado `5` recibido `100`) mientras S5 se mantuvo VERDE (usa el default 5%, nunca
+      configurado a 100 — confirma que las dos protecciones son independientes).
+- [x] 8.6 Revert-probe: se saca `anulado: false` de UNO de los cuatro lectores del dashboard (rotar los
       4) ⇒ D1-D4 (el afectado) + D5 (7.8) fallan; repetir la misma quita en su gemelo in-memory. Revertir
-      cada uno (scenario 26).
-- [ ] 8.7 Revert-probe: `reconcileWindowDays = 0` saltando el normalizador ⇒ U5 (1.4) lo rechaza (cae a
-      35) Y U6 (4.2) con `0` forzado en DB igual pide un rango real de 35 días. Revertir.
-- [ ] 8.8 Revert-probe: `isRealAnnulment` vuelve a fail-open (mutante de 2.3) ⇒ U1 (2.1/2.2) falla
-      (ISO→`true` esperado, basura→`true` esperado, ambos vuelven a `false`). Revertir.
-- [ ] 8.9 Revert-probe: se saca `syncReconcile` del wiring (mutante de 6.1) ⇒ pin de aridad `@ts-expect-
-      error` (6.3) + throw del constructor (6.4) + S6 (5.7) deben fallar. Revertir.
-- [ ] 8.10 Revert-probe: el reconcile queda sin F4 (siempre due, nunca cede, mutante de 5.4) ⇒ S6 (5.7,
-      `backfillState.itemsSynced > 0` tras N ticks) debe fallar. Revertir.
-- [ ] 8.11 Revert-probe: se retira el filtro `anulado` de `PrismaPortalPaymentsReader` ⇒ su test (7.12)
+      cada uno (scenario 26). **Las 6 rotaciones ejecutadas**: D1 Prisma (2 tests), D2 Prisma (1 test),
+      D3 Prisma (2 tests), D4 Prisma (1 test), gemelo in-memory de Item (2 tests D1/D2-in-memory + D5
+      con `revenueTotalArs` 13000≠5000), gemelo in-memory de Application (2 tests D3/D4-in-memory + D5
+      con `unclassifiedAmountArs` 2100≠900). Los 4 métodos in-memory comparten UNA sola línea de filtro
+      por archivo (listByClientAndMonth llama a listByMonth), así que sacarla mata D1+D2 (o D3+D4)
+      juntos en una sola quita — coherente con el diseño, no un atajo.
+- [x] 8.7 Revert-probe: `reconcileWindowDays = 0` saltando el normalizador ⇒ U5 (1.4) lo rechaza (cae a
+      35) Y U6 (4.2) con `0` forzado en DB igual pide un rango real de 35 días. Revertir. **Hueco
+      cerrado**: no existía un test U6 a nivel USE CASE que probara "0 forzado -> igual pide 35 días
+      reales" — se agregó (`SyncGrReceiptsReconcileWindow.test.ts`). **Matado por**: U5 (2 tests) Y el
+      U6 nuevo — con el mutante, la ventana colapsó a `fechaDesde: "11-08-2026"` > `fechaHasta:
+      "10-08-2026"` (ventana INVERTIDA, la manifestación literal de "feature inerte").
+- [x] 8.8 Revert-probe: `isRealAnnulment` vuelve a fail-open (mutante de 2.3) ⇒ U1 (2.1/2.2) falla
+      (ISO→`true` esperado, basura→`true` esperado, ambos vuelven a `false`). Revertir. **Matado por**:
+      U1, 5 tests (32-13-2026, 2026-13-45, 2026-2026-2026 + 2 más), todos esperaban `true` y recibieron
+      `false`.
+- [x] 8.9 Revert-probe: se saca `syncReconcile` del wiring (mutante de 6.1) ⇒ pin de aridad `@ts-expect-
+      error` (6.3) + throw del constructor (6.4) + S6 (5.7) deben fallar. Revertir. **Matado por**:
+      `tsc` (TS2554 "Expected 6-7 arguments, but got 5" — el archivo entero deja de compilar, el pin de
+      tipos funciona) Y el pin de texto del composition-root ("new FinanceReceiptIngestScheduler(...)
+      no menciona syncReconcile"). **Nota**: S6 en sí no se ve afectado por ESTE mutante específico —
+      S6 construye su propio scheduler en el test, no pasa por bootstrap; el pin de tipos + el de texto
+      ya cubren el caso de wiring perdido con evidencia más fuerte (falla de compilación global).
+- [x] 8.10 Revert-probe: el reconcile queda sin F4 (siempre due, nunca cede, mutante de 5.4) ⇒ S6 (5.7,
+      `backfillState.itemsSynced > 0` tras N ticks) debe fallar. Revertir. **Hueco encontrado y
+      cerrado**: el S6 original (delta envenenado) NO mataba este mutante — con `resultados:'1'`
+      fijo en el fixture, el barrido de reconcile cierra en UNA página siempre, así que nunca queda
+      "perpetuamente due" y F4 nunca entra en juego en ese fixture. Se agregó un segundo test S6
+      (reconcile envenenado en persistencia, delta sano y silencioso) que SÍ deja a reconcile
+      perpetuamente due. **Matado por**: el S6 nuevo — `backfillState.itemsSynced` esperado `>0`,
+      recibido `0` (backfill starveado del todo).
+- [x] 8.11 Revert-probe: se retira el filtro `anulado` de `PrismaPortalPaymentsReader` ⇒ su test (7.12)
       debe fallar con el fixture que incluye el recibo anulado real de monto ≠ 0 (scenario 28). Revertir.
+      **Matado por**: PAY-1.5 preexistente Y el test nuevo de 7.12 (con el mock filtrando de verdad, el
+      resultado quedó vacío — `where.anulado` pasó a `undefined`, ninguna fila matchea).
 
 ## Fase 9 — Gate: lo existente pasa SIN TOCARSE
 

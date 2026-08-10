@@ -547,4 +547,65 @@ describe('finance-receipts-ingest seam — S6: THREE real use cases + REAL sched
     expect(lanesSeen.has('backfill')).toBe(true);
     expect(scheduler.status.degraded).toBe(true); // delta's sustained failure is visible on /sync/status
   });
+
+  // ── task 8.10's actual kill target — the FIRST S6 test above never
+  // exercises this: with `total=1` on every raw payload, reconcile's own
+  // sweep CLOSES after one page regardless of F4, so it only ever "steals"
+  // ONE tick out of 40 no matter what — the F4-for-reconcile mirror (design.md
+  // Decision 1) is invisible to that fixture. THIS test poisons reconcile's
+  // OWN persistence (delta stays healthy-and-quiet) so reconcile's cursor
+  // never advances and it stays PERMANENTLY "due" — the exact condition
+  // under which F4's alternation actually matters. Distinguishes reconcile
+  // from backfill by request shape: backfill always starts a month range at
+  // "01-", reconcile's 35-day window (fixed `now`) never does.
+  it('reconcile permanently poisoned (persistence) and permanently "due" still cedes turns to backfill via its OWN F4 mirror — backfill is never starved', async () => {
+    const gr = new RawPayloadGestionRealPort();
+    let okDeltaCounter = 0;
+    let okBackfillCounter = 0;
+    let poisonReconcileCounter = 0;
+    gr.responder = (params) => {
+      if (params.fechaDesde === params.fechaHasta) {
+        return rawReciboPayload(`ok-delta-${okDeltaCounter++}`, '100011', 1000, '10-08-2026');
+      }
+      if (params.fechaDesde.startsWith('01-')) {
+        return rawReciboPayload(`ok-backfill-${okBackfillCounter++}`, '100022', 1000, '10-07-2026');
+      }
+      // Reconcile's 35-day window — permanently poisoned.
+      return rawReciboPayload(`poison-reconcile-${poisonReconcileCounter++}`, '100099', 999999999, '20-07-2026');
+    };
+
+    const state = new InMemorySyncStateRepository();
+    const receiptRepo = new InMemoryFinancePaymentReceiptRepository();
+    const applicationRepo = new PoisonedApplicationRepoS6(receiptRepo);
+    const invoiceTypes = new InMemoryFinanceInvoiceTypeClassificationRepository();
+    const syncConfig = new InMemoryFinanceReceiptSyncConfigRepository();
+    await syncConfig.update({ backfillFloorYearMonth: '2026-01', reconcileWindowDays: 35, reconcileCheckIntervalMs: 21600000, deltaCheckIntervalMs: 300000 });
+
+    const now = () => new Date('2026-08-10T14:00:00Z');
+    const itemRepo = new InMemoryFinanceReceiptItemRepository();
+    const retencionRepo = new InMemoryFinanceReceiptRetencionRepository();
+    const syncDelta = new SyncGrReceiptsDelta(gr, state, receiptRepo, applicationRepo, invoiceTypes, itemRepo, retencionRepo, { now });
+    const syncBackfill = new SyncGrReceiptsBackfillBatch(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
+    const syncReconcile = new SyncGrReceiptsReconcileWindow(gr, state, receiptRepo, applicationRepo, invoiceTypes, syncConfig, itemRepo, retencionRepo, { now });
+
+    const lock = new InMemoryDistributedLock();
+    const scheduler = new FinanceReceiptIngestScheduler(syncDelta, syncBackfill, state, lock, syncConfig, syncReconcile, { silent: true, now });
+
+    // Prime delta so it becomes NOT due quickly (one healthy "today" run),
+    // letting reconcile and backfill compete for the rest of the ticks.
+    await scheduler.tick();
+
+    for (let i = 0; i < 40; i++) {
+      await scheduler.tick();
+    }
+
+    const backfillState = await state.get(BACKFILL_ENTITY);
+    const reconcileState = await state.get(RECONCILE_ENTITY);
+
+    // Reconcile stays visibly, permanently broken — never silently skipped.
+    expect(reconcileState?.lastResult).toMatch(/^error:/);
+    // The whole point of F4-for-reconcile: backfill is NOT stuck at zero,
+    // even though reconcile is ALWAYS "due" (its cursor never advances).
+    expect(backfillState?.itemsSynced ?? 0).toBeGreaterThan(0);
+  });
 });

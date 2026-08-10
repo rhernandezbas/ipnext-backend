@@ -90,6 +90,23 @@ describe('SyncGrReceiptsReconcileWindow', () => {
     expect(gr.receiptsCalls[0]).toMatchObject({ fechaDesde: '07-07-2026', fechaHasta: '10-08-2026', offset: 0 });
   });
 
+  // ── task 4.2/8.7 (design.md Decision 7) — the normalizer's protection must
+  // reach the USE CASE transparently: `reconcileWindowDays=0` "forzado en
+  // DB" (here: written via the same `update()` an operator's raw SQL would
+  // eventually flow through) still makes `execute()` request a REAL 35-day
+  // window, never an empty/inerte one. This is the end-to-end proof that
+  // `syncConfig.get()` — not just the normalizer in isolation — is what the
+  // use case actually consults.
+  it('reconcileWindowDays=0 forced past the normalizer still makes the use case request a REAL 35-day window (never an inert one)', async () => {
+    const { gr, syncConfig, uc } = makeHarness();
+    await syncConfig.update({ reconcileWindowDays: 0 });
+
+    await uc.execute();
+
+    expect(gr.receiptsCalls).toHaveLength(1);
+    expect(gr.receiptsCalls[0]).toMatchObject({ fechaDesde: '07-07-2026', fechaHasta: '10-08-2026', offset: 0 });
+  });
+
   it('a receipt inside the window is upserted', async () => {
     const { gr, receipts, syncConfig, uc } = makeHarness();
     await syncConfig.update({ reconcileWindowDays: 35 });
