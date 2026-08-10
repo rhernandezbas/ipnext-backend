@@ -310,6 +310,10 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
 | assistant-balance-guard | up-to-date client (exactly zero) carries no credit guidance | 8.1 |
 | assistant-balance-guard | the ficha still shows the credit to a human | 8.1 |
 | assistant-balance-guard | (contra) resolver emits the raw negative again | 8.5 |
+| assistant-balance-guard | client is up to date (GR payload `debt: "0.00"`) | FW1-F1 (`ClienteSaldoResolver.test.ts:88`) |
+| assistant-balance-guard | every motivo has its guidance | FW1-F5 (`it.each`, `ClienteSaldoResolver.test.ts:395`) |
+| assistant-balance-guard | a client who has paid off gets their mirrored invoices cleared | FW1-F4 (`RefreshClientBalanceIfStale.test.ts`) |
+| assistant-balance-guard | a non-authoritative payload leaves the invoice mirror untouched | FW1-F4 (`RefreshClientBalanceIfStale.test.ts`) |
 | balance-staleness-helper | the knob still moves the effective TTL | 8.2 |
 | balance-staleness-helper | the fast lane's effective TTL is the configured TTL | 9.1 |
 | balance-staleness-helper | the slow lane keeps its own margin | 9.1 |
@@ -324,8 +328,12 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
 | inbox-client-balance | no GR link | 3.8 |
 | inbox-client-balance | agent forces a refresh | 3.9 |
 
-**Cobertura**: 40/40 scenarios mapeados (31 del change + 9 de la fix wave 2). Sin huecos de
-spec detectados.
+**Cobertura**: 45/45 scenarios mapeados contra el texto ACTUAL de las 5 specs (31 del change
+original + los agregados por las enmiendas de las fix waves 1-3; verificado por `sdd-verify`,
+matriz autoritativa en `verify-report.md`). Sin huecos de spec detectados. El contra de
+"every motivo has its guidance" (guía ausente) fue ejecutado como mutante por el orquestador
+el 2026-08-10: quitar la `guia` del builder ⇒ **10 tests rojos** en los suites del assistant,
+restaurado y verificado 59/59 verde.
 
 **Nota sobre balance-staleness-helper / contra-scenario "reintroduce call keyed off status"**: no
 hay un mutante DEDICADO nuevo para esta spec — se reutiliza 6.3 (M-B), que reintroduce
