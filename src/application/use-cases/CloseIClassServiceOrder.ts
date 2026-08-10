@@ -5,6 +5,7 @@ import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRecorder';
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskNotFoundError } from '@domain/errors/scheduling';
+import { applyTaskClosure } from './applyTaskClosure';
 import {
   IClassActionDisabledError,
   IClassTaskNotOpenError,
@@ -34,9 +35,12 @@ export interface CloseIClassServiceOrderInput {
  *    - null → IClassNoServiceOrderError (422)
  *    - statusCode === '7' → IClassAlreadyClosedError (409)
  * 7. closeServiceOrder — IClassRejectedError (422) | IClassUnavailableError (502) propagate
- * 8. setGeneralStatus='closed' locally + record 'status_changed'
- *    Guard: task.generalStatus === 'open' is already enforced at step 4; no extra
- *    guard needed here (the check at step 4 is the idempotency fence — AD-6).
+ * 8. Close locally via applyTaskClosure(origin='staff') + record 'status_changed' on a WIN.
+ *    wave-1a (cierre atómico): step 4's `generalStatus === 'open'` check is NOT the
+ *    idempotency fence anymore — a concurrent closer (e.g. the ingest cron) can still
+ *    win between step 4 and here. The atomic guard inside applyTaskClosure closes that
+ *    window; losing it after already pushing to IClass does NOT throw (the push is a
+ *    separate, best-effort external concern — AD-2).
  * 9. Return updated task DTO
  */
 export class CloseIClassServiceOrder {
@@ -95,11 +99,16 @@ export class CloseIClassServiceOrder {
     };
     await this.iclass.closeServiceOrder(closeInput);
 
-    // Step 8: Set generalStatus='closed' locally
-    // Note: task.generalStatus is 'open' at this point (verified at step 4)
+    // Step 8: Close locally via the atomic guard (origin=staff).
     const actor: ActorContext = { actorId, actorName: actorId ?? 'System' };
-    const updated = await this.schedulingRepo.updateTask(taskId, { generalStatus: 'closed' });
-    if (updated && this.recorder) {
+    const closeResult = await applyTaskClosure(this.schedulingRepo, this.recorder, {
+      taskId,
+      origin: 'staff',
+      resultCode,
+      closedByUserId: actorId,
+    });
+    const updated = closeResult.task ?? await this.schedulingRepo.getTask(taskId);
+    if (closeResult.closed && this.recorder) {
       await this.recorder.record(taskId, 'status_changed', {
         actor,
         fromValue: task.generalStatus,

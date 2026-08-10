@@ -8,6 +8,7 @@ import { IClassAutoAssigner } from '@domain/ports/IClassAutoAssigner';
 import { computeUpdateTaskActivities } from './computeUpdateTaskActivities';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 import { normalizeOnuSerial } from '@domain/services/fiberProvisioning';
+import { applyTaskClosure } from './applyTaskClosure';
 
 export class UpdateTask {
   constructor(
@@ -159,12 +160,41 @@ export class UpdateTask {
       }
     }
 
-    // Snapshot the prior state for the diff BEFORE mutating (#10 / D.2).
-    // Also used by the auto-assigner guard (load when needed even if recorder is absent).
-    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined));
+    // Snapshot the prior state for the diff BEFORE mutating (#10 / D.2). wave-1a: also
+    // needed whenever this patch CLOSES the task, to know if it's a real open→closed
+    // transition (route through the atomic guard) or a no-op on an already-closed one.
+    const isClosingPatch = data.generalStatus === 'closed';
+    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined) || isClosingPatch);
     const prev = needsPrev ? await this.repo.getTask(id) : null;
 
-    const updated = await this.repo.updateTask(id, data);
+    // wave-1a (cierre atómico) — a patch that CLOSES the task routes the closure
+    // itself through the atomic guard (origin=staff); every OTHER field in the same
+    // patch still applies via the normal updateTask path — the FE resubmits the full
+    // body on every save (#40/#53/#54 precedent), so dropping bundled fields here on a
+    // close would be a silent data-loss regression, not a fix. `diffData` is what the
+    // activity diff engine sees: on a LOST race this writer's status never actually
+    // changed, so generalStatus/isClosed are stripped to avoid a phantom status_changed.
+    let updated: ScheduledTask | null;
+    let diffData: UpdateTaskInput = data;
+    if (isClosingPatch && prev && prev.generalStatus !== 'closed') {
+      const { generalStatus: _gs, isClosed: _ic, ...restData } = data;
+      const closeResult = await applyTaskClosure(this.repo, this.recorder, {
+        taskId: id,
+        origin: 'staff',
+        resultCode: null,
+        closedByUserId: actor?.actorId ?? null,
+      });
+
+      if (!closeResult.closed) {
+        diffData = restData;
+      }
+
+      updated = Object.keys(restData).length > 0
+        ? await this.repo.updateTask(id, restData)
+        : (closeResult.task ?? await this.repo.getTask(id));
+    } else {
+      updated = await this.repo.updateTask(id, data);
+    }
 
     if (this.recorder && prev && updated) {
       // Resolve watcher names for the diff (#17): only the ids that actually
@@ -186,7 +216,7 @@ export class UpdateTask {
           }
         }
       }
-      const events = computeUpdateTaskActivities(prev, data, actor ?? SYSTEM_ACTOR, updated, watcherNames);
+      const events = computeUpdateTaskActivities(prev, diffData, actor ?? SYSTEM_ACTOR, updated, watcherNames);
       if (events.length > 0) {
         await this.recorder.recordMany(id, events);
       }

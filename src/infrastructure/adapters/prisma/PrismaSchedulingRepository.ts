@@ -11,7 +11,7 @@ import { ScheduledTask, TaskGeneralStatus } from '@domain/entities/scheduling';
 import { IClassStatusCatalogRepository } from '@domain/ports/IClassStatusCatalogRepository';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
-import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping, ClosureOrigin, CloseTaskIfOpenInput, CloseTaskResult } from '@domain/ports/SchedulingRepository';
 import { StageNotFoundError } from '@domain/errors/scheduling';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
@@ -96,6 +96,9 @@ export function toTask(row: any): ScheduledTask {
     // (pinned tests pass rows without the column).
     generalStatus: (row.generalStatus ?? (row.isClosed ? 'closed' : 'open')) as TaskGeneralStatus,
     isClosed: (row.generalStatus ?? (row.isClosed ? 'closed' : 'open')) === 'closed',
+    // wave-1a (cierre atómico) — null salvo generalStatus==='closed'. Legacy rows (pinned
+    // tests / tasks closed before this migration) come back null — no invented backfill.
+    closureOrigin: (row.closureOrigin ?? null) as ScheduledTask['closureOrigin'],
     reviewedByInventory: row.reviewedByInventory ?? false,
     reviewedByInventoryAt: row.reviewedByInventoryAt instanceof Date
       ? row.reviewedByInventoryAt.toISOString()
@@ -348,6 +351,44 @@ export class PrismaSchedulingRepository implements SchedulingRepository {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * wave-1a (cierre atómico first-writer-wins) — UNA sola sentencia atómica, sin
+   * transacción explícita ni read-then-write: el predicado en el WHERE toma el row
+   * lock de Postgres, así que un segundo escritor concurrente bloquea, reevalúa el
+   * predicado contra el valor ya comiteado, y matchea 0 filas. count===1 → ganamos.
+   * count===0 → perdimos (o la tarea no existe) — releemos para reportar quién ganó.
+   */
+  async closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult> {
+    const { count } = await (prisma.scheduledTask as any).updateMany({
+      where: { id, generalStatus: { not: 'closed' } },
+      data: {
+        generalStatus: 'closed',
+        isClosed: true,
+        closureOrigin: input.origin,
+        closureResultCode: input.resultCode ?? null,
+        closedAt: new Date(),
+        closedByUserId: input.closedByUserId ?? null,
+      },
+    });
+
+    const row = await (prisma.scheduledTask as any).findUnique({ where: { id }, include: INCLUDE });
+    if (!row) {
+      return { closed: false, task: null, existingOrigin: null, existingResultCode: null };
+    }
+
+    if (count === 1) {
+      return { closed: true, task: toTask(row), existingOrigin: null, existingResultCode: null };
+    }
+
+    // Lost the race — report the WINNER's origin/resultCode, never our own input.
+    return {
+      closed: false,
+      task: toTask(row),
+      existingOrigin: (row.closureOrigin as ClosureOrigin | null) ?? null,
+      existingResultCode: row.closureResultCode ?? null,
+    };
   }
 
   async deleteTask(id: string): Promise<boolean> {

@@ -24,6 +24,7 @@ import { InventorySuggestionRepository } from '@domain/ports/InventorySuggestion
 import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { TaskActivityRecorder } from '@domain/ports/TaskActivityRecorder';
 import { SYSTEM_ACTOR } from './taskActivityActor';
+import { applyTaskClosure } from './applyTaskClosure';
 import {
   ClosedServiceOrder,
   ClosedServiceOrderSummary,
@@ -374,11 +375,20 @@ export class IngestClosedServiceOrders {
       // set generalStatus='closed' + emit a System `status_changed`. Tied to THIS move
       // event (not "task is in hecho stage"), so a later reconcile of an UNCHANGED order
       // never re-closes a task the operator reopened (that path never re-invokes this).
-      // Guarded by `task.generalStatus !== 'closed'` to stay idempotent (D8) — a no-op
-      // move into hecho when already closed emits nothing.
-      if (moved?.stageCategory === 'hecho' && task.generalStatus !== 'closed') {
-        await this.scheduling.updateTask(task.id, { generalStatus: 'closed' });
-        if (this.recorder) {
+      // wave-1a (cierre atómico) — routed through applyTaskClosure(origin='iclass')
+      // instead of a bare `task.generalStatus !== 'closed'` + updateTask: that TOCTOU
+      // guard was exactly the preexisting staff↔ingest race (design C1/C2). The atomic
+      // guard is idempotent by construction (closed:false, no-op when already closed),
+      // and — when a DIFFERENT origin got there first with a DIFFERENT resultCode —
+      // applyTaskClosure logs the discrepancy instead of silently staying quiet.
+      if (moved?.stageCategory === 'hecho') {
+        const closeResult = await applyTaskClosure(this.scheduling, this.recorder, {
+          taskId: task.id,
+          origin: 'iclass',
+          resultCode: s.resultCodeName ?? null,
+          closedByUserId: null,
+        });
+        if (closeResult.closed && this.recorder) {
           await this.recorder.record(task.id, 'status_changed', {
             actor: SYSTEM_ACTOR,
             fromValue: task.generalStatus,

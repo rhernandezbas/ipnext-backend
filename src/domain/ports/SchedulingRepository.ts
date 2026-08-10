@@ -4,7 +4,7 @@ import { TaskChecklistItem } from '../entities/checklist';
 import { TaskListFilter } from '@application/dto/scheduling.dto';
 
 export interface CreateTaskInput extends Omit<ScheduledTask,
-  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'lastBroadcastAt' | 'lastBroadcastByName' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus' | 'onuSerial'
+  'id' | 'sequenceNumber' | 'stageCategory' | 'customerName' | 'customerCity' | 'customerPhone' | 'customerCode' | 'contractCode' | 'assigneeName' | 'reporterName' | 'watcherIds' | 'createdAt' | 'updatedAt' | 'generalStatus' | 'isClosed' | 'closureOrigin' | 'reviewedByInventory' | 'reviewedByInventoryAt' | 'reviewedByInventoryUserName' | 'closureCommentDone' | 'closureAuditDone' | 'closureHasDeviceInventory' | 'iclassOrderCode' | 'grOrdenId' | 'ticketSubject' | 'ticketId' | 'networkSiteName' | 'kind' | 'networkSiteId' | 'iclassCityCode' | 'networkType' | 'archivedAt' | 'lastBroadcastAt' | 'lastBroadcastByName' | 'iclassStatusCode' | 'iclassStatusUpdatedAt' | 'iclassStatus' | 'onuSerial'
 > {
   /** Discriminador de tipo de tarea. Por defecto 'customer' para retro-compatibilidad. */
   kind?: 'customer' | 'network';
@@ -55,11 +55,40 @@ export interface TaskProjectMapping {
   iclassSoType: { id: string; code: string; active: boolean } | null;
 }
 
+// wave-1a (cierre atómico first-writer-wins) — origen del cierre. String en la columna
+// (catálogo que puede crecer), tipo cerrado acá en TypeScript.
+export type ClosureOrigin = 'app' | 'iclass' | 'staff';
+
+export interface CloseTaskIfOpenInput {
+  origin: ClosureOrigin;
+  resultCode?: string | null;
+  closedByUserId?: string | null;
+}
+
+export interface CloseTaskResult {
+  /** true = ESTE escritor ganó la race y escribió. */
+  closed: boolean;
+  /** Estado tras la operación (el ganador previo si closed=false). Null si la tarea no existe. */
+  task: ScheduledTask | null;
+  /** Sólo cuando closed=false: quién había cerrado antes y con qué resultado. */
+  existingOrigin: ClosureOrigin | null;
+  existingResultCode: string | null;
+}
+
 export interface SchedulingRepository {
   listTasks(filter?: TaskListFilter): Promise<ScheduledTask[]>;
   getTask(id: string): Promise<ScheduledTask | null>;
   createTask(data: CreateTaskInput): Promise<ScheduledTask>;
   updateTask(id: string, data: UpdateTaskInput): Promise<ScheduledTask | null>;
+  /**
+   * wave-1a (cierre atómico first-writer-wins) — escritura condicional ATÓMICA
+   * equivalente a `UPDATE ... WHERE id = :id AND generalStatus != 'closed'` en UNA
+   * sola sentencia (nunca getTask + updateTask por separado). Todo camino que cierre
+   * una tarea (staff, iclass, app) DEBE pasar por acá — es el único chokepoint que
+   * arregla la race preexistente entre los escritores de generalStatus='closed'.
+   * Molde: `moveTaskToStageIfForward`, mismo patrón de retorno `{ ...boolean-ish }`.
+   */
+  closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult>;
   /**
    * #14: mark closure-completeness flags WITHOUT going through updateTask, so the
    * activity-log diff engine does not emit events for these internal flags.

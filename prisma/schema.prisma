@@ -1406,6 +1406,18 @@ model ScheduledTask {
   // Flag: task is closed (soft-close, not deleted). Derived from generalStatus; synced on write for ops tooling.
   isClosed Boolean @default(false)
 
+  // wave-1a (cierre atómico first-writer-wins) — quién/con qué resultado cerró la tarea.
+  // String (no enum de Prisma), mismo criterio que generalStatus/priority/category: catálogo
+  // que puede crecer (un 4to origen 'gr' es plausible). El tipo cerrado ('app'|'iclass'|'staff')
+  // vive en TypeScript (ClosureOrigin). NULL mientras generalStatus !== 'closed', y también NULL
+  // en tareas cerradas ANTES de esta migración (histórico, sin backfill inventado).
+  closureOrigin     String?
+  closureResultCode String?
+  // Distinto de completedAt (ese es del stage 'hecho'; este es del cierre de generalStatus).
+  closedAt          DateTime?
+  closedByUserId    String?
+  closedByUser      RbacUser? @relation("TaskClosedBy", fields: [closedByUserId], references: [id], onDelete: SetNull)
+
   // #86 — archive flag. Only closed/dismissed tasks can be archived. Null = not archived.
   archivedAt DateTime?
 
@@ -3308,6 +3320,8 @@ model RbacUser {
   tasksReported          ScheduledTask[] @relation("TaskReporter")
   tasksAssigned          ScheduledTask[] @relation("TaskAssignee")
   tasksInventoryReviewed ScheduledTask[] @relation("TaskInventoryReviewer")
+  // wave-1a (cierre atómico) — back-relation soft FK de quién cerró la tarea (SetNull on delete).
+  tasksClosedBy          ScheduledTask[] @relation("TaskClosedBy")
   materialsRecorded TaskMaterialConsumption[] @relation("TaskMaterialRecorder")
   tasksWatching   TaskWatcher[]   @relation("TaskWatcher")
   assignedTickets Ticket[]        @relation("TicketAssignee")

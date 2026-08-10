@@ -1,7 +1,7 @@
 import { ScheduledTask } from '@domain/entities/scheduling';
 import { TaskChecklistItem } from '@domain/entities/checklist';
 import { StageCategory, Stage } from '@domain/entities/workflow';
-import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping } from '@domain/ports/SchedulingRepository';
+import { SchedulingRepository, CreateTaskInput, UpdateTaskInput, TaskProjectMapping, ClosureOrigin, CloseTaskIfOpenInput, CloseTaskResult } from '@domain/ports/SchedulingRepository';
 import { StageRepository } from '@domain/ports/StageRepository';
 import { ChecklistItemNotFoundError, OrderingError } from '@domain/errors/checklist';
 import { TaskTemplateRepository } from '@domain/ports/TaskTemplateRepository';
@@ -76,6 +76,8 @@ const NEW_FIELDS_DEFAULTS = {
   // #41 — generalStatus is the truth; isClosed derived. Both default consistently.
   generalStatus: 'open' as 'open' | 'closed' | 'dismissed',
   isClosed: false,
+  // wave-1a (cierre atómico) — null hasta que closeTaskIfOpen (o un seed explícito) lo setee.
+  closureOrigin: null as 'app' | 'iclass' | 'staff' | null,
   reviewedByInventory: false,
   reviewedByInventoryAt: null,
   reviewedByInventoryUserName: null,
@@ -133,6 +135,27 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
   // RbacUser name lookup — seeded by tests via seedRbacUserName(). Used to resolve
   // reviewedByInventoryUserName from an actorId (in-memory cannot JOIN).
   private rbacUserNames: Map<string, string> = new Map();
+
+  // wave-1a (cierre atómico) — closureResultCode/closedAt/closedByUserId are NOT part
+  // of the public ScheduledTask DTO (only closureOrigin is, per the spec's response
+  // shape), so they live in a side table keyed by taskId. closeTaskIfOpen is the only
+  // reader/writer.
+  private closureDetails: Map<string, { resultCode: string | null; closedByUserId: string | null; closedAt: string }> = new Map();
+
+  // TEST-ONLY hook — fires at the exact point where the real Postgres adapter takes
+  // the row lock (right before the read-decide-write of closeTaskIfOpen). Without it,
+  // single-threaded JS never produces a genuine TOCTOU race: an async function with no
+  // internal `await` between its read and its write runs that whole section atomically
+  // by construction, so a concurrency test would pass vacuously. The hook forces both
+  // concurrent callers to suspend at the SAME point, then resumes them in call order —
+  // exactly what lets InMemorySchedulingRepository.closeTaskIfOpen.test.ts prove
+  // "exactly one writer wins" instead of asserting it by accident.
+  private beforeCloseWrite?: () => Promise<void> | void;
+
+  /** Test-only setter — call in test setup to interleave two closeTaskIfOpen calls. */
+  setBeforeCloseWriteHook(hook?: () => Promise<void> | void): void {
+    this.beforeCloseWrite = hook;
+  }
 
   constructor(stageRepo?: StageRepository, templateRepo?: TaskTemplateRepository, statusCatalog?: IClassStatusCatalogRepository) {
     this.stageRepo = stageRepo;
@@ -444,6 +467,8 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       // #41 — new tasks are always born open; isClosed derived consistently.
       generalStatus: 'open',
       isClosed: false,
+      // wave-1a — a freshly-created task is never closed; closeTaskIfOpen sets this.
+      closureOrigin: null,
       reviewedByInventory: false,
       reviewedByInventoryAt: null,
       reviewedByInventoryUserName: null,
@@ -715,6 +740,51 @@ export class InMemorySchedulingRepository implements SchedulingRepository {
       updatedAt: new Date().toISOString(),
     };
     return { ...this.tasks[index]! };
+  }
+
+  /**
+   * wave-1a (cierre atómico first-writer-wins) — molde de `moveTaskToStageIfForward`.
+   * The `beforeCloseWrite` hook fires BEFORE the read that decides the outcome (mirrors
+   * the row lock the real `updateMany({ where: { generalStatus: { not: 'closed' } } })`
+   * takes in Postgres). Everything from the hook onward is synchronous JS with no
+   * further `await` — that is what makes the read-decide-write atomic in a
+   * single-threaded runtime: once a caller resumes past the hook it runs to
+   * completion (including the write) before the event loop can hand control to a
+   * second suspended caller.
+   */
+  async closeTaskIfOpen(id: string, input: CloseTaskIfOpenInput): Promise<CloseTaskResult> {
+    if (this.beforeCloseWrite) await this.beforeCloseWrite();
+
+    const index = this.tasks.findIndex(t => t.id === id);
+    if (index === -1) {
+      return { closed: false, task: null, existingOrigin: null, existingResultCode: null };
+    }
+
+    const current = this.tasks[index]!;
+    if (current.generalStatus === 'closed') {
+      // Lost (or arrived after) the race — report who actually won, never our own input.
+      const details = this.closureDetails.get(id);
+      return {
+        closed: false,
+        task: { ...current },
+        existingOrigin: (current.closureOrigin as ClosureOrigin | null) ?? null,
+        existingResultCode: details?.resultCode ?? null,
+      };
+    }
+
+    const closedAt = new Date().toISOString();
+    this.closureDetails.set(id, {
+      resultCode: input.resultCode ?? null,
+      closedByUserId: input.closedByUserId ?? null,
+      closedAt,
+    });
+    this.tasks[index] = {
+      ...current,
+      generalStatus: 'closed',
+      isClosed: true,
+      closureOrigin: input.origin,
+    };
+    return { closed: true, task: { ...this.tasks[index] }, existingOrigin: null, existingResultCode: null };
   }
 
   async deleteTask(id: string): Promise<boolean> {

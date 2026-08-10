@@ -50,7 +50,11 @@ export type ActivityType =
   | 'iclass_team_auto_assigned'
   | 'iclass_team_auto_assign_failed'
   // noc-broadcast-traceability — la tarea de RED se difundió al canal NOC (WhatsApp).
-  | 'noc_broadcast_sent';
+  | 'noc_broadcast_sent'
+  // wave-1a (cierre atómico) — dos orígenes distintos aportaron un resultado de cierre
+  // para la MISMA tarea; el ganador de la race persiste, este evento deja constancia
+  // CONSULTABLE del que perdió (nunca sobreescribe en silencio).
+  | 'closure_conflict';
 
 export interface TaskActivity {
   id: string;
