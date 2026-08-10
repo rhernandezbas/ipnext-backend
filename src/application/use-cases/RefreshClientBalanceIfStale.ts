@@ -16,31 +16,6 @@ export const DEFAULT_BALANCE_STALE_TTL_MINUTES = 60;
 export const SLOW_LANE_BALANCE_TTL_MINUTES = 26 * 60;
 
 /**
- * fix wave 2 (FW2-2) — margen del carril RÁPIDO: 60 minutos.
- *
- * **La política es "cadencia + margen" y vale para los DOS carriles.** F7 se la
- * aplicó al lento (24h + 2h = 26h) y dejó al rápido con margen CERO: el TTL
- * configurado por defecto es 60min y la cadencia del carril rápido es, también,
- * 60min. Empate ⇒ stale garantizado antes del próximo pase, porque el sello
- * `lastBalanceAt` se pone cuando el batch TOCA a cada cliente, no cuando la
- * ventana arranca: el batch rápido tarda ~43 min medidos sobre 5.582 clientes,
- * así que el que se refresca al principio de la corrida queda "viejo" mientras
- * el próximo pase todavía está a ~40 min. Buena parte de cada hora, para buena
- * parte de la base, el flag gritaba sobre el dato más fresco que ese carril
- * puede producir — y encima empujaba refrescos on-demand contra GR (uno por
- * mensaje de WhatsApp, uno por ficha abierta) que no podían mejorarlo.
- *
- * 60min de margen cubre con holgura los ~43 medidos y deja lugar al crecimiento
- * de la base antes de que haya que repartir carriles de nuevo. Con el default
- * de producción el TTL efectivo del carril rápido queda en 2h.
- *
- * ⚠️ El margen se suma al TTL **configurado**, no lo reemplaza: bajar
- * `BALANCE_STALE_TTL_MINUTES` sigue bajando el efectivo. La perilla no queda
- * anulada, sólo desplazada.
- */
-export const FAST_LANE_BATCH_MARGIN_MINUTES = 60;
-
-/**
  * Statuses cuyo balance se refresca en el carril LENTO.
  *
  * ⚠️ Espejo de `SLOW_LANE.estados` (`RefreshDebtorBalances`) traducido por
@@ -67,10 +42,29 @@ const SLOW_LANE_STATUSES: ReadonlySet<string> = new Set(['baja']);
  * un saldo viejo servido como fresco, que es el modo de falla que todo este
  * change existe para evitar. La basura va al valor SEGURO, no al permisivo.
  *
- * fix wave 2 (FW2-2) — **los dos carriles usan la MISMA política: cadencia +
- * margen.** El lento la traía desde F7 (24h + 2h, constante); el rápido la
- * estrena acá (`fastLaneTtlMinutes + FAST_LANE_BATCH_MARGIN_MINUTES`), porque
- * había quedado con margen cero y por lo tanto stale gran parte de cada hora.
+ * ⚠️ **fix wave 3 (FW3) — el carril rápido NO lleva margen de batch, y la razón
+ * es esa misma política.** La fix wave 2 le había sumado un
+ * `FAST_LANE_BATCH_MARGIN_MINUTES` de 60 (efectivo 2h) con este argumento: el
+ * sello `lastBalanceAt` se pone cuando el batch TOCA a cada cliente y el pase
+ * tarda ~43min, así que el flag queda prendido buena parte de cada hora sobre el
+ * dato más fresco que el batch puede producir — "y los refrescos on-demand que
+ * eso dispara no pueden mejorar nada".
+ *
+ * Esa última premisa es FALSA. Este TTL no es sólo el flag de display: es
+ * TAMBIÉN el gate del refresh on-demand (ver `isStale` abajo), y ese refresh no
+ * re-lee el batch — le pega a `gr.fetchClientBalance` EN VIVO. Le pregunta a la
+ * fuente. Escenario medido con el margen puesto: cliente activo con $45.000
+ * sellados hace 90min que pagó hace 30 ⇒ el bot le contesta `tieneDeuda:true,
+ * saldo:45000` con CERO llamadas a GR. Le reclamamos plata al que ya pagó, que
+ * es exactamente el modo de falla que este change existe para evitar.
+ *
+ * El costo que se acepta a cambio: por el skew del sello del batch, el flag
+ * puede quedar prendido hasta ~43min de más, y cada uno de esos clientes dispara
+ * un refresh on-demand. Es el lado SEGURO del error —una llamada de más, que el
+ * single-flight (F2) colapsa por cliente y el `maxRetries: 1` acota— y es lo que
+ * dicen los dos párrafos de arriba. El carril LENTO sí lleva margen, pero por
+ * otro motivo: sin él TODA baja queda stale permanente (26h > cadencia diaria),
+ * o sea el flag deja de informar; acá el flag informa de más, no de menos.
  */
 export function balanceTtlMinutesForStatus(
   status: string | null | undefined,
@@ -78,7 +72,7 @@ export function balanceTtlMinutesForStatus(
 ): number {
   return status != null && SLOW_LANE_STATUSES.has(status)
     ? SLOW_LANE_BALANCE_TTL_MINUTES
-    : fastLaneTtlMinutes + FAST_LANE_BATCH_MARGIN_MINUTES;
+    : fastLaneTtlMinutes;
 }
 
 /**

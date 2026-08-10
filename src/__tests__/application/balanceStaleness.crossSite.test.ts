@@ -40,7 +40,6 @@ import { ListPppoeByContract } from '@application/use-cases/ListPppoeByContract'
 import {
   RefreshClientBalanceIfStale,
   SLOW_LANE_BALANCE_TTL_MINUTES,
-  FAST_LANE_BATCH_MARGIN_MINUTES,
   balanceTtlMinutesForStatus,
 } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { FAST_LANE, SLOW_LANE } from '@application/use-cases/RefreshDebtorBalances';
@@ -66,12 +65,17 @@ const NOW = () => new Date('2026-08-10T12:00:00.000Z');
 const TTL_MINUTES = 120;
 
 /**
- * fix wave 2 (FW2-2) — el TTL **efectivo** del carril rápido: el configurado más
- * el margen que cubre la duración del batch. El pin sigue siendo "mismo TTL para
- * el mismo carril" (F7/F8); lo que cambió es cuánto vale ese TTL del lado
- * rápido, y los tres call sites tienen que moverse JUNTOS.
+ * fix wave 3 (FW3) — el TTL **efectivo** del carril rápido vuelve a ser el
+ * configurado, sin sumas. La FW2 le había agregado un margen de batch de 60min;
+ * lo revirtió la FW3 porque este TTL no es sólo el flag de display, es también
+ * el gate del refresh on-demand — y ese refresh consulta GR EN VIVO, así que sí
+ * puede mejorar el dato del batch (ver el revert-probe en
+ * `ClienteSaldoResolver.test.ts`, "FW3 — el cliente pagó hace 30min").
+ *
+ * El pin de F7/F8 no cambia: "mismo TTL para el MISMO carril", los tres call
+ * sites moviéndose JUNTOS.
  */
-const FAST_TTL_EFECTIVO = TTL_MINUTES + FAST_LANE_BATCH_MARGIN_MINUTES;
+const FAST_TTL_EFECTIVO = TTL_MINUTES;
 
 const MIN = 60 * 1000;
 
@@ -194,11 +198,12 @@ describe.each([
  * mismo. Por eso M5 sobrevivía.
  */
 describe('F7 — el MISMO lastBalanceAt da veredictos distintos según el carril', () => {
-  // FW2-2: 5h — pasado el efectivo del rápido (120 + 60 = 180min) y muy dentro
-  // del lento. Con 3h ya no discriminaba: el margen del carril rápido lo cubre.
+  // 5h — pasado el efectivo del rápido (120min) y muy dentro del lento. La FW2 la
+  // había movido de 3h a 5h para saltear su margen; el margen murió en la FW3
+  // pero la fixture se queda: discrimina igual, con más aire de los dos lados.
   const cincoHoras = hace(5 * 60 * MIN);
 
-  it('5h en el carril rápido (TTL efectivo 180min) ⇒ stale en los tres', async () => {
+  it('5h en el carril rápido (TTL 120min) ⇒ stale en los tres', async () => {
     expect(await losTres(cincoHoras, 'active')).toEqual([true, true, true]);
   });
 
@@ -212,42 +217,56 @@ describe('F7 — el MISMO lastBalanceAt da veredictos distintos según el carril
 });
 
 /**
- * ⚠️ **FW2-2 — la política de margen es UNA sola, para los dos carriles.**
+ * ⚠️ **FW3 — el carril RÁPIDO usa el TTL configurado, SIN margen de batch.**
  *
- * F7 le dio al carril lento `cadencia + margen` (24h + 2h = 26h) y dejó al
- * rápido con margen CERO: TTL 60min contra una cadencia de 60min. Y el sello
- * `lastBalanceAt` se pone cuando el batch TOCA a ese cliente, no cuando la
- * ventana empieza — el batch rápido tarda ~43 min medidos, así que el cliente
- * refrescado al minuto 2 queda marcado stale desde el minuto 62, con el próximo
- * pase todavía a ~40 min de distancia. Buena parte de cada hora, para buena
- * parte de la base, el flag decía "viejo" sobre el dato más fresco que su carril
- * puede producir — y cada mensaje de WhatsApp en esa franja disparaba un refresh
- * on-demand contra GR que no podía mejorar nada.
+ * La fix wave 2 le había sumado un `FAST_LANE_BATCH_MARGIN_MINUTES` de 60min
+ * (efectivo 2h con el default) razonando así: el sello `lastBalanceAt` se pone
+ * cuando el batch TOCA a cada cliente y el pase tarda ~43min medidos, así que
+ * buena parte de cada hora el flag dice "viejo" sobre el dato más fresco que el
+ * batch puede producir — "y los refrescos on-demand que eso dispara no pueden
+ * mejorar nada".
  *
- * El margen no afloja el criterio: lo alinea con la cadencia real, que es lo
- * mismo que F7 ya había hecho del otro lado.
+ * **Esa última premisa era falsa**, y ahí estaba todo el daño: este TTL no es
+ * sólo el flag de display, es TAMBIÉN el gate del refresh on-demand
+ * (`RefreshClientBalanceIfStale.isStale`), y ese refresh no re-lee el batch —
+ * consulta `gr.fetchClientBalance` EN VIVO. Medido con el margen puesto: cliente
+ * activo con $45.000 sellados hace 90min que pagó hace 30 ⇒ el bot contestaba
+ * `tieneDeuda:true, saldo:45000` con CERO llamadas a GR.
+ *
+ * Lo que se acepta a cambio: por el skew del sello, el flag puede quedar
+ * prendido hasta ~43min de más y disparar un refresh que no cambia nada. Es el
+ * lado SEGURO (una llamada, colapsada por el single-flight de F2 y acotada por
+ * `maxRetries: 1`), y es literalmente la política escrita en
+ * `balanceTtlMinutesForStatus`. El carril LENTO sí lleva margen, pero por el
+ * motivo inverso: sin él TODA baja queda stale permanente y el flag deja de
+ * informar.
+ *
+ * El revert-probe del escenario en vivo vive en `ClienteSaldoResolver.test.ts`
+ * ("FW3 — el cliente pagó hace 30min"). Acá se pinea la aritmética.
  */
-describe('FW2-2 — el carril RÁPIDO también tiene margen sobre su cadencia', () => {
-  it('TTL efectivo del carril rápido = TTL configurado + margen que cubre el batch', () => {
-    // Con el default de producción (60min): efectivo 2h.
-    expect(balanceTtlMinutesForStatus('active', 60)).toBe(120);
-    expect(balanceTtlMinutesForStatus('active', TTL_MINUTES)).toBe(FAST_TTL_EFECTIVO);
+describe('FW3 — el carril RÁPIDO no lleva margen de batch sobre el TTL configurado', () => {
+  it('TTL efectivo del carril rápido = TTL configurado, sin sumas', () => {
+    // Con el default de producción (60min): efectivo 60min, no 2h.
+    expect(balanceTtlMinutesForStatus('active', 60)).toBe(60);
+    expect(balanceTtlMinutesForStatus('active', TTL_MINUTES)).toBe(TTL_MINUTES);
   });
 
-  it('el margen cubre la duración MEDIDA del batch rápido (~43 min sobre 5.582 clientes)', () => {
-    expect(FAST_LANE_BATCH_MARGIN_MINUTES).toBeGreaterThanOrEqual(43);
+  it('un sello justo dentro de lo que el margen tapaba (150min con TTL 120) es STALE en los TRES call sites', async () => {
+    // La fixture discriminante: 150min pasa el TTL configurado (120) pero caía
+    // dentro del efectivo con margen (180). Si alguien reintroduce el margen,
+    // los tres viran a `false` acá — y el gate del refresh se cierra con él.
+    expect(await losTres(hace(150 * MIN), 'active')).toEqual([true, true, true]);
   });
 
-  it('el margen se SUMA al TTL configurado, no lo reemplaza (la perilla sigue viva)', () => {
-    // Si alguien reemplazara el TTL por una constante, bajar la perilla no
-    // movería nada — y el `ttlMinutes` inyectado volvería a ser decoración (M5).
+  it('la perilla sigue viva: bajar el TTL configurado baja el efectivo (M5 sigue muerto)', () => {
     expect(balanceTtlMinutesForStatus('active', 10)).toBeLessThan(
       balanceTtlMinutesForStatus('active', 200),
     );
   });
 
-  it('el margen NO se le suma al carril lento (ya lo trae adentro: 24h de cadencia + 2h)', () => {
+  it('el carril LENTO conserva SU margen (24h de cadencia + 2h): ahí el flag informaría de MENOS, no de más', () => {
     expect(balanceTtlMinutesForStatus('baja', TTL_MINUTES)).toBe(SLOW_LANE_BALANCE_TTL_MINUTES);
+    expect(SLOW_LANE_BALANCE_TTL_MINUTES).toBe(26 * 60);
   });
 });
 

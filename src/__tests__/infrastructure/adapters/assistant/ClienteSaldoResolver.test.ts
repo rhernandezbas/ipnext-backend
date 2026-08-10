@@ -486,6 +486,61 @@ describe('ClienteSaldoResolver', () => {
     expect(facts).toMatchObject({ disponible: true, tieneDeuda: false, saldo: 0 });
   });
 
+  /**
+   * ⚠️ **FW3 — el revert-probe del margen del carril rápido.**
+   *
+   * La fix wave 2 le sumó `FAST_LANE_BATCH_MARGIN_MINUTES` (60) al TTL del
+   * carril rápido para dejar de PRENDER el flag sobre el dato más fresco que el
+   * batch puede producir. La premisa era "ese refresh on-demand no podía mejorar
+   * nada" — y es FALSA: el TTL del carril no es sólo el flag de display, es
+   * también el **gate del refresh**, y el refresh pega a `fetchClientBalance` EN
+   * VIVO contra GR. No re-lee el batch: le pregunta a la fuente.
+   *
+   * Escenario medido: cliente activo, deuda de $45.000 sellada hace 90 minutos,
+   * que PAGÓ hace 30. Con el margen (efectivo 2h) el bot le contesta
+   * `tieneDeuda:true, saldo:45000` sin hacer UNA sola llamada a GR — le reclama
+   * plata a alguien que ya pagó. Sin el margen, refresca y contesta 0.
+   *
+   * El margen intercambiaba el modo de falla que todo este change existe para
+   * evitar (saldo viejo servido como fresco) por un ahorro de llamadas. La
+   * política declarada arriba de `balanceTtlMinutesForStatus` dice lo contrario:
+   * refrescar de más cuesta una llamada; refrescar de menos cuesta un número
+   * equivocado sobre la plata de un cliente.
+   *
+   * Si alguien reintroduce el margen —con este nombre o con otro— muere acá.
+   */
+  it('FW3 — el cliente pagó hace 30min sobre un sello de 90min: el bot REFRESCA contra GR y contesta al día (el TTL del carril rápido no lleva margen)', async () => {
+    const selloDe90Min = new Date(FIXED_NOW.getTime() - 90 * 60 * 1000);
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    // GR EN VIVO ya sabe que pagó: deuda 0, sin facturas.
+    gr.balancesByClient.GR1 = parseClientBalanceResponse('GR1', grBalancePayload('0.00', { grClienteId: 'GR1' }));
+
+    const refresh = new RefreshClientBalanceIfStale(gr, mirror, {
+      now: () => FIXED_NOW,
+      ttlMinutes: 60, // el default de producción
+    });
+    // Primer findById: el espejo con la deuda vieja. Segundo (post-refresh): al día.
+    const conDeudaVieja = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('45000.00', selloDe90Min) });
+    const alDia = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('0.00', FIXED_NOW) });
+    // Premisa del escenario: con el TTL configurado (60min), 90min ES stale.
+    // Es el gate que decide si se le pregunta a GR — no un detalle de display.
+    expect(conDeudaVieja.balanceDue).toBe(45000);
+    expect(conDeudaVieja.balanceStale).toBe(true);
+
+    let call = 0;
+    const repo = { findById: async () => (call++ === 0 ? conDeudaVieja : alDia) } as unknown as CustomerRepository;
+
+    const facts = await new ClienteSaldoResolver(repo, refresh).resolve(ctx);
+
+    // (1) le preguntó a GR — el refresh SÍ podía mejorar el dato del batch.
+    expect(gr.balanceCalls).toEqual(['GR1']);
+    expect(mirror.balances.get('GR1')?.amount).toBe(0);
+    // (2) y por lo tanto no le reclama plata al que ya pagó.
+    expect(facts).toMatchObject({ disponible: true, tieneDeuda: false, saldo: 0 });
+    expect(JSON.stringify(facts)).not.toContain('45000');
+  });
+
   it('S22 — regression: confirmed currency still emits normally', async () => {
     const confirmedCurrency = customerFrom({ ...CUSTOMER_ROW, balanceDue: 1000, balanceCurrency: 'ARS' });
     const resolver = new ClienteSaldoResolver(repoOf(confirmedCurrency));

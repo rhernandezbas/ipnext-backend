@@ -226,14 +226,11 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
       ~694ms con UN reintento (holgado en el budget de 4s), y con cero el fallo se COMPARTE con
       todos los callers vía single-flight. `maxRetries: 1` — recupera el blip, acota el huérfano a
       una llamada. Pin de composición actualizado (`toBe(1)`).
-      - Y la política de margen se unificó: F7 le dio "cadencia + margen" al carril lento y dejó
-        al rápido con margen CERO (TTL 60 == cadencia 60, con el sello al minuto en que el batch
-        —~43min— toca a cada cliente ⇒ stale gran parte de cada hora ⇒ refrescos on-demand que no
-        arreglaban nada). Ahora efectivo rápido = TTL configurado + `FAST_LANE_BATCH_MARGIN_MINUTES`
-        (60) ⇒ 2h con el default. El margen se SUMA: la perilla sigue viva (M5 sigue muerto).
-      - Interacción con el wave 1 resuelta explícitamente: el pin cross-site sigue siendo "mismo
-        TTL para el MISMO carril" (F7/F8); lo que cambió es cuánto vale el del carril rápido, y
-        los tres call sites se mueven juntos. Fixtures de staleness movidas de 90min/2h a 3h/4h.
+      - ~~Y la política de margen se unificó (`FAST_LANE_BATCH_MARGIN_MINUTES = 60`, efectivo 2h en
+        el carril rápido).~~ **REVERTIDO en la Fase 9 (FW3)** — ver 9.1. El resto de 8.2
+        (`maxRetries: 1` y su pin) queda en pie.
+      - Fixtures de staleness movidas de 90min/2h a 3h/4h/5h. Siguen así tras el revert: son stale
+        con margen y sin margen, así que no dependen de la política.
 - [x] 8.3 **FW2-3 (LOW)** — el bot pasa `status` al refresh (el 4.º call site que F7 se olvidó).
       Era inerte por ACCIDENTE (el gate externo `balanceStale` del mapper ya es por carril), o sea
       apoyado en que dos gates independientes coincidan para siempre. **No hay un quinto call
@@ -250,6 +247,37 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
         del TTL los tres coinciden", que es el que prueba que los TRES se movieron juntos).
       - FW2-3: sin `status` ⇒ 2 rojos (P3 y el pin nuevo).
       - FW2-4: `updateClientBalance` re-agregado al twin ⇒ rojo el pin de runtime.
+
+## Fase 9 — Fix wave 3 (re-review 2)
+
+- [x] 9.1 **FW3 (HIGH)** — muere el margen del carril rápido (`FAST_LANE_BATCH_MARGIN_MINUTES`,
+      FW2-2b): constante, suma y prosa justificatoria. La premisa era "el refresh on-demand que
+      dispara el flag no puede mejorar el dato del batch" — y es **falsa**: ese TTL no es sólo el
+      flag de display, es TAMBIÉN el gate del refresh (`RefreshClientBalanceIfStale.isStale`), y el
+      refresh consulta `gr.fetchClientBalance` **en vivo**, no re-lee el batch.
+      - Medido con el margen puesto: cliente `active`, deuda de $45.000 sellada hace 90min, que
+        pagó hace 30 (GR en vivo devuelve `0.00`) ⇒ el bot contestaba `tieneDeuda:true,
+        saldo:45000` con **cero** llamadas a GR. Sin el margen refresca y contesta 0. Servir saldo
+        viejo como fresco es el modo de falla que este change entero existe para evitar, y
+        contradice la política escrita en el propio `balanceTtlMinutesForStatus`.
+      - Queda la semántica de F7: carril rápido = TTL configurado (60min por default), carril
+        lento = 26h. La asimetría es a propósito: en el lento, sin margen TODA baja queda stale
+        permanente (el flag deja de informar); en el rápido el skew hace que informe de MÁS, que
+        es el lado seguro.
+      - **Costo aceptado y documentado en el archivo**: por el skew del sello del batch (~43min
+        medidos) el flag puede quedar prendido de más y disparar un refresh que no cambia nada.
+        Una llamada, colapsada por el single-flight (F2) y acotada por `maxRetries: 1`.
+      - Superficies verificadas (que ninguna quede con el margen — la deriva entre superficies es
+        lo que F8 pinea): el margen vivía en UN solo lugar, el helper compartido; mapper
+        (`PrismaCustomerRepository`), gate del refresh, inbox (`GetInboxClientContext`) y bot lo
+        derivan todos por `balanceTtlMinutesForStatus`. `maxRetries: 1` NO se tocó.
+      - Spec `balance-staleness-helper`: el requirement "every lane's TTL is cadence + margin"
+        pasa a "the effective TTL is the lane's TTL, with no batch margin on the fast lane", con
+        el porqué de la asimetría y el contra-scenario del revert.
+- [x] 9.2 Revert-probe permanente (visto en rojo contra `d6fc869c`): `ClienteSaldoResolver.test.ts`
+      → "FW3 — el cliente pagó hace 30min sobre un sello de 90min". Rojo medido:
+      `gr.balanceCalls: []` y `{saldo: 45000, tieneDeuda: true}`. Más la fixture discriminante en
+      el cross-site (150min con TTL 120: pasa el configurado, caía dentro del efectivo con margen).
 
 ## Apéndice — Matriz scenario → tarea
 
