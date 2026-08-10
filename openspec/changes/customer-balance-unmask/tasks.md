@@ -210,6 +210,47 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
       conteo de destinatarios de campañas/promos, la causa es el fast-lane (ya corriendo desde
       2026-08-04), NO este unmask. No se toca `buildSegmentWhere` en este change.
 
+## Fase 8 — Fix wave 2 (re-review adversarial)
+
+- [x] 8.1 **FW2-1 (HIGH)** — el saldo NEGATIVO ya no se emite crudo. La rama `balanceDue <= 0`
+      mandaba `saldo: -5000` con `moneda: null` a los hechos: el signo no sobrevive al prompt y el
+      monto llega sin denominar. Y el verificador de números (`buildNumberWhitelist`) recorre los
+      hechos ⇒ `-5000` **respaldaba** la cadena `"5000"`, así que "tenés una deuda de 5000" pasaba
+      la última red sobre un cliente con esa plata A FAVOR. Ahora `saldo: 0` + `moneda: null`
+      fijos, y el crédito lleva `guia: GUIA_SALDO_A_FAVOR` (sin dígitos, o se whitelistearía
+      sola). Spec `assistant-balance-guard` actualizada (el `…` del scenario del crédito quedó
+      explícito + requirement nuevo "a signed amount NEVER reaches the facts").
+      - Asimetría DELIBERADA y pineada: ficha/inbox siguen emitiendo `-5000` porque los lee un
+        humano de soporte. El clamp es del bot, no de la verdad.
+- [x] 8.2 **FW2-2 (MEDIUM)** — `maxRetries: 0` era romo: un blip simple de GR se recupera en
+      ~694ms con UN reintento (holgado en el budget de 4s), y con cero el fallo se COMPARTE con
+      todos los callers vía single-flight. `maxRetries: 1` — recupera el blip, acota el huérfano a
+      una llamada. Pin de composición actualizado (`toBe(1)`).
+      - Y la política de margen se unificó: F7 le dio "cadencia + margen" al carril lento y dejó
+        al rápido con margen CERO (TTL 60 == cadencia 60, con el sello al minuto en que el batch
+        —~43min— toca a cada cliente ⇒ stale gran parte de cada hora ⇒ refrescos on-demand que no
+        arreglaban nada). Ahora efectivo rápido = TTL configurado + `FAST_LANE_BATCH_MARGIN_MINUTES`
+        (60) ⇒ 2h con el default. El margen se SUMA: la perilla sigue viva (M5 sigue muerto).
+      - Interacción con el wave 1 resuelta explícitamente: el pin cross-site sigue siendo "mismo
+        TTL para el MISMO carril" (F7/F8); lo que cambió es cuánto vale el del carril rápido, y
+        los tres call sites se mueven juntos. Fixtures de staleness movidas de 90min/2h a 3h/4h.
+- [x] 8.3 **FW2-3 (LOW)** — el bot pasa `status` al refresh (el 4.º call site que F7 se olvidó).
+      Era inerte por ACCIDENTE (el gate externo `balanceStale` del mapper ya es por carril), o sea
+      apoyado en que dos gates independientes coincidan para siempre. **No hay un quinto call
+      site**: `RefreshClientBalanceIfStale.execute` se invoca en exactamente tres lugares (ficha,
+      inbox, bot).
+- [x] 8.4 **FW2-4 (LOW)** — `updateClientBalance` eliminado del port, del adapter Prisma y del
+      twin in-memory. F3 lo dejó con cero callers de producción pero seguía PUBLICADO: un método
+      en un port no es código muerto, es una oferta. Tests migrados al camino atómico
+      (`invoices: null`), archivo renombrado a `UpdateBalanceAndInvoices.test.ts`.
+- [x] 8.5 Revert-probes de la wave 2 (todos vistos en rojo y restaurados):
+      - FW2-1: `saldo: customer.balanceDue` de nuevo ⇒ 3 tests rojos (hechos, whitelist, asimetría).
+      - FW2-2a: `maxRetries: 0` ⇒ rojo el pin de composición.
+      - FW2-2b: sin el margen del carril rápido ⇒ 4 rojos en el cross-site (incluido el "dentro
+        del TTL los tres coinciden", que es el que prueba que los TRES se movieron juntos).
+      - FW2-3: sin `status` ⇒ 2 rojos (P3 y el pin nuevo).
+      - FW2-4: `updateClientBalance` re-agregado al twin ⇒ rojo el pin de runtime.
+
 ## Apéndice — Matriz scenario → tarea
 
 | Spec | Scenario | Tarea |
@@ -236,6 +277,14 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
 | assistant-balance-guard | client with no GR link | 4.4 |
 | assistant-balance-guard | trusted balance, unconfirmed currency | 4.5 |
 | assistant-balance-guard | regression — confirmed currency | 4.6 |
+| assistant-balance-guard | credit balance (negative debt) | 8.1 |
+| assistant-balance-guard | the number verifier does not whitelist the credit | 8.1 |
+| assistant-balance-guard | up-to-date client (exactly zero) carries no credit guidance | 8.1 |
+| assistant-balance-guard | the ficha still shows the credit to a human | 8.1 |
+| assistant-balance-guard | (contra) resolver emits the raw negative again | 8.5 |
+| balance-staleness-helper | fast lane's effective TTL includes the batch margin | 8.2 |
+| balance-staleness-helper | the knob still moves the effective TTL | 8.2 |
+| balance-staleness-helper | slow lane does NOT get the margin added twice | 8.2 |
 | client-detail-balance | active client with real debt | 3.1 |
 | client-detail-balance | stale client, refresh succeeds | 3.2 |
 | client-detail-balance | refresh fails or times out | 3.3 |
@@ -246,7 +295,8 @@ Prisma. Techo `BALANCE_REFRESH_TIMEOUT_MS` = 10 s entra en este change. Comentar
 | inbox-client-balance | no GR link | 3.8 |
 | inbox-client-balance | agent forces a refresh | 3.9 |
 
-**Cobertura**: 31/31 scenarios mapeados. Sin huecos de spec detectados.
+**Cobertura**: 40/40 scenarios mapeados (31 del change + 9 de la fix wave 2). Sin huecos de
+spec detectados.
 
 **Nota sobre balance-staleness-helper / contra-scenario "reintroduce call keyed off status"**: no
 hay un mutante DEDICADO nuevo para esta spec — se reutiliza 6.3 (M-B), que reintroduce
