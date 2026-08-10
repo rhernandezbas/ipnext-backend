@@ -129,6 +129,104 @@ describe('RefreshClientBalanceIfStale', () => {
   });
 });
 
+/**
+ * fix wave F2 — **single-flight por `grClienteId`.**
+ *
+ * La carrera real medida en el review: la ficha (`GetClientDetail`) y el bot
+ * (`ClienteSaldoResolver`) comparten LA MISMA instancia de este colaborador
+ * (pineado por `assistant-composition.test.ts`), y pueden entrar a la vez sobre
+ * el mismo cliente — un agente abre la ficha mientras llega el WhatsApp. Sin
+ * dedup eran DOS llamadas a GR y DOS escrituras: el último en escribir gana, así
+ * que un snapshot VIEJO podía pisar al nuevo y quedar sellado con `lastBalanceAt`
+ * fresco. Un saldo viejo con timbre de fresco es exactamente el modo de falla que
+ * este change existe para evitar — y encima invisible (nadie lo ve stale).
+ *
+ * El gate de staleness queda ANTES del dedup, a propósito: es local, barato y
+ * per-caller. Lo que se dedupe es el VUELO (fetch + escritura), que es lo caro y
+ * lo que puede invertirse. Deploy single-process ⇒ un mapa en memoria alcanza.
+ */
+describe('RefreshClientBalanceIfStale — single-flight (F2)', () => {
+  const now = new Date('2026-05-27T12:00:00Z');
+  const TTL = 60;
+
+  /** GR con latencia CONTROLADA: el vuelo no termina hasta que el test lo suelta. */
+  function deferredGr() {
+    const calls: string[] = [];
+    let release!: (b: GrClientBalance) => void;
+    const gr = {
+      fetchClientBalance: async (grClienteId: string) => {
+        calls.push(grClienteId);
+        return new Promise<GrClientBalance>((resolve) => {
+          release = resolve;
+        });
+      },
+    } as unknown as InMemoryGestionRealPort;
+    return { gr, calls, release: (b: GrClientBalance) => release(b) };
+  }
+
+  it('F2 — dos execute() concurrentes del MISMO cliente: UNA sola llamada a GR y UNA sola escritura; ambos callers reciben true', async () => {
+    const { gr, calls, release } = deferredGr();
+    const mirror = new InMemoryClientMirrorRepository();
+    const writes: number[] = [];
+    const originalUpdate = mirror.updateClientBalance.bind(mirror);
+    mirror.updateClientBalance = async (id, amount, currency, at) => {
+      writes.push(amount);
+      return originalUpdate(id, amount, currency, at);
+    };
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    const p1 = uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    const p2 = uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    release(makeBalance('100011', 5000));
+    const [r1, r2] = await Promise.all([p1, p2]);
+
+    expect(calls).toEqual(['100011']); // ← el pin: UNA llamada, no dos
+    expect(writes).toEqual([5000]); // ← una sola escritura ⇒ no hay orden que invertir
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+    expect(mirror.balances.get('100011')?.amount).toBe(5000);
+  });
+
+  it('F2 — clientes DISTINTOS no se deduplican entre sí (la clave es el grClienteId, no un lock global)', async () => {
+    const { gr, calls, release } = deferredGr();
+    const mirror = new InMemoryClientMirrorRepository();
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    const p1 = uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    const p2 = uc.execute({ grClienteId: '100022', lastBalanceAt: null });
+    release(makeBalance('x', 1));
+    await Promise.all([p1, p2]);
+
+    expect(calls).toEqual(['100011', '100022']);
+  });
+
+  it('F2 — el slot se libera al terminar el vuelo: un execute() POSTERIOR vuelve a llamar a GR', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balancesByClient['100011'] = makeBalance('100011', 1000);
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+    await uc.execute({ grClienteId: '100011', lastBalanceAt: null });
+
+    expect(gr.balanceCalls).toEqual(['100011', '100011']);
+  });
+
+  it('F2 — un vuelo que FALLA tampoco deja el slot colgado (el próximo caller reintenta)', async () => {
+    const gr = new InMemoryGestionRealPort();
+    const mirror = new InMemoryClientMirrorRepository();
+    gr.balanceError = new Error('GR caido');
+    const uc = new RefreshClientBalanceIfStale(gr, mirror, { now: () => now, ttlMinutes: TTL });
+
+    expect(await uc.execute({ grClienteId: '100011', lastBalanceAt: null })).toBe(false);
+    gr.balanceError = undefined;
+    gr.balancesByClient['100011'] = makeBalance('100011', 777);
+
+    expect(await uc.execute({ grClienteId: '100011', lastBalanceAt: null })).toBe(true);
+    expect(mirror.balances.get('100011')?.amount).toBe(777);
+  });
+});
+
 // messaging-inbox-v2 (F1.5, B2) — `isBalanceOlderThanTtl` extracted as a pure,
 // exported helper so GetInboxClientContext (RICH-4, mirror-only default path) can
 // compute `balance.stale` with the EXACT SAME TTL rule as this collaborator,

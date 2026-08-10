@@ -62,6 +62,24 @@ export class RefreshClientBalanceIfStale {
   private readonly ttlMinutes: number;
   private readonly timeoutMs: number;
 
+  /**
+   * fix wave F2 — **single-flight por `grClienteId`.** Vuelos (fetch GR +
+   * escritura) en curso, indexados por cliente.
+   *
+   * La carrera: la ficha y el bot comparten ESTA instancia (pineado por
+   * `assistant-composition.test.ts`) y pueden entrar a la vez sobre el mismo
+   * cliente. Sin dedup son dos llamadas a GR y dos escrituras — y como el
+   * `lastBalanceAt` se sella con el reloj de CADA vuelo, el que termina último
+   * gana: un snapshot VIEJO puede pisar al nuevo y quedar marcado como fresco.
+   * Un saldo desactualizado con timbre de fresco es el peor de los dos mundos
+   * (nadie lo ve stale, así que nadie lo refresca).
+   *
+   * Deploy single-process ⇒ un mapa en memoria alcanza. Si algún día hay varias
+   * réplicas, esto degrada a "una llamada por réplica" — sigue siendo mejor que
+   * hoy, pero ahí haría falta un lock distribuido (molde: el lock `gr-sync`).
+   */
+  private readonly inFlight = new Map<string, Promise<boolean>>();
+
   constructor(
     private readonly gr: GestionRealPort,
     private readonly mirror: ClientMirrorRepository,
@@ -79,16 +97,33 @@ export class RefreshClientBalanceIfStale {
   async execute(input: RefreshInput): Promise<boolean> {
     const { grClienteId, lastBalanceAt } = input;
     if (!grClienteId) return false;
+    // El gate de staleness va ANTES del dedup a propósito: es local, barato y
+    // per-caller. Lo que se dedupe es el VUELO, que es lo caro (una llamada a GR)
+    // y lo único que puede invertir snapshots.
     if (!this.isStale(lastBalanceAt)) return false;
 
+    const inFlight = this.inFlight.get(grClienteId);
+    if (inFlight) return inFlight; // el segundo caller ESPERA al primero, no abre otro vuelo
+
+    const flight = this.fetchAndStore(grClienteId).finally(() => {
+      // El slot se libera SIEMPRE (éxito, fallo o timeout): un slot colgado
+      // dejaría al cliente sin refresco para siempre.
+      this.inFlight.delete(grClienteId);
+    });
+    this.inFlight.set(grClienteId, flight);
+    return flight;
+  }
+
+  /** Un vuelo: fetch a GR + persistencia atómica. NUNCA lanza (contrato de `execute`). */
+  private async fetchAndStore(grClienteId: string): Promise<boolean> {
     try {
       const at = this.now();
       const balance = await this.withTimeout(this.gr.fetchClientBalance(grClienteId), this.timeoutMs);
-      await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
       // Sync the client's GR invoices from the SAME payload (zero extra GR calls).
       // Guard (review #1): debt reported (amount > 0) but no itemized invoices ⇒ the list
       // is non-authoritative (schema drift / partial payload); a blind replace-all would
       // wipe the mirror. Sync only when authoritative: non-empty, or genuine zero-debt.
+      await this.mirror.updateClientBalance(grClienteId, balance.amount, balance.currency, at);
       if (balance.invoices.length > 0 || balance.amount <= 0) {
         await this.mirror.upsertInvoices(grClienteId, balance.invoices, at);
       }
