@@ -422,7 +422,9 @@ import { PrismaClientTvCancellationRepository } from '../adapters/prisma/PrismaC
 import { PrismaTvCicReuseEligibilityRepository } from '../adapters/prisma/PrismaTvCicReuseEligibilityRepository';
 import { PrismaClientTvActivationRepository } from '../adapters/prisma/PrismaClientTvActivationRepository';
 import { PrismaClientTvCancelStatusRepository } from '../adapters/prisma/PrismaClientTvCancelStatusRepository';
+import { PrismaClientTvRegisterStatusRepository } from '../adapters/prisma/PrismaClientTvRegisterStatusRepository';
 import { CancelTvJobRunner } from '../scheduling/CancelTvJobRunner';
+import { RegisterTvJobRunner } from '../scheduling/RegisterTvJobRunner';
 import { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
 import { PrismaTvActivationEventRepository } from '../adapters/prisma/PrismaTvActivationEventRepository';
 import { GetNetworkSite } from '@application/use-cases/GetNetworkSite';
@@ -2866,6 +2868,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const gigaredCancelTv = new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvCancellation);
   // #5 BE — pass eventRepo to runner so it records 'baja' on success (best-effort).
   const gigaredCancelTvRunner = new CancelTvJobRunner(gigaredCancelTv, gigaredTvCancelStatus, gigaredTvActivationEventRepo);
+  // gigared-alta-asincrona (W2/W3) — el ALTA de TV corre en background. La ruta ya NO recibe
+  // `registerAccount`: lo consume el runner. Los 3 últimos args del use case son POSICIONALES
+  // (pick = undefined → Math.random en prod, elegibilidad de reuso de CIC, auditoría) y su orden
+  // está pinneado por gigared-composition.cicReuse.test.ts.
+  const gigaredTvRegisterStatus = new PrismaClientTvRegisterStatusRepository();
+  const gigaredRegisterAccount = new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation, gigaredTvActivationEventRepo, undefined, gigaredCicReuseEligibility, auditEventRepo);
+  const gigaredRegisterTvRunner = new RegisterTvJobRunner(gigaredRegisterAccount, gigaredTvRegisterStatus);
   app.use('/api/gigared', createAuthMiddleware(authAdapter, sessionRepo), createGigaredRouter({
     getConfig:          new GetGigaredConfig(gigaredConfigRepo, featureFlagRepo),
     updateConfig:       new UpdateGigaredConfig(gigaredConfigRepo, featureFlagRepo),
@@ -2877,11 +2886,6 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listAccounts:       new ListGigaredAccounts(gigaredClient, contractServiceRepo, serviceCatalogRepo),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup, gigaredTvCancellation),
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
-    // #5 BE — pass eventRepo so register records 'alta'/'reactivacion' best-effort.
-    // gigared-tv-cic-reuse — los 3 últimos son POSICIONALES: pick (undefined = Math.random en
-    // prod), elegibilidad de reutilización de CICs y auditoría del cic reusado. El orden está
-    // pinneado por gigared-composition.cicReuse.test.ts.
-    registerAccount:    new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation, gigaredTvActivationEventRepo, undefined, gigaredCicReuseEligibility, auditEventRepo),
     // #131 PARTE B -- pass gigaredTvActivationEventRepo so AddTvService can record 'reactivacion' on row reuse.
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvActivationEventRepo),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
@@ -2910,6 +2914,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // #10/#11 — async TV-cancel deps
     cancelTvRunner:     gigaredCancelTvRunner,
     cancelStatus:       gigaredTvCancelStatus,
+    // gigared-alta-asincrona (W2) — async TV-register deps. Sin ESTAS dos líneas el alta
+    // asíncrona queda muerta en producción con el CI en verde (los tests inyectan su propio
+    // wiring). Pinneado por gigared-composition.test.ts.
+    registerTvRunner:   gigaredRegisterTvRunner,
+    registerStatus:     gigaredTvRegisterStatus,
     customerLookup:     gigaredCustomerLookup,
     contractLookup:     gigaredContractLookup,
     // #5 BE — TV activation history query use case

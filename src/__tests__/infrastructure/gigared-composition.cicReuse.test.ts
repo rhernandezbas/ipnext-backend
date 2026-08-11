@@ -17,11 +17,9 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
-
-/** Quita comentarios de bloque y de línea para que el match sea sobre CÓDIGO REAL. */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
-}
+// El stripper vive en un helper compartido: `gigared-composition.test.ts` necesita EL MISMO, y dos
+// copias de la misma regla son dos implementaciones de las que el test certifica una sola.
+import { stripComments } from '../helpers/stripComments';
 
 describe('gigared-tv-cic-reuse T7.2 — composition root', () => {
   let code: string;
@@ -34,15 +32,9 @@ describe('gigared-tv-cic-reuse T7.2 — composition root', () => {
     code = stripComments(raw);
   });
 
-  it('el stripper funciona (si no, todo lo de abajo es teatro)', () => {
-    expect(stripComments('const a = 1; // new RegisterGigaredAccount(x)')).not.toContain(
-      'RegisterGigaredAccount',
-    );
-    expect(stripComments('/* new RegisterGigaredAccount(x) */ const a = 1;')).not.toContain(
-      'RegisterGigaredAccount',
-    );
-    expect(stripComments("const url = 'http://x'; // hola")).toContain("'http://x'");
-  });
+  // El test del stripper se mudó a `helpers/stripComments.test.ts` cuando la función pasó a ser
+  // compartida con `gigared-composition.test.ts`. Sigue siendo obligatorio: sin él, todo lo de
+  // abajo es teatro.
 
   it('app.ts construye PrismaTvCicReuseEligibilityRepository', () => {
     expect(code).toMatch(/new PrismaTvCicReuseEligibilityRepository\(/);

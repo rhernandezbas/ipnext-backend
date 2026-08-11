@@ -27,6 +27,7 @@ import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-m
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
 import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
 import { InMemoryClientTvCancelStatusRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancelStatusRepository';
+import { InMemoryClientTvRegisterStatusRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvRegisterStatusRepository';
 
 import { GetGigaredConfig, GIGARED_FLAG } from '@application/use-cases/gigared/GetGigaredConfig';
 import { UpdateGigaredConfig } from '@application/use-cases/gigared/UpdateGigaredConfig';
@@ -43,6 +44,7 @@ import { ChangeTvPassword } from '@application/use-cases/gigared/ChangeTvPasswor
 import { GetTvCredentials } from '@application/use-cases/gigared/GetTvCredentials';
 import { TransferTvToCustomer } from '@application/use-cases/gigared/TransferTvToCustomer';
 import { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
+import { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRunner';
 import { InMemoryTvActivationEventRepository } from '@infrastructure/adapters/in-memory/InMemoryTvActivationEventRepository';
 import { ListTvActivationHistory } from '@application/use-cases/gigared/ListTvActivationHistory';
 
@@ -132,6 +134,13 @@ async function buildApp(opts: Opts = {}) {
   const runner = new CancelTvJobRunner(cancelTv, cancelStatus);
   if (opts.runnerRef) opts.runnerRef.runner = runner;
 
+  // gigared-alta-asincrona (W2) — el router exige las deps del alta asincrona. Este
+  // archivo cubre la BAJA; el alta tiene su propio suite (gigared.register-async.routes).
+  const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+  const registerTvRunner = new RegisterTvJobRunner(
+    new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+    registerStatus,
+  );
   const router = createGigaredRouter({
     getConfig: new GetGigaredConfig(cfg, flags),
     updateConfig: new UpdateGigaredConfig(cfg, flags),
@@ -139,7 +148,6 @@ async function buildApp(opts: Opts = {}) {
     listAccounts: new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
     linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-    registerAccount: new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
@@ -162,6 +170,8 @@ async function buildApp(opts: Opts = {}) {
     gigaredProbeReady: createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),
     cancelTvRunner: runner,
     cancelStatus,
+    registerTvRunner,
+    registerStatus,
     customerLookup,
     contractLookup,
     listActivationHistory: new ListTvActivationHistory(new InMemoryTvActivationEventRepository()),
@@ -458,6 +468,13 @@ describe('POST /customers/:id/cancel -- reason field persists to baja event (#12
     const flags = new InMemoryFeatureFlagRepository();
     flags.seed(FLAG, true);
 
+    // gigared-alta-asincrona (W2) — el router exige las deps del alta asincrona. Este
+    // archivo cubre la BAJA; el alta tiene su propio suite (gigared.register-async.routes).
+    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+    const registerTvRunner = new RegisterTvJobRunner(
+      new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+      registerStatus,
+    );
     const router = createGigaredRouter({
       getConfig: new GetGigaredConfig(cfg, flags),
       updateConfig: new UpdateGigaredConfig(cfg, flags),
@@ -465,7 +482,6 @@ describe('POST /customers/:id/cancel -- reason field persists to baja event (#12
       listAccounts: new ListGigaredAccounts(port),
       getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
       linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-      registerAccount: new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
       addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
       removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
       setOttStatus: new SetOttStatus(port, customerLookup),
@@ -488,6 +504,8 @@ describe('POST /customers/:id/cancel -- reason field persists to baja event (#12
       gigaredProbeReady: createGigaredReadyMiddleware(cfg, flags, { requireFlag: false }),
       cancelTvRunner: runner,
       cancelStatus,
+      registerTvRunner,
+      registerStatus,
       customerLookup,
       contractLookup,
       listActivationHistory: new ListTvActivationHistory(new InMemoryTvActivationEventRepository()),

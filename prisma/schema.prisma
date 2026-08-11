@@ -198,6 +198,20 @@ model Client {
   tvCancelStatus    String?
   tvCancelResult    Json?
   tvCancelStartedAt DateTime?
+  // gigared-alta-asincrona (W1.1) — estado del job de ALTA de TV asíncrona. Molde exacto de los
+  // tvCancel* de arriba. Mirror-only; el sync de GR NUNCA escribe estas columnas.
+  // tvRegisterStatus:    'pending' | 'running' | 'done' | 'failed' | null
+  // tvRegisterResult:    RegisterGigaredAccount result JSON en done; {error} en failed
+  // tvRegisterStartedAt: cuándo se ENCOLÓ el alta. INMUTABLE mientras el job vive — es lo que el
+  //   operador ve en el polling. A DIFERENCIA del molde de cancel se escribe TAMBIÉN en 'pending'.
+  // tvRegisterHeartbeatAt: última SEÑAL DE VIDA del runner (lease + fence token). El watchdog
+  //   (W1.3) mide contra ESTE sello, no contra startedAt: si midiera la antigüedad, no podría
+  //   distinguir "el proceso murió" de "el job está tardando" —un alta hace 17 llamadas al partner,
+  //   510 s de piso contra un TTL de 900 s— y le robaría el turno a un job VIVO.
+  tvRegisterStatus      String?
+  tvRegisterResult      Json?
+  tvRegisterStartedAt   DateTime?
+  tvRegisterHeartbeatAt DateTime?
   // client-geolocation — Prominense-owned GPS (NOT from GR). GR sync NEVER writes these.
   lat              Float?
   lng              Float?
