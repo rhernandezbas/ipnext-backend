@@ -173,14 +173,12 @@ async function buildApp(opts: Opts = {}) {
 
   const cancelTv = new CancelTv(port, csRepo, catalog, contractLookup, customerLookup, tvCancellation);
   const cancelTvRunner = new CancelTvJobRunner(cancelTv, cancelStatus);
-  // gigared-alta-asincrona (W2/W3) — el alta pasó a ser ASÍNCRONA: la ruta encola y responde
-  // 202, y el resultado (el que estos tests venían leyendo del body del POST) ahora se consulta
-  // por GET .../register/status. Ver el helper `alta()` más abajo.
+  // El alta es SÍNCRONA: la ruta invoca al use case y devuelve su resultado (201/207) en el MISMO
+  // request, que es lo que estos tests leen del body del POST. El runner y el repo de estado del
+  // job siguen cableados —la infraestructura asíncrona no se desarmó— pero el POST no los usa.
+  const registerAccount = new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation);
   const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-  const registerTvRunner = new RegisterTvJobRunner(
-    new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-    registerStatus,
-  );
+  const registerTvRunner = new RegisterTvJobRunner(registerAccount, registerStatus);
 
   const router = createGigaredRouter({
     getConfig: new GetGigaredConfig(cfg, flags),
@@ -189,6 +187,7 @@ async function buildApp(opts: Opts = {}) {
     listAccounts: new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
     linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+    registerAccount,
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup, opts.tvEventRepo),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
@@ -229,31 +228,6 @@ async function buildApp(opts: Opts = {}) {
   app.use('/api/gigared', router);
   app.use(errorHandler);
   return app;
-}
-
-/**
- * gigared-alta-asincrona (W2) — el alta ya NO devuelve su resultado en el POST.
- *
- * El POST encola (202) y el desenlace se consulta por GET .../register/status. Este helper hace
- * las dos cosas y devuelve AMBAS respuestas, para que cada test siga afirmando exactamente lo que
- * afirmaba antes: sólo cambió DÓNDE vive el resultado, no cuál es.
- *
- * El polling es real (no un `setTimeout` a ojo): espera a que el job llegue a un estado TERMINAL.
- * Un sleep fijo daría un test que pasa o falla según cuán cargada esté la máquina.
- */
-async function alta(
-  app: express.Express,
-  body: Record<string, unknown>,
-  customerId = 'cust-1',
-): Promise<{ post: request.Response; job: Record<string, any> }> {
-  const post = await request(app).post(`/api/gigared/customers/${customerId}/register`).send(body);
-  if (post.status !== 202) return { post, job: {} };
-  for (let i = 0; i < 300; i++) {
-    const st = await request(app).get(`/api/gigared/customers/${customerId}/register/status`);
-    if (st.body.status === 'done' || st.body.status === 'failed') return { post, job: st.body };
-    await new Promise(r => setTimeout(r, 10));
-  }
-  throw new Error('el job del alta nunca alcanzó un estado terminal');
 }
 
 describe('gigared.routes — readiness/probe gating (#47 / M1)', () => {
@@ -380,10 +354,11 @@ describe('gigared.routes — granular TV RBAC guards (#50)', () => {
   it('#65 default: POST /register sends sendActivationEmail=false (ficticio)', async () => {
     const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
     const app = await buildApp({ port });
-    // gigared-alta-asincrona — el flag viaja al partner desde el JOB, no desde el request.
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', contractId: 'C1' });
-    expect(post.status).toBe(202);
-    expect(job.status).toBe('done');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', contractId: 'C1' });
+    expect(res.status).toBe(201);
     expect((port.register as jest.Mock).mock.calls[0][0].sendActivationEmail).toBe(false);
   });
 
@@ -562,15 +537,17 @@ describe('gigared.routes — happy + 207 (#47)', () => {
     expect(res.body).toMatchObject({ gigared: 'ok', local: 'failed' });
   });
 
-  it('POST /register → 202 y el job termina en done con la cuenta', async () => {
+  it('POST /register → 201', async () => {
     // B2 — probe (getAccountByInternalId) 404 primero para ejercitar el flujo COMPLETO
     // (register→activate→setInternalId), no la rama "recovered" del D2.
     const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
     const app = await buildApp({ port });
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true, contractId: 'C1' });
-    expect(post.status).toBe(202);
-    expect(job.status).toBe('done');
-    expect(job.result.account.cic).toBe('0000000001');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true, contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(res.body.account.cic).toBe('0000000001');
   });
 
   it('PUT /ott → 200 { ok:true }', async () => {
@@ -625,14 +602,15 @@ describe('#47k POST /customers/:id/cancel — async 202 (#10/#11)', () => {
 // password: si viene, se ignora (strip silencioso para tolerar el FE viejo en la ventana de
 // deploy). Sin grContratoId → 422 GR_CONTRACT_ID_REQUIRED, Gigared intacto.
 describe('#70/#115 POST /register — password generada server-side desde grContratoId del contrato', () => {
-  it('register SIN password en el body → el job reenvía a Gigared la determinística ip{grContratoId}', async () => {
+  it('register SIN password en el body → 201 con la determinística ip{grContratoId} reenviada a Gigared', async () => {
     const register = jest.fn(async () => {});
     // grContratoId='204382' → password='ip204382' (8 chars, no padding needed)
     // B2 — probe 404 primero para ejercitar el flujo completo (no la rama "recovered").
     const app = await buildApp({ port: fakePort({ register, getAccountByInternalId: probeMissThenFound(fakeAccount()) }), grContratoId: '204382' });
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
-    expect(post.status).toBe(202);
-    expect(job.status).toBe('done');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
+    expect(res.status).toBe(201);
     expect(register).toHaveBeenCalledTimes(1);
     // ip204382 ya cumple la longitud mínima (8) → sin padding.
     expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip204382' });
@@ -641,16 +619,20 @@ describe('#70/#115 POST /register — password generada server-side desde grCont
   it('grContratoId corto → la determinística se paddea a 8 (ip12 → ip120000)', async () => {
     const register = jest.fn(async () => {});
     const app = await buildApp({ port: fakePort({ register, getAccountByInternalId: probeMissThenFound(fakeAccount()) }), grContratoId: '12' });
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
-    expect(job.status).toBe('done');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
+    expect(res.status).toBe(201);
     expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip120000' });
   });
 
   it('body CON password → se IGNORA: se usa SIEMPRE la determinística desde el contrato (tolera FE viejo)', async () => {
     const register = jest.fn(async () => {});
     const app = await buildApp({ port: fakePort({ register, getAccountByInternalId: probeMissThenFound(fakeAccount()) }), grContratoId: '204382' });
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'otracosa99', contractId: 'C1' });
-    expect(job.status).toBe('done');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'otracosa99', contractId: 'C1' });
+    expect(res.status).toBe(201);
     expect(register).toHaveBeenCalledTimes(1);
     // la del body NO viaja; viaja la generada server-side desde el grContratoId del contrato.
     expect((register.mock.calls[0] as unknown[])[0]).toMatchObject({ password: 'ip204382' });
@@ -660,8 +642,6 @@ describe('#70/#115 POST /register — password generada server-side desde grCont
   it('contrato SIN grContratoId (null) → 422 GR_CONTRACT_ID_REQUIRED, Gigared NUNCA tocado', async () => {
     const register = jest.fn(async () => {});
     const app = await buildApp({ port: fakePort({ register }), grContratoId: null });
-    // gigared-alta-asincrona (W2.2) — este chequeo es LOCAL, así que sigue siendo SÍNCRONO: el
-    // 422 llega en el request, no como un job que falla tres minutos después.
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
@@ -671,15 +651,14 @@ describe('#70/#115 POST /register — password generada server-side desde grCont
     expect(register).not.toHaveBeenCalled();
   });
 
-  it('e) la password NUNCA aparece — ni en el 202 ni en el estado del job', async () => {
+  it('e) the password NEVER appears in the endpoint response body', async () => {
     const app = await buildApp({ grContratoId: '204382' });
-    // La superficie de fuga ahora es DOBLE: el ACK del encolado y el polling.
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
-    expect(post.status).toBe(202);
-    for (const body of [post.body, job]) {
-      expect(JSON.stringify(body)).not.toContain('ip204382');
-      expect(JSON.stringify(body).toLowerCase()).not.toContain('password');
-    }
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(JSON.stringify(res.body)).not.toContain('ip204382');
+    expect(JSON.stringify(res.body).toLowerCase()).not.toContain('password');
   });
 });
 
@@ -701,13 +680,10 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
   });
 
   /**
-   * gigared-alta-asincrona — los errores que nacen de una llamada AL PARTNER ya no viajan como
-   * status HTTP del request: el request sólo encola. El desenlace vive en el job, y lo que el
-   * operador ve es `message` + `code`. El `detail` RFC 9457 SÍ se pierde del cable (queda en el
-   * mensaje del error de dominio cuando lo trae); es el costo consciente de sacar el alta del
-   * request y está anotado en el reporte del change.
+   * El `detail` RFC 9457 viaja EN EL REQUEST. Con el contrato asíncrono se perdía del cable (el job
+   * sólo persistía `{ error, code }`) y el FE, que ni siquiera pollea, no veía nada.
    */
-  it('#47g: GigaredUnavailableError → el job queda failed con su code y su mensaje', async () => {
+  it('#47g: GigaredUnavailableError with detail → 503 body carries detail (transparency)', async () => {
     const port = fakePort({
       register: jest.fn(async () => { throw new GigaredUnavailableError('Gigared API is unavailable', 'CUA no respondió a tiempo'); }),
       // B2 — probe 404 primero: si no, la cuenta "recovered" trivial esquivaría el register y
@@ -715,11 +691,13 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
       getAccountByInternalId: probeMissThenFound(fakeAccount()),
     });
     const app = await buildApp({ port });
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true, contractId: 'C1' });
-    expect(post.status).toBe(202);
-    expect(job.status).toBe('failed');
-    expect(job.code).toBe('GIGARED_UNAVAILABLE');
-    expect(job.message).toMatch(/Gigared/i);
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', cic: '0000001234', password: 'ip243200', sendActivationEmail: true, contractId: 'C1' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('GIGARED_UNAVAILABLE');
+    expect(res.body.detail).toBe('CUA no respondió a tiempo');
   });
 
   it('#47g: GigaredUnavailableError WITHOUT detail → 503 body has no detail key (no null noise)', async () => {
@@ -878,7 +856,7 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
 
   // #109 W1 — pool de CICs vacío en el register → 422 NO_CIC_AVAILABLE.
   // Verifica que sendGigaredError mapea NoCicAvailableError al status 422 correcto.
-  it('#109 W1: POST /register con pool vacío → el job falla con NO_CIC_AVAILABLE', async () => {
+  it('#109 W1: POST /register con pool vacío → 422 NO_CIC_AVAILABLE', async () => {
     // listAccounts devuelve [] → use case lanza NoCicAvailableError → ruta debe responder 422.
     // B2 — probe 404 primero: si no, "recovered" trivial esquivaría el pool-pick por completo.
     const port = fakePort({
@@ -886,10 +864,12 @@ describe('gigared.routes — domain error → status mapping (#47)', () => {
       getAccountByInternalId: probeMissThenFound(fakeAccount()),
     });
     const app = await buildApp({ port });
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(post.status).toBe(202);
-    expect(job.status).toBe('failed');
-    expect(job.code).toBe('NO_CIC_AVAILABLE');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      // #115 — contractId requerido
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NO_CIC_AVAILABLE');
     // Gigared nunca debe recibir el register cuando el pool está vacío.
     expect(port.register).not.toHaveBeenCalled();
   });
@@ -968,7 +948,6 @@ describe('#115 POST /register — contractId requerido + identidad deriva del co
   it('contrato con grContratoId null → 422 GR_CONTRACT_ID_REQUIRED, Gigared no tocado', async () => {
     const port = fakePort();
     const app = await buildApp({ port, grContratoId: null });
-    // W2.2 — sigue SÍNCRONO: es un chequeo local, no una llamada al partner.
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
@@ -980,7 +959,7 @@ describe('#115 POST /register — contractId requerido + identidad deriva del co
   it('contrato ajeno (contractOwner distinto) → 404 CONTRACT_NOT_FOUND, Gigared no tocado', async () => {
     const port = fakePort();
     const app = await buildApp({ port, contractOwner: 'cust-B' });
-    // W2.2 — el ownership se valida ANTES de encolar: sigue siendo un 404 del request.
+    // El ownership se valida en la ruta, ANTES de tocar al partner.
     const res = await request(app)
       .post('/api/gigared/customers/cust-1/register')
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C-of-B' });
@@ -989,12 +968,13 @@ describe('#115 POST /register — contractId requerido + identidad deriva del co
     expect(port.register).not.toHaveBeenCalled();
   });
 
-  it('happy path: contractId válido con grContratoId CUA-válido → 202 y el job termina en done', async () => {
+  it('happy path: contractId válido con grContratoId CUA-válido → 201', async () => {
     const app = await buildApp({ grContratoId: '204382' });
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(post.status).toBe(202);
-    expect(job.status).toBe('done');
-    expect(job.result.account).toBeDefined();
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(res.body.account).toBeDefined();
   });
 });
 
@@ -1004,55 +984,60 @@ describe('#115 POST /register — contractId requerido + identidad deriva del co
 // partial = !partnerCreated || localReconciled === 'failed' → 207; else 201.
 // ---------------------------------------------------------------------------
 describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)', () => {
-  it('happy path completo → job done { partnerCreated:true, localReconciled:"synced", recovered:false }', async () => {
+  it('happy path completo → 201 { partnerCreated:true, localReconciled:"synced", recovered:false }', async () => {
     const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
     const app = await buildApp({ port });
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(job.status).toBe('done');
-    expect(job.result).toMatchObject({ partnerCreated: true, localReconciled: 'synced', recovered: false });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'synced', recovered: false });
   });
 
-  it('recovery mine-stamped con reconcile OK → job done recovered:true (recovered NO gatea el estado)', async () => {
+  it('recovery mine-stamped con reconcile OK → 201 recovered:true (recovered NO gatea el status)', async () => {
     // seq=0 (sin tvCancellation seedeado) → internal_id vigente = 'cust-1' (pelado).
     const stamped = fakeAccount({ cic: '0000005555', internalId: 'cust-1' });
     const port = fakePort({ getAccountByInternalId: jest.fn(async () => stamped) });
     const app = await buildApp({ port });
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(job.status).toBe('done');
-    expect(job.result).toMatchObject({ partnerCreated: true, localReconciled: 'synced', recovered: true });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'synced', recovered: true });
   });
 
   /**
-   * El 207 "parcial" ya no existe como status HTTP: el alta se encola siempre con 202 y el
-   * carácter parcial vive en el result del job (`localReconciled:'failed'`), que es donde el FE
-   * lo lee ahora. La INFORMACIÓN es la misma; cambió el sobre.
+   * El 207 es un STATUS HTTP otra vez. Con el contrato asíncrono el carácter parcial vivía dentro
+   * del result del job y el POST devolvía 202 igual — o sea, indistinguible de un éxito para un FE
+   * que no pollea.
    */
-  it('reconcile local falla → job done { partnerCreated:true, localReconciled:"failed" }', async () => {
+  it('reconcile local falla → 207 { partnerCreated:true, localReconciled:"failed" }', async () => {
     const csRepo = new InMemoryContractServiceRepository();
     jest.spyOn(csRepo, 'add').mockRejectedValue(new Error('db down'));
     const port = fakePort({ getAccountByInternalId: probeMissThenFound(fakeAccount()) });
     const app = await buildApp({ port, csRepo });
-    const { post, job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(post.status).toBe(202);
-    expect(job.status).toBe('done');
-    expect(job.result).toMatchObject({ partnerCreated: true, localReconciled: 'failed' });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(207);
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'failed' });
   });
 
-  it('TvPoolPoisonedError (B1) → job failed { code:"TV_POOL_POISONED" }', async () => {
+  it('TvPoolPoisonedError (B1) → 422 { code:"TV_POOL_POISONED", poisonedCount }', async () => {
     const port = fakePort({
       getAccountByInternalId: probeMissThenFound(fakeAccount()), // probe 404 -> sigue al pool-pick
       listAccounts: jest.fn(async () => [fakeAccount({ internalId: 'foreign-1' })]), // TODO envenenado
     });
     const app = await buildApp({ port });
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(job.status).toBe('failed');
-    expect(job.code).toBe('TV_POOL_POISONED');
-    expect(typeof job.message).toBe('string');
-    // Ver el test de PÉRDIDA DE CAMPOS al final de este describe: `poisonedCount` ya no viaja.
-    expect(job.poisonedCount).toBeUndefined();
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('TV_POOL_POISONED');
+    expect(res.body.poisonedCount).toBe(1);
   });
 
-  it('TvIdentityStampUnverifiedError (B1) → job failed { code:"TV_IDENTITY_UNVERIFIED" }', async () => {
+  it('TvIdentityStampUnverifiedError (B1) → 503 { code:"TV_IDENTITY_UNVERIFIED", cic, internalId }', async () => {
     const port = fakePort({
       listAccounts: jest.fn(async () => [fakeAccount({ cic: '0000009851', internalId: null })]),
       getAccountByInternalId: jest.fn()
@@ -1060,13 +1045,16 @@ describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)',
         .mockResolvedValue(fakeAccount({ cic: '0000009852' })), // post-stamp: mismatch
     });
     const app = await buildApp({ port });
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(job.status).toBe('failed');
-    expect(job.code).toBe('TV_IDENTITY_UNVERIFIED');
-    expect(typeof job.message).toBe('string');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('TV_IDENTITY_UNVERIFIED');
+    expect(res.body.cic).toBe('0000009851');
+    expect(res.body.internalId).toBe('cust-1');
   });
 
-  it('TvEmailOwnedByOtherError (B2) → job failed { code:"TV_EMAIL_OWNED_BY_OTHER" }', async () => {
+  it('TvEmailOwnedByOtherError (B2) → 409 { code:"TV_EMAIL_OWNED_BY_OTHER", email, ownedByInternalId }', async () => {
     const register = jest.fn(async () => { throw new GigaredRejectedError('Conflict', 'email already in use'); });
     const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
       if (filter?.email) return [fakeAccount({ internalId: 'cust-OTHER' })];
@@ -1077,31 +1065,29 @@ describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)',
       getAccountByInternalId: probeMissThenFound(fakeAccount()),
     });
     const app = await buildApp({ port });
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
-    expect(job.status).toBe('failed');
-    expect(job.code).toBe('TV_EMAIL_OWNED_BY_OTHER');
-    expect(typeof job.message).toBe('string');
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TV_EMAIL_OWNED_BY_OTHER');
+    expect(res.body.ownedByInternalId).toBe('cust-OTHER');
   });
 
   /**
-   * PÉRDIDA DE CAMPOS, PINNEADA A PROPÓSITO (gigared-alta-asincrona W2/W3).
+   * LOS CAMPOS POR-ERROR VUELVEN AL CABLE, PINNEADO A PROPÓSITO.
    *
-   * Cuando el alta era síncrona, `sendGigaredError` publicaba campos PROPIOS de cada error además
-   * del code: `poisonedCount`, `cic`, `internalId`, `ownedByInternalId`, `detail`. Al mover el
-   * desenlace al job, lo que se persiste es `{ error, code }` y esos campos DEJAN de estar en el
-   * cable — y los mensajes de dominio tampoco los contienen (verificado: "No se pudo verificar que
-   * el CIC estampado…" no nombra el cic; "El email determinístico de TV ya pertenece a otra
-   * cuenta" no nombra al dueño).
+   * `sendGigaredError` publica campos PROPIOS de cada error además del code: `poisonedCount`,
+   * `cic`, `internalId`, `ownedByInternalId`, `detail`. Con el contrato asíncrono el desenlace se
+   * persistía como `{ error, code }` y los cinco DESAPARECÍAN del cable — los mensajes de dominio
+   * tampoco los contienen ("El email determinístico de TV ya pertenece a otra cuenta" no nombra al
+   * dueño). `ownedByInternalId` es el más caro: es el que dice QUIÉN se quedó con el mail, o sea el
+   * dato con el que se reconstruyó el incidente Centeno/Vacherand.
    *
-   * No se recupera acá porque la decisión de producto de este change es que el operador ve el
-   * mensaje y ya. Este test existe para que la pérdida sea una DECISIÓN VISIBLE y no una sorpresa:
-   * si el FE (W5) o la forense los necesitan, el que los agregue va a tropezar con este test y va a
-   * leer el porqué, en vez de descubrir el hueco en producción.
-   *
-   * `ownedByInternalId` es el más caro de los cinco: es el que dice QUIÉN se quedó con el mail,
-   * o sea el dato con el que se reconstruyó el incidente Centeno/Vacherand.
+   * Este test es el ancla del revert: si alguien vuelve a mover el desenlace del alta fuera del
+   * request sin llevarse estos campos, se rompe acá y lee el porqué, en vez de descubrir el hueco
+   * en producción.
    */
-  it('PINNED: el estado del job NO publica los campos por-error que sí publicaba el 4xx síncrono', async () => {
+  it('PINNED: el 4xx del alta publica los campos POR-ERROR (los que el contrato asíncrono perdía)', async () => {
     const register = jest.fn(async () => { throw new GigaredRejectedError('Conflict', 'email already in use'); });
     const listAccounts = jest.fn(async (filter?: { status?: string; email?: string }) => {
       if (filter?.email) return [fakeAccount({ internalId: 'cust-OTHER' })];
@@ -1110,14 +1096,18 @@ describe('POST /customers/:id/register — 207 partial + result shape (B3, D3)',
     const port = fakePort({ register, listAccounts, getAccountByInternalId: probeMissThenFound(fakeAccount()) });
     const app = await buildApp({ port });
 
-    const { job } = await alta(app, { firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
+    const res = await request(app)
+      .post('/api/gigared/customers/cust-1/register')
+      .send({ firstName: 'J', lastName: 'P', email: 'e@x.com', contractId: 'C1' });
 
-    expect(job.status).toBe('failed');
-    expect(job.code).toBe('TV_EMAIL_OWNED_BY_OTHER');
-    for (const campo of ['poisonedCount', 'cic', 'internalId', 'ownedByInternalId', 'detail']) {
-      expect(job[campo]).toBeUndefined();
-      expect((job.result ?? {})[campo]).toBeUndefined();
-    }
+    // PRESENCIA primero: sin esto, "el campo está" sería verde también en un mundo donde el error
+    // ni siquiera es el que creemos.
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TV_EMAIL_OWNED_BY_OTHER');
+    expect(res.body.ownedByInternalId).toBe('cust-OTHER');
+    // El mail determinístico ({apellido}{grContratoId}@gmail.com) también viaja: es el otro dato
+    // con el que se rastrea a mano cuál cuenta se quedó con la identidad.
+    expect(res.body.email).toContain('204382');
   });
 });
 

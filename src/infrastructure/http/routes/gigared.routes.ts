@@ -5,6 +5,7 @@ import type { GetGigaredSummary } from '@application/use-cases/gigared/GetGigare
 import type { ListGigaredAccounts } from '@application/use-cases/gigared/ListGigaredAccounts';
 import type { GetGigaredCustomerAccount } from '@application/use-cases/gigared/GetGigaredCustomerAccount';
 import type { LinkCustomerToCic } from '@application/use-cases/gigared/LinkCustomerToCic';
+import type { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
 import type { AddTvService } from '@application/use-cases/gigared/AddTvService';
 import type { RemoveTvService } from '@application/use-cases/gigared/RemoveTvService';
 import type { SetOttStatus } from '@application/use-cases/gigared/SetOttStatus';
@@ -20,7 +21,7 @@ import type { ClientTvCancelStatusRepository } from '@domain/ports/ClientTvCance
 import type { ClientTvRegisterStatusRepository } from '@domain/ports/ClientTvRegisterStatusRepository';
 import type { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
 import type { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRunner';
-import { isTvRegisterJobActive, TV_REGISTER_JOB_TTL_MS } from '@domain/gigared/tvRegisterJob';
+import { isTvRegisterJobActive } from '@domain/gigared/tvRegisterJob';
 import { deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from '@application/use-cases/gigared/lookups';
 import { GIGARED_FLAG } from '@application/use-cases/gigared/GetGigaredConfig';
@@ -226,10 +227,14 @@ export interface GigaredRouterDeps {
   listAccounts: ListGigaredAccounts;
   getCustomerAccount: GetGigaredCustomerAccount;
   linkCustomerToCic: LinkCustomerToCic;
-  // gigared-alta-asincrona (W2) — `registerAccount` YA NO viaja acá: el alta la ejecuta
-  // `registerTvRunner` en background y la ruta no invoca al use case. Una dep que el router no lee
-  // es cableado muerto, y el cableado muerto es como una feature termina apagada en producción con
-  // el CI en verde.
+  /**
+   * Use case del alta de TV. La ruta lo INVOCA y espera su resultado (201/207).
+   *
+   * Volvió a las deps al revertir el contrato asíncrono: mientras la ruta encolaba, esta dep no
+   * existía. Que falte es exactamente cómo el POST termina devolviendo un 202 que el FE resuelve
+   * como éxito — por eso `gigared-composition.test.ts` pinea que app.ts la inyecta.
+   */
+  registerAccount: RegisterGigaredAccount;
   addTvService: AddTvService;
   removeTvService: RemoveTvService;
   setOttStatus: SetOttStatus;
@@ -256,8 +261,16 @@ export interface GigaredRouterDeps {
   cancelTvRunner: CancelTvJobRunner;
   /** Repository to read/write async cancel-job status on Client. */
   cancelStatus: ClientTvCancelStatusRepository;
-  // gigared-alta-asincrona (W2) — deps del ALTA asíncrona
-  /** Runner que ejecuta RegisterGigaredAccount en background (fire-and-forget). */
+  // gigared-alta-asincrona (W2) — deps del ALTA asíncrona. SIGUEN CABLEADAS aunque el POST haya
+  // vuelto a ser síncrono: la W5 (cuando el FE sepa pollear) vuelve a encender el runner sin tener
+  // que reconstruir el composition root.
+  /**
+   * Runner que ejecuta RegisterGigaredAccount en background (fire-and-forget).
+   *
+   * Hoy el POST NO lo dispara — el contrato del alta volvió a ser síncrono porque el FE no está
+   * adaptado al polling y un 202 le resulta un éxito. La dep se conserva a propósito para no
+   * desarmar el wiring de app.ts; su comportamiento sigue cubierto por RegisterTvJobRunner.test.ts.
+   */
   registerTvRunner: RegisterTvJobRunner;
   /** Repo del estado del job de alta en Client (con watchdog de huérfanos). */
   registerStatus: ClientTvRegisterStatusRepository;
@@ -398,24 +411,34 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
     }
   });
 
-  // gigared-alta-asincrona (W2) — el ALTA de TV es ASÍNCRONA.
+  // El ALTA de TV es SÍNCRONA: la ruta espera al alta y devuelve su RESULTADO.
   //
-  // Contrato de cable (FROZEN):
-  //   202 { jobId, status:'pending' }                — job encolado, el runner corre en background
-  //   409 { queued:false, reason:'already-running' } — ya hay un alta VIVA para este cliente
+  // Contrato de cable:
+  //   201 { account, partnerCreated, localReconciled, credentialsPersisted, recovered }
+  //   207 idem, cuando el reconcile LOCAL falló (`localReconciled === 'failed'`)
   //   400 VALIDATION_ERROR / 404 CLIENT|CONTRACT_NOT_FOUND / 422 GR_CONTRACT_ID_REQUIRED
-  //       — chequeos locales, TODOS antes de encolar
+  //       — chequeos locales, TODOS antes de tocar al partner
+  //   4xx/5xx de dominio con sus campos propios (poisonedCount, cic, internalId,
+  //       ownedByInternalId, detail) vía `sendGigaredError`
   //
-  // POR QUÉ dejó de ser síncrona: un alta hace hasta 17 llamadas al partner, que corta a ~10 req
-  // por ventana de 60 s (medido en vivo el 2026-08-10; no manda Retry-After ni X-RateLimit-*). Con
-  // un throttle honesto el alta tarda 114 s en vacío y 361 s con apenas 6 req/min de tráfico de
-  // fondo — por encima del `requestTimeout` de 300 s de Node. Cuando ese timeout corta el socket el
-  // handler sigue vivo, el operador ve un error y reintenta → segundo `register` → activación
-  // pendiente en Gigared → cliente quemado PARA SIEMPRE (Calabria, Abello, Aceste).
+  // POR QUÉ volvió atrás (revert del contrato de gigared-alta-asincrona W2, que respondía
+  // 202 { jobId, status:'pending' } + polling): EL FRONTEND NO ESTÁ ADAPTADO. En
+  // `ipnext-frontend/src/api/gigared.api.ts` el alta es `const r = await api.post(...)` que
+  // devuelve `r.data` tipado como `RegisterAccountResult`. Axios NO lanza con un 202 —es 2xx—,
+  // así que la promesa RESUELVE y el operador ve un ALTA EXITOSA sobre un job que recién arranca.
+  // Si ese job falla treinta segundos después, no se entera NADIE: del otro lado no hay polling.
+  // Un éxito falso es peor que un timeout, porque el timeout al menos se ve.
   //
-  // El `jobId` ES el customerId: el estado se direcciona por cliente
-  // (GET /customers/:id/register/status) y hay a lo sumo un alta viva por cliente. Devolver un uuid
-  // que ningún endpoint acepta sería una afordancia falsa.
+  // Lo que esto NO revierte: `RegisterTvJobRunner`, el port/adapters de
+  // `ClientTvRegisterStatusRepository`, sus columnas y el `GET .../register/status` de acá abajo
+  // quedan EN PIE y cableados. La W5 los enciende cuando el FE sepa pollear; el único cambio de
+  // hoy es el CONTRATO de este POST.
+  //
+  // Lo que esto SÍ recupera: el motivo original del 202 —un alta hace hasta 17 llamadas contra un
+  // partner que corta a ~10 req/60 s, y con throttle honesto tarda 114 s en vacío y 361 s con
+  // ruido, por encima del `requestTimeout` de 300 s de Node—. Ese riesgo VUELVE con este revert,
+  // y es un trade deliberado: un alta cortada por timeout deja un error VISIBLE, mientras que el
+  // 202 contra un FE que no pollea deja un éxito INVISIBLEMENTE falso.
   router.post('/customers/:id/register', deps.requireRegister, async (req, res): Promise<void> => {
     const customerId = req.params['id'] as string;
     try {
@@ -440,14 +463,15 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         return;
       }
 
-      // W2.2 — TODA validación que se resuelve SIN tocar al partner corre ANTES del 202. Un input
-      // inválido tiene que seguir siendo un error inmediato y no un job que falla tres minutos
-      // después: el operador no puede corregir un contractId ajeno mirando un spinner.
+      // TODA validación que se resuelve SIN tocar al partner corre ANTES de llamarlo. Esto NO es
+      // parte del contrato asíncrono y por eso sobrevive al revert: adelantar el pre-chequeo local
+      // garantiza que un input inválido no cueste ni una sola llamada contra el rate-limit de
+      // Gigared, y mantiene el 404 de ownership fuera del alcance del partner.
       //
       // Se llaman las MISMAS funciones que usa el use case (mismos lookups, mismo
       // deterministicTvPassword/isValidGigaredPassword): la regla no se reimplementa acá, sólo se
-      // adelanta el call-site. El use case las vuelve a evaluar dentro del job — es su contrato y
-      // no se toca.
+      // adelanta el call-site. El use case las vuelve a evaluar adentro — es su contrato y no se
+      // toca.
       const customer = await deps.customerLookup.findById(customerId);
       if (!customer) throw new ClientNotFoundError(customerId);
 
@@ -459,41 +483,31 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         throw new GrContractIdRequiredError(contractId);
       }
 
-      // W2.3 — guard anti-doble-disparo. Es una RESERVA ATÓMICA, no un `getStatus` + `setStatus`:
-      // entre esas dos llamadas hay un yield del event loop y ahí entra el segundo request. Con UNA
-      // sola réplica, un doble click en el botón produce DOS `register` REALES contra el partner ⇒
-      // dos activaciones pendientes ⇒ cliente quemado PARA SIEMPRE (Calabria, Abello, Aceste).
-      // El port lo resuelve con un `UPDATE … WHERE` condicional del que se ramifica por el count.
-      //
-      // La condición incluye el WATCHDOG: un job pending/running que dejó de dar señales de vida
-      // expira y deja de bloquear. Sin eso, un deploy en el momento equivocado deja al cliente sin
-      // poder operar hasta que alguien edite la DB a mano — el agujero abierto de CancelTvJobRunner,
-      // que este change no hereda.
-      //
-      // El sello vale DOS cosas: es el ancla del watchdog y es el FENCE TOKEN que el runner tiene
-      // que presentar para escribir el desenlace.
-      const reservadoEn = new Date();
-      const reservado = await deps.registerStatus.tryReserve(customerId, reservadoEn, TV_REGISTER_JOB_TTL_MS);
-      if (!reservado) {
-        res.status(409).json({ queued: false, reason: 'already-running' });
-        return;
-      }
-
-      // #5 BE — el actor se captura ANTES de responder (el response limpia el contexto del req).
+      // #5 BE — thread actor from req.user for the TV activation event recording.
       const actor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
-      res.status(202).json({ jobId: customerId, status: 'pending' });
-      void deps.registerTvRunner.run(
-        customerId,
-        {
-          firstName: b.firstName,
-          lastName: b.lastName,
-          email: b.email,
-          sendActivationEmail: b.sendActivationEmail ?? false,
-          contractId,
-        },
-        reservadoEn,
-        actor,
-      );
+      // El alta se ESPERA. El resultado viaja en ESTA respuesta: es la diferencia entre que el
+      // operador vea lo que pasó y que vea un OK sobre algo que todavía no pasó.
+      //
+      // El estado del job (`deps.registerStatus`) NO se toca acá a propósito: escribir un
+      // 'pending' que nadie va a cerrar dejaría al cliente con un job fantasma bloqueando el
+      // polling de la W5. Mientras el alta sea síncrona, el GET .../register/status responde
+      // 'idle', que es la verdad.
+      const result = await deps.registerAccount.execute(customerId, {
+        firstName: b.firstName,
+        lastName: b.lastName,
+        email: b.email,
+        sendActivationEmail: b.sendActivationEmail ?? false,
+        contractId,
+        actorId:   actor.actorId,
+        actorName: actor.actorName,
+      });
+      // B3 (D3) — 207 = parcial: el ÚNICO gatillo es el reconcile local (localReconciled==='failed').
+      // F5(c) — la disyunción con `!result.partnerCreated` era muerta: partnerCreated es true por
+      // construcción (si el write al partner falla de verdad, execute lanza y nunca construye el
+      // result → no se llega a esta línea), así que `!partnerCreated` es constante false. `recovered`
+      // es observability-only, NO gatea el status (espejo transfer/link/addService).
+      const partial = result.localReconciled === 'failed';
+      res.status(partial ? 207 : 201).json(result);
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'register');
     }
@@ -501,6 +515,10 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
 
   // gigared-alta-asincrona (W2.4) — estado del alta para el polling del FE. MISMO permiso que el
   // alta (tv.register): quien puede disparar el job puede ver cómo terminó.
+  //
+  // OJO: mientras el POST sea SÍNCRONO nadie encola desde HTTP, así que este endpoint responde
+  // 'idle' en producción. No es código muerto ni un bug: queda en pie —con su contrato y sus
+  // tests— para que la W5 encienda el alta asíncrona del lado del FE sin reescribir el BE.
   //
   //   200 { status, message, startedAt?, result? }
   //   404 CLIENT_NOT_FOUND

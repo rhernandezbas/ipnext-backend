@@ -134,13 +134,12 @@ async function buildApp(opts: Opts = {}) {
   const runner = new CancelTvJobRunner(cancelTv, cancelStatus);
   if (opts.runnerRef) opts.runnerRef.runner = runner;
 
-  // gigared-alta-asincrona (W2) — el router exige las deps del alta asincrona. Este
-  // archivo cubre la BAJA; el alta tiene su propio suite (gigared.register-async.routes).
+  // El router exige el use case del alta (que invoca y espera) MAS las deps del job asincrono,
+  // que siguen cableadas para la W5. Este archivo cubre la BAJA; el alta tiene su propio suite
+  // (gigared.register.routes).
+  const registerAccount = new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation);
   const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-  const registerTvRunner = new RegisterTvJobRunner(
-    new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-    registerStatus,
-  );
+  const registerTvRunner = new RegisterTvJobRunner(registerAccount, registerStatus);
   const router = createGigaredRouter({
     getConfig: new GetGigaredConfig(cfg, flags),
     updateConfig: new UpdateGigaredConfig(cfg, flags),
@@ -148,6 +147,7 @@ async function buildApp(opts: Opts = {}) {
     listAccounts: new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
     linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+    registerAccount,
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
@@ -468,13 +468,12 @@ describe('POST /customers/:id/cancel -- reason field persists to baja event (#12
     const flags = new InMemoryFeatureFlagRepository();
     flags.seed(FLAG, true);
 
-    // gigared-alta-asincrona (W2) — el router exige las deps del alta asincrona. Este
-    // archivo cubre la BAJA; el alta tiene su propio suite (gigared.register-async.routes).
+    // El router exige el use case del alta (que invoca y espera) MAS las deps del job asincrono,
+    // que siguen cableadas para la W5. Este archivo cubre la BAJA; el alta tiene su propio suite
+    // (gigared.register.routes).
+    const registerAccount = new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation);
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    const registerTvRunner = new RegisterTvJobRunner(
-      new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-      registerStatus,
-    );
+    const registerTvRunner = new RegisterTvJobRunner(registerAccount, registerStatus);
     const router = createGigaredRouter({
       getConfig: new GetGigaredConfig(cfg, flags),
       updateConfig: new UpdateGigaredConfig(cfg, flags),
@@ -482,6 +481,7 @@ describe('POST /customers/:id/cancel -- reason field persists to baja event (#12
       listAccounts: new ListGigaredAccounts(port),
       getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
       linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+    registerAccount,
       addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
       removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
       setOttStatus: new SetOttStatus(port, customerLookup),

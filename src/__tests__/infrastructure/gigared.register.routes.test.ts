@@ -1,16 +1,22 @@
 /**
- * gigared-alta-asincrona W2 — la ruta del alta pasa a ser ASÍNCRONA.
+ * POST /api/gigared/customers/:id/register — el alta de TV es SÍNCRONA.
  *
  * Contrato de cable:
- *   POST /api/gigared/customers/:id/register → 202 { jobId, status:'pending' }
- *                                            → 409 { queued:false, reason:'already-running' }
- *                                            → 400/404/422 si el input es inválido (ANTES de encolar)
- *   GET  /api/gigared/customers/:id/register/status → 200 { status, message, startedAt?, result? }
+ *   201 { account, partnerCreated, localReconciled, credentialsPersisted, recovered }
+ *   207 idem, cuando el reconcile LOCAL falló (`localReconciled === 'failed'`)
+ *   400 VALIDATION_ERROR / 404 CLIENT|CONTRACT_NOT_FOUND / 422 GR_CONTRACT_ID_REQUIRED
+ *       — chequeos locales, TODOS antes de tocar al partner
  *
- * Por qué: un alta hace hasta 17 llamadas al partner, que corta a ~10 req/60 s. Con throttle
- * honesto el alta tarda 114 s en vacío y 361 s con 6 req/min de ruido — por encima del
- * requestTimeout de 300 s de Node. Cuando ese timeout corta el socket el handler sigue vivo, el
- * operador ve un error y reintenta: segundo register, cliente quemado.
+ * POR QUÉ volvió a ser síncrona (revert del contrato de gigared-alta-asincrona W2):
+ * el 202 { jobId, status:'pending' } es un 2xx. El FE (ipnext-frontend/src/api/gigared.api.ts)
+ * hace `const r = await api.post(...)` y devuelve `r.data` tipado como RegisterAccountResult;
+ * axios NO lanza con un 2xx, así que la promesa RESUELVE y el operador ve un ALTA EXITOSA sobre
+ * un job que recién arranca. Si ese job falla 30 s después, nadie se entera: el FE nunca fue
+ * adaptado al polling. Un éxito falso es peor que un timeout — el timeout al menos se ve.
+ *
+ * Lo que NO volvió atrás: la infraestructura del job (RegisterTvJobRunner, el port/adapters del
+ * estado, las columnas y el GET .../register/status que se sigue testeando más abajo) queda
+ * INTACTA y cableada, esperando a la W5 del front.
  */
 import request from 'supertest';
 import express, { RequestHandler } from 'express';
@@ -47,7 +53,6 @@ import { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRun
 import { TV_REGISTER_JOB_TTL_MS } from '@domain/gigared/tvRegisterJob';
 
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
-import type { TvRegisterStatusRow } from '@domain/ports/ClientTvRegisterStatusRepository';
 import { GigaredNotFoundError } from '@domain/errors/gigared';
 
 const FLAG = GIGARED_FLAG;
@@ -92,6 +97,7 @@ function llamadasAlPartner(port: GigaredPort): number {
 
 interface Opts {
   port?: GigaredPort;
+  csRepo?: InMemoryContractServiceRepository;
   registerStatus?: InMemoryClientTvRegisterStatusRepository;
   customerExists?: boolean;
   contractExists?: boolean;
@@ -109,7 +115,7 @@ async function buildApp(opts: Opts = {}) {
   flags.seed(FLAG, true);
 
   const port = opts.port ?? fakePort();
-  const csRepo = new InMemoryContractServiceRepository();
+  const csRepo = opts.csRepo ?? new InMemoryContractServiceRepository();
   const catalog = new InMemoryServiceCatalogRepository();
   const cat = await catalog.create({ name: 'TV', label: 'TV', active: true, sortOrder: 0 });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -135,6 +141,8 @@ async function buildApp(opts: Opts = {}) {
   const registerAccount = new RegisterGigaredAccount(
     port, customerLookup, contractLookup, csRepo, catalog, tvCancellation, undefined, eventRepo, () => 0,
   );
+  // El runner sigue construido y cableado a propósito: la infraestructura del alta asíncrona no se
+  // borró, sólo dejó de gobernar el contrato del POST. La W5 la vuelve a encender desde el FE.
   const registerTvRunner = new RegisterTvJobRunner(registerAccount, registerStatus);
 
   const router = createGigaredRouter({
@@ -144,6 +152,7 @@ async function buildApp(opts: Opts = {}) {
     listAccounts: new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
     linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+    registerAccount,
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),
@@ -182,373 +191,188 @@ async function buildApp(opts: Opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// W2.1 — 202 + { jobId }, sin tocar a Gigared en el request
+// El contrato: 201/207 CON el resultado, en el MISMO request
 // ---------------------------------------------------------------------------
 
-describe('POST /customers/:id/register — 202 asíncrono (W2.1)', () => {
-  it('happy path → 202 { jobId, status:"pending" }', async () => {
+describe('POST /customers/:id/register — 201/207 con el resultado del alta', () => {
+  it('happy path → 201 CON el resultado del alta en el body', async () => {
     const { app } = await buildApp();
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(202);
-    // El job se direcciona por cliente: GET /customers/:id/register/status. El jobId ES ese id —
-    // inventar un uuid que ningún endpoint acepta sería una afordancia falsa.
-    expect(res.body).toEqual({ jobId: CUST, status: 'pending' });
-  });
-
-  it('deja el job en pending CON startedAt (el ancla del watchdog) antes de responder', async () => {
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    // El runner se bloquea en su PRIMER write: así el estado observable es exactamente el que
-    // dejó la RUTA, sin carreras con el trabajo de fondo.
-    // El runner queda colgado en su PRIMER write (el claim del running): así el estado observable
-    // es exactamente el que dejó la RUTA con su reserva, sin carreras con el trabajo de fondo.
-    jest.spyOn(registerStatus, 'compareAndSet').mockImplementation(() => new Promise<boolean>(() => {}));
-
-    const { app } = await buildApp({ registerStatus });
-    await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-
-    const row = await registerStatus.getStatus(CUST);
-    expect(row?.status).toBe('pending');
-    expect(row?.startedAt).toBeInstanceOf(Date);
+    expect(res.status).toBe(201);
+    expect(res.body.account).toBeDefined();
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'synced' });
+    // Y NO el sobre del job: si volviera { jobId, status:'pending' }, el FE lo resolvería como
+    // éxito (axios no lanza con un 2xx) sobre un alta que todavía no pasó.
+    expect(res.body.jobId).toBeUndefined();
+    expect(res.body.status).toBeUndefined();
   });
 
   /**
-   * W2.1 literal: el request responde SIN haber llamado a Gigared ni una vez.
-   * El runner queda colgado en su primer write, así que si alguna llamada al partner aparece,
-   * salió del handler HTTP — que es justo lo que este change elimina.
+   * LA aserción del revert. El 202 era un éxito FALSO: respondía antes de que el partner hubiera
+   * sido tocado. Acá se mide lo contrario — cuando el 201 sale, el alta YA ocurrió.
    */
-  it('el request responde sin haber tocado al partner NI UNA VEZ', async () => {
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    jest.spyOn(registerStatus, 'compareAndSet').mockImplementation(() => new Promise<boolean>(() => {}));
-    const { app, port } = await buildApp({ registerStatus });
-
-    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-
-    expect(res.status).toBe(202);
-    expect(llamadasAlPartner(port)).toBe(0);
-  });
-
-  /**
-   * Y el complemento: aunque el partner NUNCA responda (el 429 + backoff real puede dejar una
-   * llamada colgada minutos), el request igual termina. Con la ruta síncrona este test se colgaba
-   * hasta el timeout de jest.
-   */
-  it('el partner colgado NO cuelga al request: 202 igual', async () => {
-    const port = fakePort({ getAccountByInternalId: jest.fn(() => new Promise<GigaredAccount>(() => {})) });
-    const { app } = await buildApp({ port });
-    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(202);
-  });
-
-  it('el runner corre en background y el job termina en done', async () => {
+  it('el request ESPERA al alta: cuando responde, el partner ya fue llamado', async () => {
+    // Probe 404 primero para ejercitar el flujo COMPLETO (register→activate→setInternalId) y no la
+    // rama "recovered", donde el partner ya tenía la cuenta y `register` no se llama nunca.
     const port = fakePort({
       getAccountByInternalId: jest.fn()
         .mockRejectedValueOnce(new GigaredNotFoundError())
         .mockResolvedValue(fakeAccount()),
     });
-    const { app, registerStatus } = await buildApp({ port });
-    await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    await new Promise(r => setTimeout(r, 200));
-    expect((await registerStatus.getStatus(CUST))?.status).toBe('done');
-    // PIN del contador: sin esto, todos los `expect(llamadasAlPartner(port)).toBe(0)` de este
-    // archivo podrían estar pasando por un helper que devuelve 0 SIEMPRE — una aserción de
-    // ausencia que no discrimina nada. Acá se prueba que el contador sí sube cuando debe.
+    const { app } = await buildApp({ port });
+
+    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    expect(res.status).toBe(201);
     expect(llamadasAlPartner(port)).toBeGreaterThan(0);
+    // El alta REAL contra el partner ya ocurrió cuando el 201 salió — no quedó nada en background.
+    expect(port.register).toHaveBeenCalledTimes(1);
+    expect(port.activate).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * El POST ya NO encola: no escribe el estado del job. Si lo hiciera y nadie escribiera el
+   * desenlace, el cliente quedaría con un `pending` eterno bloqueando el GET del polling.
+   */
+  it('el POST no encola nada: el estado del job queda intacto (el polling ve "idle")', async () => {
+    const { app, registerStatus } = await buildApp();
+    await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
+    const st = await request(app).get(`/api/gigared/customers/${CUST}/register/status`);
+    expect(st.body.status).toBe('idle');
+  });
+
+  /**
+   * El 207 es el OTRO desenlace del contrato: el partner creó la cuenta pero el reconcile local
+   * falló. Sigue siendo un 2xx con el resultado completo — el FE lo distingue por el status.
+   */
+  it('reconcile local falla → 207 con { partnerCreated:true, localReconciled:"failed" }', async () => {
+    const csRepo = new InMemoryContractServiceRepository();
+    jest.spyOn(csRepo, 'add').mockRejectedValue(new Error('db down'));
+    const port = fakePort({
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError())
+        .mockResolvedValue(fakeAccount()),
+    });
+    const { app } = await buildApp({ port, csRepo });
+
+    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    expect(res.status).toBe(207);
+    expect(res.body).toMatchObject({ partnerCreated: true, localReconciled: 'failed' });
+  });
+
+  /**
+   * El error del partner vuelve a viajar COMO STATUS HTTP del request, con los campos propios del
+   * error de dominio. Con el 202 esto se degradaba a un `{ error, code }` dentro del job — y el FE,
+   * que ni siquiera pollea, no veía NADA.
+   */
+  it('el alta falla en el partner → el error viaja en la MISMA respuesta (no en un job)', async () => {
+    const port = fakePort({
+      register: jest.fn(async () => { throw new GigaredNotFoundError('cuenta inexistente'); }),
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError())
+        .mockResolvedValue(fakeAccount()),
+    });
+    const { app } = await buildApp({ port });
+
+    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    // Lo único que importa acá: NO es un 2xx. El FE actual ramifica por el throw de axios.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.body.code).toBeDefined();
   });
 });
 
 // ---------------------------------------------------------------------------
-// W2.2 — TODAS las validaciones siguen ANTES del 202
+// Validaciones LOCALES — siguen resolviéndose sin tocar al partner
 // ---------------------------------------------------------------------------
 
-describe('POST /register — las validaciones corren ANTES de encolar (W2.2)', () => {
-  it('sin contractId → 400 VALIDATION_ERROR, sin job encolado, Gigared intacto', async () => {
-    const { app, port, registerStatus } = await buildApp();
+describe('POST /register — las validaciones locales corren ANTES de tocar al partner', () => {
+  it('sin contractId → 400 VALIDATION_ERROR, Gigared intacto', async () => {
+    const { app, port } = await buildApp();
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`)
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(llamadasAlPartner(port)).toBe(0);
-    // Un input inválido NO puede quedar como un job que falla después: no se encola nada.
-    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
-  it('contractId vacío → 400 VALIDATION_ERROR, sin job encolado', async () => {
-    const { app, registerStatus } = await buildApp();
+  it('contractId vacío → 400 VALIDATION_ERROR', async () => {
+    const { app, port } = await buildApp();
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`)
       .send({ ...cuerpoValido, contractId: '' });
     expect(res.status).toBe(400);
-    expect(await registerStatus.getStatus(CUST)).toBeNull();
+    expect(llamadasAlPartner(port)).toBe(0);
   });
 
-  it('cliente inexistente → 404 CLIENT_NOT_FOUND, sin job encolado', async () => {
-    const { app, port, registerStatus } = await buildApp({ customerExists: false });
+  it('cliente inexistente → 404 CLIENT_NOT_FOUND, Gigared intacto', async () => {
+    const { app, port } = await buildApp({ customerExists: false });
     const res = await request(app).post('/api/gigared/customers/ghost/register').send(cuerpoValido);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('CLIENT_NOT_FOUND');
     expect(llamadasAlPartner(port)).toBe(0);
-    expect(await registerStatus.getStatus('ghost')).toBeNull();
   });
 
-  it('contrato inexistente → 404 CONTRACT_NOT_FOUND, sin job encolado', async () => {
-    const { app, port, registerStatus } = await buildApp({ contractExists: false });
+  it('contrato inexistente → 404 CONTRACT_NOT_FOUND, Gigared intacto', async () => {
+    const { app, port } = await buildApp({ contractExists: false });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
     expect(llamadasAlPartner(port)).toBe(0);
-    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
-  it('contrato de OTRO cliente → 404 CONTRACT_NOT_FOUND (ownership), sin job encolado', async () => {
-    const { app, port, registerStatus } = await buildApp({ contractOwner: 'cust-B' });
+  /**
+   * OWNERSHIP. Un operador no puede dar de alta la TV de un cliente usando el contrato de OTRO:
+   * la identidad determinística de TV deriva del grContratoId, así que un contrato ajeno produce
+   * credenciales del cliente equivocado. Se valida en la ruta, ANTES de cualquier llamada.
+   */
+  it('contrato de OTRO cliente → 404 CONTRACT_NOT_FOUND (ownership), Gigared intacto', async () => {
+    const { app, port } = await buildApp({ contractOwner: 'cust-B' });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`)
       .send({ ...cuerpoValido, contractId: 'C-de-B' });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
     expect(llamadasAlPartner(port)).toBe(0);
-    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
   /**
-   * El contrato sin grContratoId y el grContratoId que produce una password fuera de CUA son
-   * chequeos 100% locales (una lectura del mirror). Si se dejaran caer dentro del job, el operador
-   * pediría un alta, esperaría el polling y recién ahí vería un 422 que ya se sabía en el
-   * milisegundo cero — exactamente el "input inválido convertido en job que falla después" que
-   * W2.2 prohíbe.
+   * PRE-CHEQUEO del grContratoId: el contrato sin grContratoId, y el grContratoId que produce una
+   * password fuera del alfabeto CUA, son chequeos 100% locales (una lectura del mirror). Se
+   * resuelven en la ruta para que el partner NUNCA reciba un alta que ya se sabía inválida.
    */
-  it('contrato sin grContratoId → 422 GR_CONTRACT_ID_REQUIRED, sin job encolado', async () => {
-    const { app, port, registerStatus } = await buildApp({ grContratoId: null });
+  it('contrato sin grContratoId → 422 GR_CONTRACT_ID_REQUIRED, Gigared intacto', async () => {
+    const { app, port } = await buildApp({ grContratoId: null });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('GR_CONTRACT_ID_REQUIRED');
     expect(llamadasAlPartner(port)).toBe(0);
-    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
-  it('grContratoId con caracteres fuera de CUA → 422 GR_CONTRACT_ID_REQUIRED, sin job encolado', async () => {
-    const { app, registerStatus } = await buildApp({ grContratoId: 'A-B/C' });
+  it('grContratoId con caracteres fuera de CUA → 422 GR_CONTRACT_ID_REQUIRED, Gigared intacto', async () => {
+    const { app, port } = await buildApp({ grContratoId: 'A-B/C' });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('GR_CONTRACT_ID_REQUIRED');
-    expect(await registerStatus.getStatus(CUST)).toBeNull();
+    expect(llamadasAlPartner(port)).toBe(0);
   });
 
   it('sin permiso tv.register → 403 (el guard va antes que todo)', async () => {
-    const { app, registerStatus } = await buildApp({ perms: { register: deny } });
+    const { app, port } = await buildApp({ perms: { register: deny } });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(403);
-    expect(await registerStatus.getStatus(CUST)).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// W2.3 — guard anti-doble-disparo (con watchdog)
-// ---------------------------------------------------------------------------
-
-describe('POST /register — guard anti-doble-disparo (W2.3)', () => {
-  it('ya hay un alta running → 409 { queued:false, reason:"already-running" }', async () => {
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    registerStatus.seedStatus(CUST, { status: 'running', startedAt: new Date() });
-    const { app, port } = await buildApp({ registerStatus });
-
-    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(409);
-    expect(res.body).toEqual({ queued: false, reason: 'already-running' });
     expect(llamadasAlPartner(port)).toBe(0);
   });
-
-  it('ya hay un alta pending → 409 (no encola una segunda)', async () => {
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    registerStatus.seedStatus(CUST, { status: 'pending', startedAt: new Date() });
-    const { app } = await buildApp({ registerStatus });
-    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(409);
-  });
-
-  /**
-   * W1.3 a través del seam HTTP — el agujero que CancelTvJobRunner tiene hoy. Un `running` cuyo
-   * proceso murió NO puede bloquear al cliente para siempre.
-   */
-  it('running HUÉRFANO (más viejo que el TTL) → 202: el watchdog lo libera', async () => {
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    registerStatus.seedStatus(CUST, {
-      status: 'running',
-      startedAt: new Date(Date.now() - (TV_REGISTER_JOB_TTL_MS + 60_000)),
-    });
-    const { app } = await buildApp({ registerStatus });
-
-    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(202);
-    expect(res.body.jobId).toBe(CUST);
-  });
-
-  it('done → 202 (re-encolable)', async () => {
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    registerStatus.seedStatus(CUST, { status: 'done', startedAt: new Date() });
-    const { app } = await buildApp({ registerStatus });
-    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(202);
-  });
-
-  it('failed → 202 (el reintento del operador es el caso de uso central)', async () => {
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    registerStatus.seedStatus(CUST, { status: 'failed', result: { error: 'HTTP 429' }, startedAt: new Date() });
-    const { app } = await buildApp({ registerStatus });
-    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(202);
-  });
 });
 
 // ---------------------------------------------------------------------------
-// C1 (fix wave) — el guard tiene que ser una RESERVA ATÓMICA, no read-then-write
+// GET .../register/status — la infraestructura del job QUEDA (W5)
 // ---------------------------------------------------------------------------
 
 /**
- * Los cinco tests de W2.3 de acá arriba mandan UN SOLO request y siembran el estado con
- * `seedStatus`: un fixture DEGENERADO donde el invariante "un solo alta viva por cliente" no puede
- * romperse ni queriendo. El invariante REAL sólo se rompe con CONCURRENCIA.
- *
- * `getStatus(...)` + `await` + `setStatus('pending')` es un TOCTOU de manual: entre la lectura y la
- * escritura hay un yield del event loop, y ahí entra el segundo request. Con UNA sola réplica, un
- * doble click en el botón alcanza. Y el daño no es un 409 de más: son DOS `register` REALES contra
- * el partner ⇒ dos activaciones pendientes ⇒ cliente quemado PARA SIEMPRE (Calabria, Abello,
- * Aceste). Por eso la reserva se hace con un compare-and-set en el port, que en Postgres es un
- * `UPDATE … WHERE` condicional y no un par de llamadas.
- *
- * NO se puede resolver con un Set en memoria: el día que escalen a 2 réplicas se rompe EN SILENCIO.
+ * El endpoint de polling se mantiene EN PIE aunque el POST ya no encole: la W5 lo va a usar cuando
+ * el FE sepa pollear. Como nadie encola desde HTTP, el estado se siembra directo en el repo — que
+ * es exactamente lo que va a hacer el runner cuando se lo vuelva a enchufar.
  */
-describe('POST /register — la reserva es ATÓMICA (fix wave C1)', () => {
-  /**
-   * ⚠️ SIN ESTA CLASE NINGÚN TEST PUEDE EXHIBIR UN TOCTOU, y el archivo entero sería teatro.
-   *
-   * Todos los fakes in-memory resuelven en MICROTASKS. Eso hace que cada handler de Express corra
-   * de punta a punta dentro de un solo turno del event loop: el request B ni siquiera se empieza a
-   * procesar hasta que A terminó de responder. Con ese fixture, `getStatus()` + `setStatus()` da el
-   * mismo resultado que un compare-and-set y el race queda vivo SÓLO en producción — donde el port
-   * habla con Postgres y cada llamada es I/O real.
-   *
-   * Esta clase reintroduce ese round-trip: cede al event loop ANTES de tocar el store. La sección
-   * crítica del adapter (la decisión + la escritura) sigue siendo síncrona, que es justo lo que el
-   * fix garantiza.
-   */
-  class RepoConLatenciaDeRed extends InMemoryClientTvRegisterStatusRepository {
-    private pendientes: Array<() => void> = [];
-    private disparada = false;
-
-    /** @param esperados cuántos requests concurrentes tienen que juntarse en la ventana. */
-    constructor(private readonly esperados: number) { super(); }
-
-    /**
-     * El round-trip. La PRIMERA vez es un rendezvous: los `esperados` primeros llamadores se
-     * juntan y salen todos a la vez, así la ventana de carrera existe SIEMPRE y no depende de
-     * cómo el sistema operativo haya ordenado los sockets ese día. Después degrada a un yield
-     * común (el runner de fondo tiene que poder seguir).
-     */
-    private viaje(): Promise<void> {
-      if (this.disparada) return new Promise<void>(r => setImmediate(r));
-      return new Promise<void>(r => {
-        this.pendientes.push(r);
-        if (this.pendientes.length >= this.esperados) {
-          this.disparada = true;
-          for (const seguir of this.pendientes.splice(0)) seguir();
-        }
-      });
-    }
-
-    override async getStatus(id: string) {
-      await this.viaje();
-      return super.getStatus(id);
-    }
-    override async tryReserve(id: string, startedAt: Date, ttlMs: number) {
-      await this.viaje();
-      return super.tryReserve(id, startedAt, ttlMs);
-    }
-    override async compareAndSet(id: string, esperado: Date, row: TvRegisterStatusRow) {
-      await this.viaje();
-      return super.compareAndSet(id, esperado, row);
-    }
-  }
-
-  /**
-   * Un pool con dos CICs libres (si el guard falla, cada job agarra el suyo y quedan DOS altas
-   * reales) y una PUERTA sobre la primera llamada al partner.
-   *
-   * La puerta no es decoración: sin ella el job entero se resuelve en un puñado de microtasks —los
-   * mocks no tienen I/O real— y termina ANTES de que llegue el segundo request. El estado ya sería
-   * terminal, el segundo POST reservaría legítimamente y el test mediría cualquier cosa menos la
-   * concurrencia. Con la puerta, el primer job queda garantizadamente VIVO mientras entran los
-   * demás.
-   */
-  function escenarioConcurrente() {
-    const register = jest.fn(async () => {});
-    let abrir!: () => void;
-    const puerta = new Promise<void>(r => { abrir = r; });
-    const libre = (cic: string) =>
-      fakeAccount({ cic, gigaredId: null, email: null, firstName: null, lastName: null, registrationDate: null, internalId: null, clientId: null });
-
-    const port = fakePort({
-      register,
-      // Primera llamada al partner del use case. Bloquea hasta `abrir()`; después 404 siempre: el
-      // cliente no tiene cuenta, así que el alta va al pool.
-      getAccountByInternalId: jest.fn(async () => { await puerta; throw new GigaredNotFoundError(); }),
-      listAccounts: jest.fn(async (filter?: { status?: string; email?: string }) => {
-        if (filter?.email) return [];               // nadie tiene ese mail
-        return [libre('0000009001'), libre('0000009002')];
-      }),
-    });
-    return { port, register, abrir };
-  }
-
-  async function esperarTerminal(app: express.Express): Promise<void> {
-    for (let i = 0; i < 300; i++) {
-      const st = await request(app).get(`/api/gigared/customers/${CUST}/register/status`);
-      if (st.body.status === 'done' || st.body.status === 'failed') return;
-      await new Promise(r => setTimeout(r, 10));
-    }
-    throw new Error('el job del alta nunca alcanzó un estado terminal');
-  }
-
-  it('dos POST CONCURRENTES → 202 + 409 y UN SOLO register real contra el partner', async () => {
-    const { port, register, abrir } = escenarioConcurrente();
-    // El repo con latencia es lo que permite que los handlers se INTERCALEN (ver la clase).
-    const { app } = await buildApp({ port, registerStatus: new RepoConLatenciaDeRed(2) });
-
-    const disparo = () => request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    const [a, b] = await Promise.all([disparo(), disparo()]);
-
-    // PRESENCIA primero: uno de los dos TIENE que haber encolado. Un test que sólo asertara
-    // "register se llamó una vez" daría verde también si los dos requests fallaran sin encolar.
-    expect([a.status, b.status].sort()).toEqual([202, 409]);
-
-    abrir();
-    await esperarTerminal(app);
-    // LA aserción: el daño permanente se mide en llamadas REALES al partner, no en HTTP codes.
-    expect(register).toHaveBeenCalledTimes(1);
-  });
-
-  it('cinco POST concurrentes → exactamente un 202 y cuatro 409, y UN solo register', async () => {
-    const { port, register, abrir } = escenarioConcurrente();
-    // El repo con latencia es lo que permite que los handlers se INTERCALEN (ver la clase).
-    const { app } = await buildApp({ port, registerStatus: new RepoConLatenciaDeRed(5) });
-
-    const res = await Promise.all(
-      Array.from({ length: 5 }, () =>
-        request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido)),
-    );
-
-    expect(res.filter(r => r.status === 202)).toHaveLength(1);
-    expect(res.filter(r => r.status === 409)).toHaveLength(4);
-
-    abrir();
-    await esperarTerminal(app);
-    expect(register).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// W2.4 — GET .../register/status
-// ---------------------------------------------------------------------------
-
-describe('GET /customers/:id/register/status (W2.4)', () => {
+describe('GET /customers/:id/register/status — sigue en pie para la W5', () => {
   it('sin alta encolada nunca → 200 { status:"idle" }', async () => {
     const { app } = await buildApp();
     const res = await request(app).get(`/api/gigared/customers/${CUST}/register/status`);
@@ -606,8 +430,7 @@ describe('GET /customers/:id/register/status (W2.4)', () => {
 
   /**
    * El `code` del error de dominio sube al TOP del body, no sepultado dentro de `result`: es lo
-   * que el FE necesita para ramificar, y era lo que le llegaba por HTTP cuando el alta era
-   * síncrona. Perderlo en la migración a asíncrono sería una regresión silenciosa.
+   * que el FE necesita para ramificar.
    */
   it('failed → el code del error de dominio viaja en el top-level del body', async () => {
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
@@ -669,17 +492,15 @@ describe('GET /customers/:id/register/status (W2.4)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// M2 (fix wave) — seam del ACTOR: req.user → ruta → runner → use case → historial
+// M2 — seam del ACTOR: req.user → ruta → use case → historial
 // ---------------------------------------------------------------------------
 
 /**
- * El actor cruza CUATRO saltos y ninguno estaba pinneado. Los revisores encontraron dos mutaciones
- * que sobreviven la suite entera: la ruta ignorando `req.user` (actor = {null,''}) y el runner
- * tirando el actor al llamar al use case. En los dos casos el historial de TV queda con el alta
- * registrada por NADIE — y ese historial es el rastro con el que se auditan las altas.
- *
- * El seam va de punta a punta a propósito: cada salto testeado por separado deja el pegamento sin
- * cubrir, que es donde estaban los dos bugs.
+ * El actor cruza tres saltos y ninguno estaba pinneado antes de la M2. Los revisores encontraron
+ * una mutación que sobrevivía la suite entera: la ruta ignorando `req.user` (actor = {null,''}),
+ * que deja el historial de TV con el alta registrada por NADIE — y ese historial es el rastro con
+ * el que se auditan las altas. El seam va de punta a punta a propósito: cada salto testeado por
+ * separado deja el pegamento sin cubrir, que es donde estaba el bug.
  */
 describe('POST /register — el actor viaja de req.user hasta el historial de TV (M2)', () => {
   it('el evento "alta" queda con el actorName y el actorId del operador', async () => {
@@ -695,9 +516,7 @@ describe('POST /register — el actor viaja de req.user hasta el historial de TV
     });
 
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    expect(res.status).toBe(202);
-
-    for (let i = 0; i < 200 && eventRepo.all().length === 0; i++) await new Promise(r => setTimeout(r, 10));
+    expect(res.status).toBe(201);
 
     const eventos = eventRepo.all();
     // PRESENCIA: el alta tiene que HABER corrido. Sin esto, "el actorName no está vacío" sería
@@ -717,9 +536,8 @@ describe('POST /register — el actor viaja de req.user hasta el historial de TV
     });
     const { app, eventRepo } = await buildApp({ port });
 
-    await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
-    for (let i = 0; i < 200 && eventRepo.all().length === 0; i++) await new Promise(r => setTimeout(r, 10));
-
+    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    expect(res.status).toBe(201);
     expect(eventRepo.all()).toHaveLength(1);
     expect(eventRepo.all()[0]!.actorName).toBe('');
   });
