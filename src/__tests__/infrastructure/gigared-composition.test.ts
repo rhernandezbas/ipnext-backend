@@ -8,6 +8,7 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { stripComments } from '../helpers/stripComments';
 
 describe('Gigared composition root (#47)', () => {
   let appSrc: string;
@@ -110,15 +111,37 @@ describe('Gigared composition root (#47)', () => {
    * misma que ya se pinneó para la reutilización de CICs. NO borrar.
    */
   describe('(j) gigared-alta-asincrona: wiring del alta asíncrona', () => {
+    /**
+     * ⚠️ SE MATCHEA SOBRE EL FUENTE STRIPEADO, no sobre `appSrc` crudo.
+     *
+     * En la primera versión de este bloque se leía el texto tal cual, y eso lo volvía CIEGO A
+     * COMENTARIOS: un comentario que mencione el identificador satisface la aserción. Verificado
+     * con una regresión REAL (el wiring correcto comentado + una construcción sin las deps al
+     * lado): los cuatro tests de acá pasaban en verde y sólo la cazaba el guard de
+     * `gigared-composition.cicReuse.test.ts`, que sí stripea. Un guard que no puede fallar no
+     * protege nada.
+     *
+     * El stripper es el MISMO helper que usa el otro guard (`helpers/stripComments`), y ese
+     * archivo tiene un test que verifica que el stripper funciona — sin eso, todo esto sería
+     * teatro de segundo orden.
+     */
+    let code: string;
+    beforeAll(() => { code = stripComments(appSrc); });
+
     it('el runner del alta se construye con el use case Y el repo de estado', () => {
-      const m = appSrc.match(/new RegisterTvJobRunner\(([^)]*)\)/);
+      const m = code.match(/new RegisterTvJobRunner\(([^)]*)\)/);
       expect(m).not.toBeNull();
       expect(m![1]).toMatch(/gigaredRegisterAccount/);
       expect(m![1]).toMatch(/gigaredTvRegisterStatus/);
     });
 
+    /**
+     * Solapa a propósito con el guard de cicReuse (que además pinea el ORDEN posicional): si el
+     * alta asíncrona se rompe, el mensaje de fallo tiene que apuntar a ESTE change. Lo que agrega
+     * por sobre aquél es `gigaredTvActivation`, que el otro no mira.
+     */
     it('el use case del alta conserva sus deps posicionales de reuso de CIC + auditoría', () => {
-      const m = appSrc.match(/const gigaredRegisterAccount = new RegisterGigaredAccount\(([^)]*)\)/);
+      const m = code.match(/const gigaredRegisterAccount = new RegisterGigaredAccount\(([^)]*)\)/);
       expect(m).not.toBeNull();
       expect(m![1]).toMatch(/gigaredCicReuseEligibility/);
       expect(m![1]).toMatch(/auditEventRepo/);
@@ -126,15 +149,15 @@ describe('Gigared composition root (#47)', () => {
     });
 
     it('el router recibe EL MISMO repo de estado que el runner (si no, el polling lee otra tabla)', () => {
-      const idx = appSrc.indexOf('createGigaredRouter(');
+      const idx = code.indexOf('createGigaredRouter(');
       expect(idx).toBeGreaterThan(-1);
-      const bloque = appSrc.slice(idx, idx + 4000);
+      const bloque = code.slice(idx, idx + 4000);
       expect(bloque).toMatch(/registerTvRunner:\s*gigaredRegisterTvRunner/);
       expect(bloque).toMatch(/registerStatus:\s*gigaredTvRegisterStatus/);
     });
 
     it('el repo de estado del alta es el adapter Prisma (no queda en memoria)', () => {
-      expect(appSrc).toMatch(/const gigaredTvRegisterStatus = new PrismaClientTvRegisterStatusRepository\(\)/);
+      expect(code).toMatch(/const gigaredTvRegisterStatus = new PrismaClientTvRegisterStatusRepository\(\)/);
     });
   });
 });
