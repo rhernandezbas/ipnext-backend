@@ -24,6 +24,7 @@ jest.mock('../../../../infrastructure/database/prisma', () => ({
 
 import { prisma } from '../../../../infrastructure/database/prisma';
 import { PrismaClientTvRegisterStatusRepository } from '../../../../infrastructure/adapters/prisma/PrismaClientTvRegisterStatusRepository';
+import type { TvRegisterStatusRow } from '../../../../domain/ports/ClientTvRegisterStatusRepository';
 
 const mockPrisma = prisma as unknown as {
   client: { findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock };
@@ -87,5 +88,80 @@ describe('PrismaClientTvRegisterStatusRepository.tryReserve — CAS de la reserv
     await expect(repo.tryReserve('cust-1', new Date(), TTL)).resolves.toBe(true);
     mockPrisma.client.updateMany.mockResolvedValueOnce({ count: 0 });
     await expect(repo.tryReserve('cust-1', new Date(), TTL)).resolves.toBe(false);
+  });
+});
+
+/**
+ * El hermano de `tryReserve`, que hasta esta ronda NO tenía NI UN test: sacarle el
+ * `tvRegisterHeartbeatAt` al `where` dejaba la suite ENTERA en verde.
+ *
+ * Y es el único mecanismo que impide que un runner zombi escriba `failed` sobre un alta que salió
+ * bien (⇒ el operador ve un error, reintenta, y el reintento es el que quema al cliente) o `done`
+ * sobre una que falló. Igual que la reserva, ese mecanismo NO vive en TypeScript: vive en el
+ * `WHERE`. Sin el sello en el `where`, el `updateMany` degrada a un overwrite ciego que compila,
+ * pasa todos los tests con el in-memory y sólo se rompe en producción.
+ */
+describe('PrismaClientTvRegisterStatusRepository.compareAndSet — fencing de la escritura', () => {
+  const SELLO = new Date('2026-08-11T10:05:00.000Z');
+  const ARRANQUE = new Date('2026-08-11T10:00:00.000Z');
+  const NUEVO = new Date('2026-08-11T10:05:30.000Z');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockPrisma.client.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it('escribe con UN SOLO updateMany condicional — nunca read-then-write', async () => {
+    const repo = new PrismaClientTvRegisterStatusRepository();
+    await repo.compareAndSet('cust-1', SELLO, { status: 'running', startedAt: ARRANQUE, heartbeatAt: NUEVO });
+
+    expect(mockPrisma.client.updateMany).toHaveBeenCalledTimes(1);
+    // Un `findUnique` + `update` reintroduciría la ventana: entre el read y el write hay un yield,
+    // y ahí adentro la generación nueva reserva y el zombi la pisa igual.
+    expect(mockPrisma.client.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.client.update).not.toHaveBeenCalled();
+  });
+
+  it('el WHERE exige el id Y el sello esperado — ésa es TODA la barrera contra el zombi', async () => {
+    const repo = new PrismaClientTvRegisterStatusRepository();
+    await repo.compareAndSet('cust-1', SELLO, { status: 'done', result: { error: 'x' }, startedAt: ARRANQUE, heartbeatAt: NUEVO });
+
+    const { where } = mockPrisma.client.updateMany.mock.calls[0]![0];
+    // `toEqual` y no `toMatchObject`: un `where` que ADEMÁS trajera el sello no sería el bug, pero
+    // uno al que le SOBRA una condición sí puede serlo. Lo que se pinea es la forma exacta.
+    expect(where).toEqual({ id: 'cust-1', tvRegisterHeartbeatAt: SELLO });
+  });
+
+  it('escribe las cuatro columnas del row: estado, result y los DOS sellos', async () => {
+    const repo = new PrismaClientTvRegisterStatusRepository();
+    const result = { error: 'Gigared API is unavailable', code: 'GIGARED_UNAVAILABLE' };
+    await repo.compareAndSet('cust-1', SELLO, { status: 'failed', result, startedAt: ARRANQUE, heartbeatAt: NUEVO });
+
+    const { data } = mockPrisma.client.updateMany.mock.calls[0]![0];
+    expect(data).toEqual({
+      tvRegisterStatus: 'failed',
+      tvRegisterResult: result,
+      // `startedAt` viaja en CADA escritura y siempre con el valor de la reserva: es lo que el
+      // operador ve en el polling ("empezó a las…") y lo que le da identidad a la generación.
+      tvRegisterStartedAt: ARRANQUE,
+      tvRegisterHeartbeatAt: NUEVO,
+    });
+  });
+
+  it('un row sin result LIMPIA la columna en vez de dejar el error del intento anterior', async () => {
+    const repo = new PrismaClientTvRegisterStatusRepository();
+    await repo.compareAndSet('cust-1', SELLO, { status: 'running', startedAt: ARRANQUE, heartbeatAt: NUEVO });
+
+    const { data } = mockPrisma.client.updateMany.mock.calls[0]![0];
+    expect(data.tvRegisterResult).toBeNull();
+  });
+
+  it('count 1 → el sello era el nuestro; count 0 → somos un zombi', async () => {
+    const repo = new PrismaClientTvRegisterStatusRepository();
+    const row: TvRegisterStatusRow = { status: 'done', startedAt: ARRANQUE, heartbeatAt: NUEVO };
+    mockPrisma.client.updateMany.mockResolvedValueOnce({ count: 1 });
+    await expect(repo.compareAndSet('cust-1', SELLO, row)).resolves.toBe(true);
+    mockPrisma.client.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(repo.compareAndSet('cust-1', SELLO, row)).resolves.toBe(false);
   });
 });
