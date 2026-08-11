@@ -24,9 +24,9 @@ import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-me
 import { InMemoryClientTvCancellationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvCancellationRepository';
 import { InMemoryClientTvActivationRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvActivationRepository';
 import { InMemoryTvActivationEventRepository } from '@infrastructure/adapters/in-memory/InMemoryTvActivationEventRepository';
-import { GigaredNotFoundError, GigaredRejectedError, GigaredUnavailableError } from '@domain/errors/gigared';
+import { GigaredNotFoundError, GigaredRejectedError, GigaredUnavailableError, TvEmailOwnedByOtherError, TvPoolPoisonedError, TvIdentityStampUnverifiedError } from '@domain/errors/gigared';
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
-import type { TvRegisterJobResult } from '@domain/ports/ClientTvRegisterStatusRepository';
+import type { TvRegisterJobResult, ClientTvRegisterStatusRepository } from '@domain/ports/ClientTvRegisterStatusRepository';
 
 const CUSTOMER = 'cust-1';
 const CONTRACT = 'contract-1';
@@ -441,5 +441,362 @@ describe('W3.4 — el seq NO avanza cuando el job falla', () => {
     expect(sim.cuentas.get('0000009001')!.internalId).toBe(`${CUSTOMER}-1`);
     expect(sim.cuentasCreadas).toBe(1);
     expect(await activation.getSeq(CUSTOMER)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX WAVE — C2 (heartbeat), A2 (run no lanza), A3 (el éxito no muta a failed),
+//            A4 (fencing del zombi), M3 (forense)
+// ---------------------------------------------------------------------------
+
+/** Un result válido de alta, para los stubs que no pasan por el use case real. */
+const resultOk = () => ({
+  account: { cic: '0000009001', gigaredId: '1001', email: 'x@y.com', firstName: 'N', lastName: 'A', registrationDate: '2026-08-11', services: [], internalId: CUSTOMER, clientId: CUSTOMER, ott: null },
+  partnerCreated: true, localReconciled: 'synced', credentialsPersisted: true, recovered: false,
+});
+
+/** Deja correr el event loop (el runner arranca con `void`, no siempre se puede awaitear). */
+const respirar = (ms = 0) => new Promise(r => setTimeout(r, ms));
+
+describe('C2 — heartbeat: al job VIVO no se le roba el turno', () => {
+  /**
+   * EL BUG: `startedAt` se sellaba UNA vez y nunca se renovaba, así que el watchdog no podía
+   * distinguir "el proceso murió" de "el job está tardando". Y el alta TARDA: 17 llamadas al
+   * partner × 30 s de timeout = 510 s de piso, contra un TTL de 900 s. Los revisores lo midieron:
+   * con el runner colgado DENTRO del register, el GET devolvía `expired` ("Podés reintentarla") y
+   * un segundo POST daba 202. El sistema le PEDÍA al operador que disparara el segundo register —
+   * que es exactamente lo que quemó a Calabria, Abello y Aceste.
+   */
+  it('mientras el alta avanza, el lease se renueva y el watchdog lo sigue viendo ACTIVO', async () => {
+    let liberar!: () => void;
+    const puerta = new Promise<void>(r => { liberar = r; });
+    const { runner, registerStatus } = await build({
+      heartbeatMs: 10,
+      registerAccountStub: { execute: jest.fn(async () => { await puerta; return resultOk(); }) },
+    });
+
+    const reservadoEn = new Date();
+    expect(await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS)).toBe(true);
+    const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
+
+    await respirar(150); // ~15 latidos con el job todavía adentro del use case
+
+    const row = await registerStatus.getStatus(CUSTOMER);
+    expect(row?.status).toBe('running');
+    // PRESENCIA: el sello se movió. Sin esto, la aserción de abajo sería verde también en un mundo
+    // donde el heartbeat no existe pero el reloj no llegó a correr.
+    expect(row!.heartbeatAt!.getTime()).toBeGreaterThan(reservadoEn.getTime());
+
+    // El job lleva >100 ms VIVO. Con un TTL de 50 ms, medido contra el heartbeat sigue activo…
+    expect(isTvRegisterJobActive(row, new Date(), 50)).toBe(true);
+    // …y medido contra startedAt (lo que hacía el código viejo) estaría MUERTO. Ésta es la
+    // diferencia exacta entre el bug y el arreglo.
+    expect(Date.now() - row!.startedAt!.getTime()).toBeGreaterThan(50);
+    expect(isTvRegisterJobActive({ ...row!, heartbeatAt: undefined }, new Date(), 50)).toBe(false);
+
+    liberar();
+    await corriendo;
+    expect((await registerStatus.getStatus(CUSTOMER))?.status).toBe('done');
+  });
+
+  /**
+   * Un blip de DB no puede costar el turno. Si un latido que falla matara el heartbeat, el job
+   * seguiría vivo pero MUDO: a los 15 minutos el watchdog lo declara muerto, el GET dice "Podés
+   * reintentarla" y volvemos al bug de arriba por la puerta de atrás. Por eso `escribir` distingue
+   * "la DB falló" (reintentar en el próximo latido) de "el sello cambió" (somos un zombi, parar).
+   */
+  it('un blip de DB en un latido NO mata el heartbeat: el siguiente vuelve a renovar el lease', async () => {
+    let liberar!: () => void;
+    const puerta = new Promise<void>(r => { liberar = r; });
+    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+    const original = registerStatus.compareAndSet.bind(registerStatus);
+    let escriturasRunning = 0;
+    jest.spyOn(registerStatus, 'compareAndSet').mockImplementation(async (id, esperado, row) => {
+      if (row.status === 'running') {
+        escriturasRunning++;
+        // la 1ª es el claim (pasa); los dos latidos siguientes revientan.
+        if (escriturasRunning === 2 || escriturasRunning === 3) throw new Error('db blip');
+      }
+      return original(id, esperado, row);
+    });
+
+    const { runner } = await build({
+      registerStatus,
+      heartbeatMs: 10,
+      registerAccountStub: { execute: jest.fn(async () => { await puerta; return resultOk(); }) },
+    });
+
+    const reservadoEn = new Date();
+    await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+    const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
+    await respirar(150);
+
+    const row = await registerStatus.getStatus(CUSTOMER);
+    expect(escriturasRunning).toBeGreaterThan(3); // PRESENCIA: hubo latidos DESPUÉS de los blips
+    expect(row!.heartbeatAt!.getTime()).toBeGreaterThan(reservadoEn.getTime());
+    expect(isTvRegisterJobActive(row, new Date(), 50)).toBe(true);
+
+    liberar();
+    await corriendo;
+  });
+
+  it('el heartbeat PARA cuando el job termina (no deja un timer latiendo para siempre)', async () => {
+    const { registerStatus, correr } = await build({ heartbeatMs: 5 });
+    await correr();
+
+    const alTerminar = (await registerStatus.getStatus(CUSTOMER))!.heartbeatAt!.getTime();
+    await respirar(60); // 12 latidos de margen si el timer siguiera vivo
+    expect((await registerStatus.getStatus(CUSTOMER))!.heartbeatAt!.getTime()).toBe(alTerminar);
+  });
+});
+
+describe('A2 — run() NO puede lanzar por ningún camino', () => {
+  /**
+   * El docstring decía "run NUNCA lanza" y era falso: el `setStatus('running')` estaba FUERA del
+   * try, y los dos writes terminales podían rechazar. Tres caminos de rechazo confirmados. El test
+   * que lo "cubría" usaba un repo in-memory que nunca rechaza — certificaba una promesa que el
+   * código no cumplía.
+   *
+   * `run` se invoca con `void` (fire-and-forget): un throw es un unhandled rejection y en Node
+   * moderno eso TUMBA EL PROCESO. Con el proceso caído, todos los jobs en curso quedan huérfanos.
+   */
+  class RepoQueSiempreFalla implements ClientTvRegisterStatusRepository {
+    getStatus = jest.fn(async (): Promise<never> => { throw new Error('db down'); });
+    tryReserve = jest.fn(async (): Promise<never> => { throw new Error('db down'); });
+    compareAndSet = jest.fn(async (): Promise<never> => { throw new Error('db down'); });
+  }
+
+  it('el repo de estado rechaza en TODAS sus escrituras → run() resuelve igual', async () => {
+    const repo = new RepoQueSiempreFalla();
+    const runner = new RegisterTvJobRunner(
+      { execute: jest.fn(async () => resultOk()) } as unknown as RegisterGigaredAccount,
+      repo,
+      5,
+    );
+    await expect(runner.run(CUSTOMER, input(), new Date())).resolves.toBeUndefined();
+    expect(repo.compareAndSet).toHaveBeenCalled(); // PRESENCIA: sí intentó escribir
+  });
+
+  it('el use case explota Y el repo también → run() resuelve igual', async () => {
+    const runner = new RegisterTvJobRunner(
+      { execute: jest.fn(async () => { throw new Error('boom'); }) } as unknown as RegisterGigaredAccount,
+      new RepoQueSiempreFalla(),
+      5,
+    );
+    await expect(runner.run(CUSTOMER, input(), new Date())).resolves.toBeUndefined();
+  });
+
+  it('un heartbeat que rechaza no produce un unhandled rejection', async () => {
+    const rechazos: unknown[] = [];
+    const escucha = (e: unknown): void => { rechazos.push(e); };
+    process.on('unhandledRejection', escucha);
+    try {
+      let liberar!: () => void;
+      const puerta = new Promise<void>(r => { liberar = r; });
+      const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+      const reservadoEn = new Date();
+      await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+      jest.spyOn(registerStatus, 'compareAndSet').mockRejectedValue(new Error('db down'));
+      const runner = new RegisterTvJobRunner(
+        { execute: jest.fn(async () => { await puerta; return resultOk(); }) } as unknown as RegisterGigaredAccount,
+        registerStatus,
+        5,
+      );
+      const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
+      await respirar(60);
+      liberar();
+      await corriendo;
+      await respirar(20);
+    } finally {
+      process.off('unhandledRejection', escucha);
+    }
+    expect(rechazos).toEqual([]);
+  });
+
+  /**
+   * La red de última instancia. El propio MANEJO del error puede explotar: el runner lee `err.code`
+   * para preservar la ramificación del FE, y eso es un acceso a una propiedad de un objeto que no
+   * controlamos. Si ese acceso lanza, el throw sale del `catch` —donde ya no hay nadie— y sube como
+   * unhandled rejection.
+   *
+   * Sin este test, el try/catch externo de `run()` sería una capa que ninguna mutación puede matar:
+   * el blindaje de `escribir` la tapa en todos los demás caminos. Con él, cada capa tiene su propia
+   * razón de existir y su propio contrafáctico.
+   */
+  it('hasta el MANEJO del error puede explotar: run() lo absorbe igual', async () => {
+    const hostil = new Error('el partner rechazó');
+    Object.defineProperty(hostil, 'code', { get() { throw new Error('getter roto'); } });
+
+    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+    const reservadoEn = new Date();
+    await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+    const runner = new RegisterTvJobRunner(
+      { execute: jest.fn(async () => { throw hostil; }) } as unknown as RegisterGigaredAccount,
+      registerStatus,
+      60_000,
+    );
+
+    await expect(runner.run(CUSTOMER, input(), reservadoEn)).resolves.toBeUndefined();
+  });
+
+  it('si el CLAIM del running falla, el alta NO se ejecuta (el partner no se toca)', async () => {
+    // Abortar es el lado seguro: la fila queda en `pending`, el watchdog la expira y el operador
+    // reintenta. Seguir adelante sin poder registrar el estado sería un alta a ciegas.
+    const ejecutar = jest.fn(async () => resultOk());
+    const runner = new RegisterTvJobRunner(
+      { execute: ejecutar } as unknown as RegisterGigaredAccount,
+      new RepoQueSiempreFalla(),
+      5,
+    );
+    await runner.run(CUSTOMER, input(), new Date());
+    expect(ejecutar).not.toHaveBeenCalled();
+  });
+});
+
+describe('A3 — un alta EXITOSA no puede quedar persistida como failed', () => {
+  /**
+   * El `setStatus('done', result)` estaba DENTRO del try que envuelve al use case, así que un blip
+   * de DB al persistir el ÉXITO caía en el catch y escribía `failed`. El operador ve un error de
+   * NUESTRA base como si fuera del partner, con la cuenta YA creada, y reintenta.
+   */
+  it('la DB falla al escribir el done: NO se degrada a failed', async () => {
+    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+    const original = registerStatus.compareAndSet.bind(registerStatus);
+    jest.spyOn(registerStatus, 'compareAndSet').mockImplementation(async (id, esperado, row) => {
+      if (row.status === 'done') throw new Error('connection reset by peer');
+      return original(id, esperado, row);
+    });
+
+    const { sim, correr } = await build({ registerStatus });
+    await correr();
+
+    // PRESENCIA: el alta SÍ se completó del lado del partner. Sin esto, "no quedó failed" sería
+    // verde también en un mundo donde el alta nunca corrió.
+    expect(sim.cuentasCreadas).toBe(1);
+
+    const row = await registerStatus.getStatus(CUSTOMER);
+    // LA aserción: un error de NUESTRA DB no puede disfrazarse de fallo del partner.
+    expect(row?.status).not.toBe('failed');
+    // Queda en running con el lease congelado → el watchdog lo expira y el reintento es idempotente.
+    expect(row?.status).toBe('running');
+  });
+});
+
+describe('A4 — fencing: un runner zombi no pisa el estado de la generación nueva', () => {
+  /**
+   * `jobId === customerId` y la escritura era un overwrite ciego, así que las dos generaciones eran
+   * INDISTINGUIBLES. Un runner viejo que revive puede dejar `failed` con el alta OK (el operador
+   * reintenta y quema al cliente) o `done` con el alta fallada.
+   */
+  it('otra generación reservó mientras el zombi corría → el zombi NO escribe', async () => {
+    let liberar!: () => void;
+    const puerta = new Promise<void>(r => { liberar = r; });
+    const { runner, registerStatus } = await build({
+      heartbeatMs: 60_000, // que no lata: acá se prueba el fence de la escritura TERMINAL
+      registerAccountStub: { execute: jest.fn(async () => { await puerta; return resultOk(); }) },
+    });
+
+    const reservadoEn = new Date();
+    await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+    const zombi = runner.run(CUSTOMER, input(), reservadoEn);
+    await respirar(); // deja que haga el claim del running
+
+    // Generación B: el watchdog dio por muerto al job y otro POST tomó la reserva.
+    const nuevaReserva = new Date(Date.now() + 1_000);
+    registerStatus.seedStatus(CUSTOMER, { status: 'pending', startedAt: nuevaReserva, heartbeatAt: nuevaReserva });
+
+    liberar();
+    await zombi;
+
+    const row = await registerStatus.getStatus(CUSTOMER);
+    expect(row?.status).toBe('pending');
+    expect(row!.heartbeatAt!.getTime()).toBe(nuevaReserva.getTime());
+  });
+
+  it('el zombi tampoco escribe su FALLO sobre la generación nueva', async () => {
+    let liberar!: () => void;
+    const puerta = new Promise<void>(r => { liberar = r; });
+    const { runner, registerStatus } = await build({
+      heartbeatMs: 60_000,
+      registerAccountStub: { execute: jest.fn(async () => { await puerta; throw new Error('429 del partner'); }) },
+    });
+
+    const reservadoEn = new Date();
+    await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+    const zombi = runner.run(CUSTOMER, input(), reservadoEn);
+    await respirar();
+
+    const nuevaReserva = new Date(Date.now() + 1_000);
+    registerStatus.seedStatus(CUSTOMER, { status: 'pending', startedAt: nuevaReserva, heartbeatAt: nuevaReserva });
+
+    liberar();
+    await zombi;
+
+    expect((await registerStatus.getStatus(CUSTOMER))?.status).toBe('pending');
+  });
+});
+
+describe('M3 — forense: lo que el estado NO publica queda en el log', () => {
+  /**
+   * El estado del job persiste sólo `error` + `code` — y así tiene que seguir siendo: hay un test
+   * que PINEA que el polling no filtre `ownedByInternalId`, `poisonedCount`, `cic` ni `internalId`.
+   * Pero ésos son los campos con los que se reconstruyó el incidente Centeno. La salida no es
+   * publicarlos: es dejarlos en un log estructurado del servidor.
+   */
+  it('TV_EMAIL_OWNED_BY_OTHER: el log lleva ownedByInternalId; el estado NO', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { registerStatus, correr } = await build({
+        registerAccountStub: {
+          execute: jest.fn(async () => { throw new TvEmailOwnedByOtherError('c204382@x.com', 'cust-OTRO'); }),
+        },
+      });
+      await correr();
+
+      const linea = warn.mock.calls.find(c => String(c[0]).includes('[gigared]'));
+      expect(linea).toBeDefined();
+      expect(linea![1]).toMatchObject({
+        customerId: CUSTOMER,
+        code: 'TV_EMAIL_OWNED_BY_OTHER',
+        ownedByInternalId: 'cust-OTRO',
+        email: 'c204382@x.com',
+      });
+
+      // Y el contrato del polling no se toca: el estado sigue publicando SÓLO error + code.
+      const row = await registerStatus.getStatus(CUSTOMER);
+      expect(row!.result).toEqual({ error: expect.any(String), code: 'TV_EMAIL_OWNED_BY_OTHER' });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('TV_POOL_POISONED: el log lleva poisonedCount', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { correr } = await build({
+        registerAccountStub: { execute: jest.fn(async () => { throw new TvPoolPoisonedError(37); }) },
+      });
+      await correr();
+      const linea = warn.mock.calls.find(c => String(c[0]).includes('[gigared]'));
+      expect(linea![1]).toMatchObject({ code: 'TV_POOL_POISONED', poisonedCount: 37 });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('TV_IDENTITY_UNVERIFIED: el log lleva cic + internalId', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { correr } = await build({
+        registerAccountStub: {
+          execute: jest.fn(async () => { throw new TvIdentityStampUnverifiedError('0000009853', 'cust-1-2'); }),
+        },
+      });
+      await correr();
+      const linea = warn.mock.calls.find(c => String(c[0]).includes('[gigared]'));
+      expect(linea![1]).toMatchObject({ code: 'TV_IDENTITY_UNVERIFIED', cic: '0000009853', internalId: 'cust-1-2' });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
