@@ -55,6 +55,17 @@ export interface RegisterTvJobInput {
  * 3) `run` NUNCA LANZA (A2). Se invoca con `void`: un throw es un unhandled rejection y en Node
  *    moderno eso tumba el proceso — con todos los jobs en curso adentro. TODO camino, incluido el
  *    del heartbeat asíncrono, está envuelto.
+ *
+ * 4) EL DESENLACE SIEMPRE ATERRIZA (C4). El heartbeat y la escritura terminal compiten por el mismo
+ *    sello, y un latido EN VUELO —write ya aplicado en Postgres, respuesta viajando— hace que el
+ *    token del runner quede viejo sin que se entere. Si el desenlace se escribe igual, rebota por
+ *    fence y se pierde EN SILENCIO: la fila queda `running`, el latido que vuelve reprograma un
+ *    timer que nadie limpia y el lease se renueva PARA SIEMPRE ⇒ el watchdog nunca la expira ⇒ POST
+ *    409 eterno, GET "el alta está en curso" eterno, y sólo se sale editando la DB a mano. Tres
+ *    piezas lo cierran: `terminado` (un latido que vuelve tarde no reprograma), `await enVuelo` (el
+ *    desenlace espera al latido en lugar de correrle una carrera) y `persistirDesenlace` (si el
+ *    fence rebota igual, se relee el sello y se distingue "somos un zombi" de "nos movimos el sello
+ *    nosotros mismos").
  */
 export class RegisterTvJobRunner {
   constructor(
@@ -110,6 +121,12 @@ export class RegisterTvJobRunner {
     // más que el intervalo.
     let latido: NodeJS.Timeout | null = null;
     let perdimosElTurno = false;
+    // El latido EN VUELO: su write ya salió y la respuesta viene viajando. `clearTimeout` no lo
+    // alcanza —ese timer ya disparó— así que es la única referencia que permite esperarlo.
+    let enVuelo: Promise<void> | null = null;
+    // "El desenlace ya se resolvió". Un latido que vuelve DESPUÉS de esto no puede reprogramar: ese
+    // timer nuevo no lo limpiaría nadie y latiría sobre una fila terminal PARA SIEMPRE.
+    let terminado = false;
     const heartbeatMs = this.heartbeatMs;
 
     const beat = async (): Promise<void> => {
@@ -130,6 +147,7 @@ export class RegisterTvJobRunner {
       }
       // `ok === null` (la DB falló): no movemos el token y reintentamos en el próximo latido. El
       // TTL da ~30 latidos de margen, así que un blip no cuesta el turno.
+      if (terminado) return;
       programar();
     };
 
@@ -137,7 +155,9 @@ export class RegisterTvJobRunner {
     // unhandled rejection que nadie puede atrapar desde afuera del timer.
     function programar(this: void): void {
       latido = setTimeout(() => {
-        void beat().catch(err => {
+        // La asignación es SÍNCRONA con el disparo del timer (`beat()` corre hasta su primer await
+        // sin ceder el hilo), así que cuando el flujo principal mira `enVuelo` ya está puesto.
+        enVuelo = beat().catch(err => {
           console.error('[gigared] register job: heartbeat roto', { customerId, err });
         });
       }, heartbeatMs);
@@ -181,11 +201,68 @@ export class RegisterTvJobRunner {
         heartbeatAt: new Date(),
       };
     } finally {
+      // El orden importa. `terminado` se levanta ANTES de nada: entre el `await` del use case y esta
+      // línea no hay ningún punto de cesión, así que ningún latido puede colarse a reprogramar.
+      terminado = true;
+      // Cancela el latido AGENDADO (si el timer ya disparó, esto es un no-op — por eso solo no
+      // alcanza).
       if (latido) clearTimeout(latido);
+      // Y ahora el latido EN VUELO. Su write pudo YA haber aplicado, o sea que la fila puede tener
+      // un sello que este runner todavía no conoce. Escribir el desenlace sin esperarlo es
+      // presentar un token viejo: `count 0`, el `done` se pierde y la fila queda `running` para
+      // siempre. Si el latido se cuelga, este runner se cuelga con él y la fila queda con el lease
+      // congelado — el watchdog la expira y el reintento del operador es idempotente. Ése es el
+      // lado seguro; el otro es un alta clavada que sólo se destraba editando la DB a mano.
+      if (enVuelo) await enVuelo;
     }
 
     if (perdimosElTurno) return;
-    await this.escribir(customerId, token, desenlace);
+    await this.persistirDesenlace(customerId, token, desenlace, reservadoEn);
+  }
+
+  /**
+   * Escribe el estado terminal. NO es un `escribir` a secas: el retorno de esta escritura es lo
+   * único que dice si el desenlace llegó a la fila, y descartarlo (como se hacía) es lo que vuelve
+   * INDIAGNOSTICABLE un job clavado.
+   *
+   * Un `false` tiene dos explicaciones y hay que distinguirlas:
+   *   (a) otra generación reservó el alta ⇒ este runner es un zombi ⇒ NO escribe NADA;
+   *   (b) un latido PROPIO aplicó su write y perdió la respuesta ⇒ el sello se movió bajo nuestros
+   *       pies, pero el desenlace es LEGÍTIMO y perderlo clava la fila hasta el watchdog.
+   *
+   * `startedAt` desempata: es el sello con el que la RUTA reservó y es INMUTABLE mientras el job
+   * vive, así que sólo la generación dueña puede exhibirlo. Dos reservas no pueden compartirlo: para
+   * que otra generación reserve, la nuestra tiene que haber quedado sin latir más que el TTL.
+   */
+  private async persistirDesenlace(
+    customerId: string,
+    token: Date,
+    desenlace: TvRegisterStatusRow,
+    reservadoEn: Date,
+  ): Promise<void> {
+    const aplicado = await this.escribir(customerId, token, desenlace);
+    if (aplicado === true) return;
+    // `null` = la DB no está y `escribir` ya lo logueó. No hay a quién preguntarle por el sello.
+    if (aplicado === null) return;
+
+    const actual = await this.leer(customerId);
+    if (actual?.startedAt?.getTime() !== reservadoEn.getTime() || actual.heartbeatAt === undefined) {
+      console.warn('[gigared] register job: el desenlace no se pudo persistir, la reserva es de otra generacion', { customerId, status: desenlace.status });
+      return;
+    }
+    if (await this.escribir(customerId, actual.heartbeatAt, desenlace) !== true) {
+      console.warn('[gigared] register job: el desenlace no se pudo persistir ni con el sello releido', { customerId, status: desenlace.status });
+    }
+  }
+
+  /** Lectura blindada: en el camino del desenlace, un throw acá sería un unhandled rejection. */
+  private async leer(customerId: string): Promise<TvRegisterStatusRow | null> {
+    try {
+      return await this.registerStatus.getStatus(customerId);
+    } catch (err) {
+      console.error('[gigared] register job: no se pudo releer el estado', { customerId, err });
+      return null;
+    }
   }
 
   /**

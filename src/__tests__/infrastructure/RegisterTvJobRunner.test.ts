@@ -26,7 +26,7 @@ import { InMemoryClientTvActivationRepository } from '@infrastructure/adapters/i
 import { InMemoryTvActivationEventRepository } from '@infrastructure/adapters/in-memory/InMemoryTvActivationEventRepository';
 import { GigaredNotFoundError, GigaredRejectedError, GigaredUnavailableError, TvEmailOwnedByOtherError, TvPoolPoisonedError, TvIdentityStampUnverifiedError } from '@domain/errors/gigared';
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
-import type { TvRegisterJobResult, ClientTvRegisterStatusRepository } from '@domain/ports/ClientTvRegisterStatusRepository';
+import type { TvRegisterJobResult, ClientTvRegisterStatusRepository, TvRegisterStatusRow } from '@domain/ports/ClientTvRegisterStatusRepository';
 
 const CUSTOMER = 'cust-1';
 const CONTRACT = 'contract-1';
@@ -830,5 +830,289 @@ describe('M3 — forense: lo que el estado NO publica queda en el log', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C4 — el latido EN VUELO (la ventana que el in-memory plano no puede exhibir)
+// ---------------------------------------------------------------------------
+
+/**
+ * Repo que modela el ROUND-TRIP HONESTO de Postgres: el `UPDATE` se APLICA sobre la fila y RECIÉN
+ * DESPUÉS la respuesta viaja de vuelta por la red. Entre esas dos cosas hay una ventana real —
+ * milisegundos— y ahí adentro vive el bug del latido en vuelo.
+ *
+ * ⚠️ El in-memory plano NO puede exhibirlo: aplica y resuelve en el mismo microtask, así que nunca
+ * existe un write YA APLICADO con la respuesta todavía en el aire. Y poner el `await` ANTES de
+ * aplicar simula otra cosa —un write que todavía no ocurrió— donde el fence del desenlace sigue
+ * siendo válido y el bug no aparece. El orden aplicar→bloquear es la esencia del harness.
+ */
+class RepoConRoundTrip implements ClientTvRegisterStatusRepository {
+  private readonly delegado = new InMemoryClientTvRegisterStatusRepository();
+  /** Corre ANTES de aplicar el write: la consulta salió y todavía no tocó la fila. */
+  antesDeAplicar: (row: TvRegisterStatusRow) => Promise<void> = async () => {};
+  /** Corre DESPUÉS de aplicar el write y ANTES de devolver la respuesta. Puede bloquear o lanzar. */
+  trasAplicar: (row: TvRegisterStatusRow) => Promise<void> = async () => {};
+  /** Cada escritura con su desenlace real: `false` = el fence la rechazó. */
+  readonly intentos: Array<{ status: string; aplicado: boolean }> = [];
+
+  getStatus(clientId: string): Promise<TvRegisterStatusRow | null> {
+    return this.delegado.getStatus(clientId);
+  }
+
+  tryReserve(clientId: string, startedAt: Date, ttlMs: number): Promise<boolean> {
+    return this.delegado.tryReserve(clientId, startedAt, ttlMs);
+  }
+
+  async compareAndSet(clientId: string, expectedHeartbeatAt: Date, row: TvRegisterStatusRow): Promise<boolean> {
+    await this.antesDeAplicar(row);
+    const aplicado = await this.delegado.compareAndSet(clientId, expectedHeartbeatAt, row);
+    this.intentos.push({ status: row.status, aplicado });
+    await this.trasAplicar(row);
+    return aplicado;
+  }
+}
+
+/**
+ * Arma el escenario del latido en vuelo: el job corre y el SEGUNDO write `running` (el primer latido
+ * de verdad — el primero es el claim) queda colgado de una puerta.
+ *
+ * `bloquear` elige EN QUÉ MITAD del round-trip se cuelga, y son dos bugs distintos:
+ *  - `'despues'`: el write YA aplicó ⇒ la fila tiene un sello que el runner no conoce ⇒ su
+ *    escritura terminal rebota y el desenlace se pierde.
+ *  - `'antes'`: el write TODAVÍA no aplicó ⇒ si el desenlace se escribe primero, el latido llega
+ *    tarde a una fila ya terminal y se auto-rechaza por fence — logueándose como "zombi" a sí mismo.
+ */
+function conLatidoEnVuelo(
+  opts: { alSoltarElLatido?: () => Promise<void>; falla?: boolean; bloquear?: 'antes' | 'despues' } = {},
+) {
+  const repo = new RepoConRoundTrip();
+  let liberarLatido!: () => void;
+  const puertaLatido = new Promise<void>(r => { liberarLatido = r; });
+  let liberarAlta!: () => void;
+  const puertaAlta = new Promise<void>(r => { liberarAlta = r; });
+  let latidos = 0;
+
+  const colgar = async (row: TvRegisterStatusRow): Promise<void> => {
+    if (row.status !== 'running') return;
+    latidos++;
+    if (latidos !== 2) return; // 1 = claim del running; 2 = el latido que dejamos en vuelo
+    await puertaLatido;
+    if (opts.alSoltarElLatido) await opts.alSoltarElLatido();
+  };
+  if (opts.bloquear === 'antes') repo.antesDeAplicar = colgar;
+  else repo.trasAplicar = colgar;
+
+  const ejecutar = jest.fn(async () => {
+    await puertaAlta;
+    if (opts.falla) throw new Error('429 del partner');
+    return resultOk();
+  });
+  const runner = new RegisterTvJobRunner(
+    { execute: ejecutar } as unknown as RegisterGigaredAccount,
+    repo,
+    5,
+  );
+
+  return { repo, runner, ejecutar, liberarLatido, liberarAlta, latidos: () => latidos };
+}
+
+describe('C4 — un latido EN VUELO no puede comerse el desenlace ni volverse inmortal', () => {
+  /**
+   * EL BUG (re-review adversarial). Si un latido está en vuelo —su write YA aplicó en Postgres y la
+   * respuesta viene viajando— justo cuando el use case termina, pasan tres cosas encadenadas:
+   *
+   *  1) el `clearTimeout` del `finally` limpia un timer YA DISPARADO ⇒ no-op;
+   *  2) la escritura terminal presenta el token viejo, pero la fila ya tiene el sello nuevo ⇒
+   *     `count 0` ⇒ el `done`/`failed` SE PIERDE (y el retorno se descartaba sin log);
+   *  3) el latido vuelve, mueve el token y REPROGRAMA ⇒ un timer que nadie limpia jamás.
+   *
+   * El resultado medido: la fila queda `running` con el lease renovándose PARA SIEMPRE, el watchdog
+   * nunca la expira, el POST da 409 eterno y el GET dice "El alta está en curso" eterno. Sólo se
+   * sale editando la DB a mano. Es el agujero de `CancelTvJobRunner` que este change decía no
+   * heredar, reintroducido por la puerta de atrás.
+   *
+   * El test de "el heartbeat PARA cuando el job termina" NO puede cazarlo: con el in-memory plano
+   * el CAS resuelve en un microtask y jamás hay un latido en vuelo.
+   */
+  it('el done se persiste igual: el desenlace no se pierde por el sello que movió el propio latido', async () => {
+    const { repo, runner, liberarLatido, liberarAlta, latidos } = conLatidoEnVuelo();
+    const reservadoEn = new Date();
+    expect(await repo.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS)).toBe(true);
+    const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
+
+    // Se espera al EVENTO, no al reloj: `latidos === 2` significa que el write del latido YA aplicó
+    // sobre la fila y su respuesta está colgada. Ésa es exactamente la ventana del bug.
+    await esperarHasta(async () => latidos() === 2 || null);
+    // PRESENCIA: el sello de la fila ya se movió bajo los pies del runner.
+    const enLaFila = (await repo.getStatus(CUSTOMER))!.heartbeatAt!.getTime();
+
+    liberarAlta();
+    await respirar(); // el use case termina CON el latido todavía en vuelo
+    liberarLatido();
+    await corriendo;
+
+    const row = await repo.getStatus(CUSTOMER);
+    expect(row?.status).toBe('done');
+    expect((row!.result as TvRegisterJobResult).partnerCreated).toBe(true);
+    // Y el desenlace se selló DESPUÉS del latido: no es que el latido no haya ocurrido.
+    expect(row!.heartbeatAt!.getTime()).toBeGreaterThanOrEqual(enLaFila);
+  });
+
+  it('tampoco deja un timer INMORTAL latiendo sobre una fila ya terminal', async () => {
+    const { repo, runner, liberarLatido, liberarAlta, latidos } = conLatidoEnVuelo();
+    const reservadoEn = new Date();
+    await repo.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+    const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
+
+    await esperarHasta(async () => latidos() === 2 || null);
+    liberarAlta();
+    await respirar();
+    liberarLatido();
+    await corriendo;
+
+    const alTerminar = (await repo.getStatus(CUSTOMER))!.heartbeatAt!.getTime();
+    const latidosAlTerminar = latidos();
+    // Acá SÍ va una espera fija: la aserción es que NADA se mueve, y la contención sólo puede hacer
+    // este test más permisivo, nunca romperlo. 200 ms son 40 latidos de margen con heartbeatMs = 5.
+    await respirar(200);
+    expect(latidos()).toBe(latidosAlTerminar);
+    expect((await repo.getStatus(CUSTOMER))!.heartbeatAt!.getTime()).toBe(alTerminar);
+    expect((await repo.getStatus(CUSTOMER))!.status).toBe('done');
+  });
+
+  /**
+   * El caso residual, y el más traicionero: el write del latido APLICA y la respuesta se PIERDE
+   * (un `connection reset` post-commit). El runner no puede enterarse del sello nuevo por la vía
+   * normal —su token quedó viejo— y su escritura terminal rebota por fence.
+   *
+   * Ahí el `startedAt` es lo que desempata: es el sello con el que la RUTA reservó y es INMUTABLE
+   * mientras el job vive, así que "la fila sigue siendo de mi generación" es una pregunta que se
+   * puede contestar. Si lo es, el desenlace se reintenta contra el sello vigente. Si no, somos un
+   * zombi de verdad y no escribimos NADA.
+   */
+  it('la respuesta del latido se pierde DESPUÉS de aplicar: el desenlace se recupera, no se descarta', async () => {
+    const { repo, runner, liberarLatido, liberarAlta, latidos } = conLatidoEnVuelo({
+      alSoltarElLatido: async () => { throw new Error('connection reset by peer'); },
+    });
+    const reservadoEn = new Date();
+    await repo.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+    const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
+
+    await esperarHasta(async () => latidos() === 2 || null);
+    const selloPerdido = (await repo.getStatus(CUSTOMER))!.heartbeatAt!.getTime();
+
+    liberarAlta();
+    await respirar();
+    liberarLatido();
+    await corriendo;
+
+    const row = await repo.getStatus(CUSTOMER);
+    // Sin la recuperación, la fila queda `running` con el sello que el runner nunca llegó a conocer
+    // y el alta —que del lado del partner SALIÓ BIEN— espera 15 minutos al watchdog para que el
+    // operador la reintente contra un partner que ya la tiene.
+    expect(row?.status).toBe('done');
+    expect(row!.heartbeatAt!.getTime()).toBeGreaterThanOrEqual(selloPerdido);
+  });
+
+  /**
+   * La otra mitad del round-trip: el latido salió pero TODAVÍA no aplicó. Acá el desenlace no corre
+   * peligro (llega primero y aplica), pero el latido aterriza sobre una fila ya terminal y el fence
+   * lo rechaza: el runner se auto-declara ZOMBI en el log. Esa línea es una mentira —no hubo ninguna
+   * otra generación— y es exactamente la pista falsa que se le deja al que investiga un alta rara.
+   *
+   * Por eso el desenlace ESPERA al latido en vuelo en vez de correrle una carrera: esperándolo, las
+   * tres escrituras del runner salen en orden y ninguna rebota contra otra del mismo runner.
+   */
+  it('el latido que todavía no aplicó no compite con el desenlace ni se reporta como zombi', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { repo, runner, liberarLatido, liberarAlta, latidos } = conLatidoEnVuelo({ bloquear: 'antes' });
+      const reservadoEn = new Date();
+      await repo.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+      const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
+
+      await esperarHasta(async () => latidos() === 2 || null);
+      liberarAlta();
+      await respirar();
+      liberarLatido();
+      await corriendo;
+      // Se espera al EVENTO —las tres escrituras intentadas— y no a un puñado de milisegundos.
+      await esperarHasta(async () => repo.intentos.length >= 3 || null);
+
+      // El desenlace es la ÚLTIMA escritura, no una del medio a la que el latido le pasa por encima.
+      expect(repo.intentos.map(i => i.status)).toEqual(['running', 'running', 'done']);
+      // Y ninguna escritura de este runner rebotó contra otra suya.
+      expect(repo.intentos.every(i => i.aplicado)).toBe(true);
+      expect(warn.mock.calls.filter(c => String(c[0]).includes('zombi'))).toEqual([]);
+      expect((await repo.getStatus(CUSTOMER))?.status).toBe('done');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  /**
+   * M2 — el retorno de la escritura terminal se descartaba SIN LOG. Es lo que volvía indiagnosticable
+   * el bug de arriba: la fila quedaba clavada y no había una sola línea que dijera por qué. El zombi
+   * del heartbeat sí se loguea (`console.warn` en el `beat`); el desenlace perdido no.
+   */
+  it('el desenlace que rebota contra una generación AJENA se loguea (no se pierde en silencio)', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let liberar!: () => void;
+      const puerta = new Promise<void>(r => { liberar = r; });
+      const { runner, registerStatus } = await build({
+        heartbeatMs: 60_000, // que no lata: acá el fence lo rompe la generación B, no un latido
+        registerAccountStub: { execute: jest.fn(async () => { await puerta; return resultOk(); }) },
+      });
+
+      const reservadoEn = new Date();
+      await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+      const zombi = runner.run(CUSTOMER, input(), reservadoEn);
+      await respirar();
+
+      const nuevaReserva = new Date(Date.now() + 1_000);
+      registerStatus.seedStatus(CUSTOMER, { status: 'pending', startedAt: nuevaReserva, heartbeatAt: nuevaReserva });
+
+      liberar();
+      await zombi;
+
+      // El estado ajeno sigue intacto (fencing) …
+      expect((await registerStatus.getStatus(CUSTOMER))?.status).toBe('pending');
+      // … y quedó constancia de que HUBO un desenlace que no se pudo persistir.
+      const linea = warn.mock.calls.find(c => String(c[0]).includes('desenlace'));
+      expect(linea).toBeDefined();
+      expect(linea![1]).toMatchObject({ customerId: CUSTOMER, status: 'done' });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('M1 — el claim que NO aplica (false, sin excepción) aborta el alta', () => {
+  /**
+   * La rama testeada hasta ahora era la del repo que LANZA (`escribir` → `null`). La rama `false` es
+   * otra cosa: el CAS corrió bien y NO aplicó porque el sello ya no es nuestro — dos réplicas, la
+   * segunda reserva ganó. Es la rama que evita el SEGUNDO `register` contra el partner, o sea la que
+   * quema al cliente para siempre si se cae.
+   */
+  it('otra generación ya tiene la reserva → el partner no se toca', async () => {
+    const ejecutar = jest.fn(async () => resultOk());
+    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+    const reservadoEn = new Date();
+    // Generación B ya reservó: la fila existe, pero con OTRO sello.
+    const ajena = new Date(reservadoEn.getTime() + 1_000);
+    registerStatus.seedStatus(CUSTOMER, { status: 'pending', startedAt: ajena, heartbeatAt: ajena });
+
+    const runner = new RegisterTvJobRunner(
+      { execute: ejecutar } as unknown as RegisterGigaredAccount,
+      registerStatus,
+      5,
+    );
+    await runner.run(CUSTOMER, input(), reservadoEn);
+
+    expect(ejecutar).not.toHaveBeenCalled();
+    // Y el estado de la generación B queda intacto.
+    expect((await registerStatus.getStatus(CUSTOMER))?.heartbeatAt!.getTime()).toBe(ajena.getTime());
   });
 });
