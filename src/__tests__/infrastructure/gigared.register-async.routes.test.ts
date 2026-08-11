@@ -98,6 +98,8 @@ interface Opts {
   contractOwner?: string;
   grContratoId?: string | null;
   perms?: { register?: RequestHandler };
+  /** Inyecta req.user (operador autenticado) antes del router. */
+  user?: { id: string; username: string };
 }
 
 async function buildApp(opts: Opts = {}) {
@@ -170,9 +172,13 @@ async function buildApp(opts: Opts = {}) {
 
   const app = express();
   app.use(express.json());
+  if (opts.user) {
+    const u = opts.user;
+    app.use((req, _res, next) => { (req as express.Request).user = { id: u.id, username: u.username, email: 'op@test.local' }; next(); });
+  }
   app.use('/api/gigared', router);
   app.use(errorHandler);
-  return { app, port, registerStatus };
+  return { app, port, registerStatus, eventRepo };
 }
 
 // ---------------------------------------------------------------------------
@@ -659,5 +665,62 @@ describe('GET /customers/:id/register/status (W2.4)', () => {
     const { app } = await buildApp({ perms: { register: deny } });
     const res = await request(app).get(`/api/gigared/customers/${CUST}/register/status`);
     expect(res.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// M2 (fix wave) — seam del ACTOR: req.user → ruta → runner → use case → historial
+// ---------------------------------------------------------------------------
+
+/**
+ * El actor cruza CUATRO saltos y ninguno estaba pinneado. Los revisores encontraron dos mutaciones
+ * que sobreviven la suite entera: la ruta ignorando `req.user` (actor = {null,''}) y el runner
+ * tirando el actor al llamar al use case. En los dos casos el historial de TV queda con el alta
+ * registrada por NADIE — y ese historial es el rastro con el que se auditan las altas.
+ *
+ * El seam va de punta a punta a propósito: cada salto testeado por separado deja el pegamento sin
+ * cubrir, que es donde estaban los dos bugs.
+ */
+describe('POST /register — el actor viaja de req.user hasta el historial de TV (M2)', () => {
+  it('el evento "alta" queda con el actorName y el actorId del operador', async () => {
+    const port = fakePort({
+      // El probe falla la primera vez (el cliente no tiene cuenta) y resuelve después del stamp.
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError())
+        .mockResolvedValue(fakeAccount()),
+    });
+    const { app, eventRepo } = await buildApp({
+      port,
+      user: { id: 'op-007', username: 'operador.gonzalez' },
+    });
+
+    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    expect(res.status).toBe(202);
+
+    for (let i = 0; i < 200 && eventRepo.all().length === 0; i++) await new Promise(r => setTimeout(r, 10));
+
+    const eventos = eventRepo.all();
+    // PRESENCIA: el alta tiene que HABER corrido. Sin esto, "el actorName no está vacío" sería
+    // verde también en un mundo donde no se registró ningún evento.
+    expect(eventos).toHaveLength(1);
+    expect(eventos[0]!.eventType).toBe('alta');
+    // Y el seam: ni swapeado con el id, ni vacío.
+    expect(eventos[0]!.actorName).toBe('operador.gonzalez');
+    expect(eventos[0]!.actorId).toBe('op-007');
+  });
+
+  it('sin operador autenticado el alta corre igual, con actor vacío (no revienta)', async () => {
+    const port = fakePort({
+      getAccountByInternalId: jest.fn()
+        .mockRejectedValueOnce(new GigaredNotFoundError())
+        .mockResolvedValue(fakeAccount()),
+    });
+    const { app, eventRepo } = await buildApp({ port });
+
+    await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    for (let i = 0; i < 200 && eventRepo.all().length === 0; i++) await new Promise(r => setTimeout(r, 10));
+
+    expect(eventRepo.all()).toHaveLength(1);
+    expect(eventRepo.all()[0]!.actorName).toBe('');
   });
 });
