@@ -1,5 +1,6 @@
 import type { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
 import type { ClientTvRegisterStatusRepository } from '@domain/ports/ClientTvRegisterStatusRepository';
+import { TV_REGISTER_HEARTBEAT_MS } from '@domain/gigared/tvRegisterJob';
 
 export interface RegisterTvActor {
   actorId: string | null;
@@ -44,13 +45,14 @@ export class RegisterTvJobRunner {
   constructor(
     private readonly registerAccount: RegisterGigaredAccount,
     private readonly registerStatus: ClientTvRegisterStatusRepository,
+    private readonly heartbeatMs: number = TV_REGISTER_HEARTBEAT_MS,
   ) {}
 
-  async run(customerId: string, input: RegisterTvJobInput, actor?: RegisterTvActor): Promise<void> {
-    const startedAt = new Date();
-    // pending → running. El `startedAt` se re-sella acá a propósito: el watchdog mide el tiempo
-    // desde que el trabajo REAL arrancó, no desde que se encoló.
-    await this.registerStatus.setStatus(customerId, { status: 'running', startedAt });
+  async run(customerId: string, input: RegisterTvJobInput, reservadoEn: Date, actor?: RegisterTvActor): Promise<void> {
+    const startedAt = reservadoEn;
+    let token = reservadoEn;
+    // pending → running.
+    await this.registerStatus.compareAndSet(customerId, token, { status: 'running', startedAt, heartbeatAt: token });
 
     try {
       const result = await this.registerAccount.execute(customerId, {
@@ -62,7 +64,7 @@ export class RegisterTvJobRunner {
         actorId: actor?.actorId ?? null,
         actorName: actor?.actorName ?? '',
       });
-      await this.registerStatus.setStatus(customerId, { status: 'done', result, startedAt });
+      await this.registerStatus.compareAndSet(customerId, token, { status: 'done', result, startedAt, heartbeatAt: token });
     } catch (err) {
       // El mensaje es LO ÚNICO que el operador va a ver (decisión de producto: "el error y ya").
       // Por eso se persiste el texto del error de dominio tal cual, sin aplastarlo en un genérico.
@@ -73,10 +75,11 @@ export class RegisterTvJobRunner {
       // costar esa distinción en silencio.
       const rawCode = (err as { code?: unknown } | null)?.code;
       const code = typeof rawCode === 'string' ? rawCode : undefined;
-      await this.registerStatus.setStatus(customerId, {
+      await this.registerStatus.compareAndSet(customerId, token, {
         status: 'failed',
         result: code !== undefined ? { error, code } : { error },
         startedAt,
+        heartbeatAt: token,
       });
     }
   }

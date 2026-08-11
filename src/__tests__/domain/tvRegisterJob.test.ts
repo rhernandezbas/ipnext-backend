@@ -87,4 +87,51 @@ describe('isTvRegisterJobActive — watchdog del alta huérfana (W1.3)', () => {
     expect(isTvRegisterJobActive(row, new Date(), 1_000)).toBe(false);
     expect(isTvRegisterJobActive(row, new Date(), 60_000)).toBe(true);
   });
+
+  // ── C2 (fix wave): el watchdog mide SEÑAL DE VIDA, no antigüedad ────────────────
+  /**
+   * El bug: `startedAt` se sellaba UNA vez y no se renovaba nunca, así que el watchdog no podía
+   * distinguir "el proceso murió" de "el job está tardando". Y el alta TARDA: 17 llamadas × 30 s de
+   * timeout = 510 s de piso, con un TTL de 900 s. Medido por los revisores: con el runner colgado
+   * DENTRO del register, el GET devolvía `expired` ("Podés reintentarla") y un segundo POST daba
+   * 202. O sea: el sistema le PEDÍA al operador que disparara el segundo register — exactamente lo
+   * que quemó a Calabria, Abello y Aceste.
+   *
+   * El arreglo es un heartbeat: el runner re-sella `heartbeatAt` mientras avanza. El watchdog mide
+   * contra ESE sello. `startedAt` queda INMUTABLE (es lo que el operador ve en el polling; moverlo
+   * cada 30 s sería mentirle sobre cuándo arrancó el alta).
+   */
+  it('job LENTO pero vivo: heartbeat fresco con startedAt viejo → ACTIVO (no se le roba el lock)', () => {
+    const row: TvRegisterStatusRow = {
+      status: 'running',
+      startedAt: hace(TV_REGISTER_JOB_TTL_MS + 10 * 60 * 1000), // arrancó hace 25 minutos
+      heartbeatAt: hace(5_000),                                  // pero dio señal hace 5 segundos
+    };
+    expect(isTvRegisterJobActive(row, new Date())).toBe(true);
+  });
+
+  it('proceso MUERTO: heartbeat más viejo que el TTL → NO activo (el cliente se libera)', () => {
+    const row: TvRegisterStatusRow = {
+      status: 'running',
+      startedAt: hace(TV_REGISTER_JOB_TTL_MS + 60_000),
+      heartbeatAt: hace(TV_REGISTER_JOB_TTL_MS + 1),
+    };
+    expect(isTvRegisterJobActive(row, new Date())).toBe(false);
+  });
+
+  it('el heartbeat MANDA sobre startedAt: startedAt recién sellado no revive un heartbeat muerto', () => {
+    // La rama inversa. Si la función usara `startedAt ?? heartbeatAt` (o los mirara al revés), este
+    // caso daría ACTIVO y un job muerto seguiría bloqueando al cliente.
+    const row: TvRegisterStatusRow = {
+      status: 'running',
+      startedAt: now(),
+      heartbeatAt: hace(TV_REGISTER_JOB_TTL_MS + 1),
+    };
+    expect(isTvRegisterJobActive(row, new Date())).toBe(false);
+  });
+
+  it('sin heartbeatAt cae a startedAt (filas escritas antes de este change)', () => {
+    expect(isTvRegisterJobActive({ status: 'running', startedAt: hace(1_000) }, new Date())).toBe(true);
+    expect(isTvRegisterJobActive({ status: 'running', startedAt: hace(TV_REGISTER_JOB_TTL_MS + 1) }, new Date())).toBe(false);
+  });
 });

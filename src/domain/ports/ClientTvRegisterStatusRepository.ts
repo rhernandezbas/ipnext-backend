@@ -3,20 +3,23 @@ import type { GigaredAccount } from './GigaredPort';
 /**
  * ClientTvRegisterStatusRepository (gigared-alta-asincrona W1.2) — estado del job de ALTA de TV.
  *
- * Espejo exacto de `ClientTvCancelStatusRepository`, pero para el alta. Persiste el estado en
- * curso / terminal del job en la DB espejo (tabla Client), en tres columnas nullable:
- *   tvRegisterStatus    — 'pending' | 'running' | 'done' | 'failed'
- *   tvRegisterResult    — result de RegisterGigaredAccount en done; {error:string} en failed
- *   tvRegisterStartedAt — cuándo se ENCOLÓ el job, re-sellado cuando el runner pasa a 'running'
+ * Espejo del molde de `ClientTvCancelStatusRepository`, pero para el alta. Persiste el estado en
+ * curso / terminal del job en la DB espejo (tabla Client), en cuatro columnas nullable:
+ *   tvRegisterStatus      — 'pending' | 'running' | 'done' | 'failed'
+ *   tvRegisterResult      — result de RegisterGigaredAccount en done; {error:string} en failed
+ *   tvRegisterStartedAt   — cuándo se ENCOLÓ el job. INMUTABLE mientras el job vive.
+ *   tvRegisterHeartbeatAt — última señal de vida (lease). El runner la renueva; el watchdog la mide.
  *
  * El sync de GR NUNCA escribe estas columnas — son estado mirror-only del job asíncrono.
  *
- * ⚠️ DIFERENCIA DELIBERADA con el molde del cancel: acá `startedAt` se escribe TAMBIÉN en
- * 'pending'. Sin ese timestamp el watchdog (`isTvRegisterJobActive`) no puede acotar la edad de un
- * job huérfano y el cliente queda bloqueado para siempre — que es exactamente el agujero abierto
- * de `CancelTvJobRunner`.
+ * ⚠️ DIFERENCIA DELIBERADA con el molde del cancel: acá los sellos se escriben TAMBIÉN en
+ * 'pending'. Sin ellos el watchdog (`isTvRegisterJobActive`) no puede acotar la edad de un job
+ * huérfano y el cliente queda bloqueado para siempre — que es exactamente el agujero abierto de
+ * `CancelTvJobRunner`.
  *
- * Escribir el mismo estado dos veces siempre es seguro (last-write wins).
+ * ⚠️ Y OTRA: este port NO expone un `setStatus` de overwrite ciego. Las dos únicas escrituras son
+ * `tryReserve` (compare-and-set de la reserva) y `compareAndSet` (escritura con fencing). Un
+ * overwrite ciego reintroduciría los dos agujeros que este archivo existe para cerrar.
  */
 
 export type TvRegisterStatusValue = 'pending' | 'running' | 'done' | 'failed';
@@ -51,7 +54,13 @@ export interface TvRegisterJobError {
 export interface TvRegisterStatusRow {
   status: TvRegisterStatusValue;
   result?: TvRegisterJobResult | TvRegisterJobError;
+  /** Cuándo se ENCOLÓ el alta. INMUTABLE — es lo que el operador ve en el polling. */
   startedAt?: Date;
+  /**
+   * Última señal de vida del job. Lo re-sella el runner mientras avanza (heartbeat) y es contra
+   * ESTE sello que el watchdog decide si el job murió. Ver `isTvRegisterJobActive`.
+   */
+  heartbeatAt?: Date;
 }
 
 export interface ClientTvRegisterStatusRepository {
@@ -62,8 +71,31 @@ export interface ClientTvRegisterStatusRepository {
   getStatus(clientId: string): Promise<TvRegisterStatusRow | null>;
 
   /**
-   * Escribe el estado del alta (con result / startedAt opcionales) para un cliente.
-   * Crea o pisa el valor anterior atómicamente.
+   * RESERVA ATÓMICA del alta (compare-and-set). Devuelve `true` sólo si ESTE llamador se quedó con
+   * el turno; `false` si ya había un alta VIVA (o si el cliente no existe).
+   *
+   * ⚠️ Este método existe porque `getStatus()` + `setStatus('pending')` es un TOCTOU: entre las dos
+   * llamadas hay un yield del event loop y dos POST concurrentes (un doble click alcanza, con UNA
+   * sola réplica) producen DOS `register` REALES contra el partner ⇒ dos activaciones pendientes ⇒
+   * cliente quemado PARA SIEMPRE. La condición y la escritura tienen que ser LA MISMA operación:
+   * en Postgres, un `UPDATE … WHERE` condicional del que se ramifica por el `count`.
+   *
+   * En el éxito deja la fila en `pending`, sella `startedAt` = `heartbeatAt` = `startedAt` y LIMPIA
+   * el `result` del intento anterior (si no, el polling del alta nueva mostraría el error viejo).
+   *
+   * El criterio de "viva" es el MISMO que `isTvRegisterJobActive`: pending/running con un heartbeat
+   * más nuevo que `ttlMs`.
    */
-  setStatus(clientId: string, row: TvRegisterStatusRow): Promise<void>;
+  tryReserve(clientId: string, startedAt: Date, ttlMs: number): Promise<boolean>;
+
+  /**
+   * Escritura CON FENCING: sólo aplica si `expectedHeartbeatAt` sigue siendo el sello vigente de la
+   * fila. Devuelve `false` si otra generación del job ya reservó el alta — o sea, si el llamador es
+   * un runner ZOMBI.
+   *
+   * Sin esto, `jobId === customerId` y un overwrite ciego hacen que las dos generaciones sean
+   * indistinguibles: un runner viejo que revive puede escribir `failed` sobre un alta que SÍ se
+   * completó (el operador reintenta y quema al cliente) o `done` sobre una que falló.
+   */
+  compareAndSet(clientId: string, expectedHeartbeatAt: Date, row: TvRegisterStatusRow): Promise<boolean>;
 }

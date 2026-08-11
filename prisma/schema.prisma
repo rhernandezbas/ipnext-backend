@@ -202,13 +202,16 @@ model Client {
   // tvCancel* de arriba. Mirror-only; el sync de GR NUNCA escribe estas columnas.
   // tvRegisterStatus:    'pending' | 'running' | 'done' | 'failed' | null
   // tvRegisterResult:    RegisterGigaredAccount result JSON en done; {error} en failed
-  // tvRegisterStartedAt: cuándo se encoló (pending) y se re-sella al pasar a 'running'.
-  //   A DIFERENCIA del molde de cancel, el timestamp se escribe TAMBIÉN en 'pending': es lo que
-  //   permite expirar un job huérfano (watchdog W1.3). Sin él, un proceso que muere entre el
-  //   `pending` y el arranque del runner deja al cliente bloqueado para siempre.
-  tvRegisterStatus    String?
-  tvRegisterResult    Json?
-  tvRegisterStartedAt DateTime?
+  // tvRegisterStartedAt: cuándo se ENCOLÓ el alta. INMUTABLE mientras el job vive — es lo que el
+  //   operador ve en el polling. A DIFERENCIA del molde de cancel se escribe TAMBIÉN en 'pending'.
+  // tvRegisterHeartbeatAt: última SEÑAL DE VIDA del runner (lease + fence token). El watchdog
+  //   (W1.3) mide contra ESTE sello, no contra startedAt: si midiera la antigüedad, no podría
+  //   distinguir "el proceso murió" de "el job está tardando" —un alta hace 17 llamadas al partner,
+  //   510 s de piso contra un TTL de 900 s— y le robaría el turno a un job VIVO.
+  tvRegisterStatus      String?
+  tvRegisterResult      Json?
+  tvRegisterStartedAt   DateTime?
+  tvRegisterHeartbeatAt DateTime?
   // client-geolocation — Prominense-owned GPS (NOT from GR). GR sync NEVER writes these.
   lat              Float?
   lng              Float?

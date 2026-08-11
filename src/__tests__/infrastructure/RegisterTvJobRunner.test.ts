@@ -15,7 +15,9 @@
  * lado del partner, y eso un `jest.fn()` que siempre resuelve no lo puede decir.
  */
 import { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRunner';
+import type { RegisterTvActor } from '@infrastructure/scheduling/RegisterTvJobRunner';
 import { RegisterGigaredAccount } from '@application/use-cases/gigared/RegisterGigaredAccount';
+import { TV_REGISTER_JOB_TTL_MS, isTvRegisterJobActive } from '@domain/gigared/tvRegisterJob';
 import { InMemoryClientTvRegisterStatusRepository } from '@infrastructure/adapters/in-memory/InMemoryClientTvRegisterStatusRepository';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
@@ -155,6 +157,10 @@ interface BuildOpts {
   registerStatus?: InMemoryClientTvRegisterStatusRepository;
   /** Rompe el reconcile local (best-effort) — no debe abortar el alta. */
   romperReconcile?: boolean;
+  /** Cada cuánto late el heartbeat. Los tests lo achican para no esperar 30 s reales. */
+  heartbeatMs?: number;
+  /** Reemplaza el use case entero (para simular un alta que se cuelga o que explota). */
+  registerAccountStub?: { execute: (...a: never[]) => Promise<unknown> };
 }
 
 async function build(opts: BuildOpts = {}) {
@@ -184,8 +190,26 @@ async function build(opts: BuildOpts = {}) {
     () => 0,
   );
 
-  const runner = new RegisterTvJobRunner(registerAccount, registerStatus);
-  return { runner, registerStatus, sim, port, activation, tvCancellation, eventRepo };
+  const runner = new RegisterTvJobRunner(
+    (opts.registerAccountStub ?? registerAccount) as unknown as RegisterGigaredAccount,
+    registerStatus,
+    opts.heartbeatMs,
+  );
+
+  /**
+   * Corre el job como lo hace la RUTA: primero la reserva atómica, después el runner con el sello
+   * de esa reserva como fence token. Llamar a `run()` con un token inventado sería testear un
+   * camino que producción no tiene.
+   */
+  const correr = async (actor?: RegisterTvActor, customerId = CUSTOMER) => {
+    const reservadoEn = new Date();
+    const ok = await registerStatus.tryReserve(customerId, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+    if (!ok) throw new Error('la reserva del alta no se pudo tomar (¿job vivo?)');
+    await runner.run(customerId, input(), reservadoEn, actor);
+    return reservadoEn;
+  };
+
+  return { runner, registerStatus, sim, port, activation, tvCancellation, eventRepo, correr };
 }
 
 const input = () => ({
@@ -202,8 +226,8 @@ const input = () => ({
 
 describe('RegisterTvJobRunner — transiciones de estado (W3.1/W3.2)', () => {
   it('éxito: deja el job en done con el result del alta', async () => {
-    const { runner, registerStatus, sim } = await build();
-    await runner.run(CUSTOMER, input());
+    const { registerStatus, sim, correr } = await build();
+    await correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row?.status).toBe('done');
@@ -214,26 +238,30 @@ describe('RegisterTvJobRunner — transiciones de estado (W3.1/W3.2)', () => {
   });
 
   it('pasa por running ANTES de terminar (la transición no se saltea)', async () => {
-    const { runner, registerStatus } = await build();
+    const { registerStatus, correr } = await build();
     const vistos: string[] = [];
-    const original = registerStatus.setStatus.bind(registerStatus);
-    jest.spyOn(registerStatus, 'setStatus').mockImplementation(async (id, row) => {
+    const original = registerStatus.compareAndSet.bind(registerStatus);
+    jest.spyOn(registerStatus, 'compareAndSet').mockImplementation(async (id, esperado, row) => {
       vistos.push(row.status);
-      return original(id, row);
+      return original(id, esperado, row);
     });
 
-    await runner.run(CUSTOMER, input());
+    await correr();
     expect(vistos).toEqual(['running', 'done']);
   });
 
-  it('sella startedAt al pasar a running (es el ancla del watchdog)', async () => {
-    const { runner, registerStatus } = await build();
+  it('startedAt se sella al RESERVAR y es inmutable hasta el estado terminal', async () => {
+    const { registerStatus, correr } = await build();
     const antes = Date.now();
-    await runner.run(CUSTOMER, input());
+    const reservadoEn = await correr();
     const despues = Date.now();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row?.startedAt).toBeInstanceOf(Date);
+    // El runner NO lo reescribe: es lo que el operador ve en el polling ("empezó a las…"), y
+    // moverlo con cada latido del heartbeat le mentiría sobre cuándo arrancó el alta. Lo que se
+    // renueva es `heartbeatAt`.
+    expect(row!.startedAt!.getTime()).toBe(reservadoEn.getTime());
     expect(row!.startedAt!.getTime()).toBeGreaterThanOrEqual(antes);
     expect(row!.startedAt!.getTime()).toBeLessThanOrEqual(despues);
   });
@@ -241,9 +269,9 @@ describe('RegisterTvJobRunner — transiciones de estado (W3.1/W3.2)', () => {
   it('fallo: deja failed con el MENSAJE del error, que es lo único que el operador va a ver', async () => {
     const sim = new PartnerSim(['0000009001']);
     sim.fallosDeActivate = 1;
-    const { runner, registerStatus } = await build({ sim });
+    const { registerStatus, correr } = await build({ sim });
 
-    await runner.run(CUSTOMER, input());
+    await correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row?.status).toBe('failed');
@@ -260,9 +288,9 @@ describe('RegisterTvJobRunner — transiciones de estado (W3.1/W3.2)', () => {
    */
   it('fallo: persiste TAMBIÉN el code del error de dominio, no sólo el texto', async () => {
     const sim = new PartnerSim([]); // pool vacío → NoCicAvailableError
-    const { runner, registerStatus } = await build({ sim });
+    const { registerStatus, correr } = await build({ sim });
 
-    await runner.run(CUSTOMER, input());
+    await correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row?.status).toBe('failed');
@@ -270,28 +298,28 @@ describe('RegisterTvJobRunner — transiciones de estado (W3.1/W3.2)', () => {
   });
 
   it('fallo sin code (Error pelado): persiste sólo el mensaje, sin inventar un code', async () => {
-    const registerAccount = { execute: jest.fn(async () => { throw new Error('db down'); }) } as unknown as RegisterGigaredAccount;
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    const runner = new RegisterTvJobRunner(registerAccount, registerStatus);
+    const { registerStatus, correr } = await build({
+      registerAccountStub: { execute: jest.fn(async () => { throw new Error('db down'); }) },
+    });
 
-    await runner.run(CUSTOMER, input());
+    await correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row!.result).toEqual({ error: 'db down' });
   });
 
   it('NUNCA lanza: el runner es fire-and-forget y un throw sería un unhandled rejection', async () => {
-    const registerAccount = { execute: jest.fn(async () => { throw new Error('boom'); }) } as unknown as RegisterGigaredAccount;
-    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    const runner = new RegisterTvJobRunner(registerAccount, registerStatus);
+    const { registerStatus, correr } = await build({
+      registerAccountStub: { execute: jest.fn(async () => { throw new Error('boom'); }) },
+    });
 
-    await expect(runner.run(CUSTOMER, input())).resolves.toBeUndefined();
+    await expect(correr()).resolves.toBeInstanceOf(Date);
     expect((await registerStatus.getStatus(CUSTOMER))?.status).toBe('failed');
   });
 
   it('el reconcile local roto NO tumba el alta: done con localReconciled=failed', async () => {
-    const { runner, registerStatus, sim } = await build({ romperReconcile: true });
-    await runner.run(CUSTOMER, input());
+    const { registerStatus, sim, correr } = await build({ romperReconcile: true });
+    await correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row?.status).toBe('done');
@@ -318,17 +346,17 @@ describe('W3.3 — un job que falla DESPUÉS del register aceptado se reintenta 
     const sim = new PartnerSim(['0000009001', '0000009002', '0000009003']);
     sim.fallosDeActivate = 1;
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    const { runner } = await build({ sim, registerStatus });
+    const { correr } = await build({ sim, registerStatus });
 
     // Intento 1 — muere en el activate, con la cuenta YA creada en el partner.
-    await runner.run(CUSTOMER, input());
+    await correr();
     expect((await registerStatus.getStatus(CUSTOMER))?.status).toBe('failed');
     expect(sim.cuentasCreadas).toBe(1);
     expect(sim.cuentas.get('0000009001')!.internalId).toBeNull(); // nunca se estampó
 
     // Intento 2 — el operador reintenta (es lo único que la UX le ofrece).
     const segundo = await build({ sim, registerStatus });
-    await segundo.runner.run(CUSTOMER, input());
+    await segundo.correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     // PRESENCIA primero: el reintento tiene que HABER FUNCIONADO. Un test que sólo asertara
@@ -350,16 +378,16 @@ describe('W3.3 — un job que falla DESPUÉS del register aceptado se reintenta 
     const sim = new PartnerSim(['0000009001', '0000009002']);
     sim.fallosDeReadback = 1;
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    const { runner } = await build({ sim, registerStatus });
+    const { correr } = await build({ sim, registerStatus });
 
-    await runner.run(CUSTOMER, input());
+    await correr();
     expect((await registerStatus.getStatus(CUSTOMER))?.status).toBe('failed');
     expect(sim.cuentas.get('0000009001')!.internalId).toBe(CUSTOMER); // el stamp SÍ persistió
     const registersTrasIntento1 = sim.registerCalls;
     expect(registersTrasIntento1).toBe(1);
 
     const segundo = await build({ sim, registerStatus });
-    await segundo.runner.run(CUSTOMER, input());
+    await segundo.correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row?.status).toBe('done');
@@ -382,10 +410,10 @@ describe('W3.4 — el seq NO avanza cuando el job falla', () => {
     const activation = new InMemoryClientTvActivationRepository();
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
 
-    const { runner } = await build({ sim, activation, registerStatus, reAlta: true });
+    const { correr } = await build({ sim, activation, registerStatus, reAlta: true });
     expect(await activation.getSeq(CUSTOMER)).toBe(0);
 
-    await runner.run(CUSTOMER, input());
+    await correr();
 
     expect((await registerStatus.getStatus(CUSTOMER))?.status).toBe('failed');
     // Si el seq hubiera avanzado a 1, el reintento mintearía `cust-1-1` —una identidad NUNCA
@@ -401,11 +429,11 @@ describe('W3.4 — el seq NO avanza cuando el job falla', () => {
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
 
     const primero = await build({ sim, activation, registerStatus, reAlta: true });
-    await primero.runner.run(CUSTOMER, input());
+    await primero.correr();
     expect(sim.cuentasCreadas).toBe(1);
 
     const segundo = await build({ sim, activation, registerStatus, reAlta: true });
-    await segundo.runner.run(CUSTOMER, input());
+    await segundo.correr();
 
     const row = await registerStatus.getStatus(CUSTOMER);
     expect(row?.status).toBe('done');

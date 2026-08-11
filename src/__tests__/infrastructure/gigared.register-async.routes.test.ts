@@ -47,6 +47,7 @@ import { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRun
 import { TV_REGISTER_JOB_TTL_MS } from '@domain/gigared/tvRegisterJob';
 
 import type { GigaredPort, GigaredAccount } from '@domain/ports/GigaredPort';
+import type { TvRegisterStatusRow } from '@domain/ports/ClientTvRegisterStatusRepository';
 import { GigaredNotFoundError } from '@domain/errors/gigared';
 
 const FLAG = GIGARED_FLAG;
@@ -192,10 +193,9 @@ describe('POST /customers/:id/register — 202 asíncrono (W2.1)', () => {
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
     // El runner se bloquea en su PRIMER write: así el estado observable es exactamente el que
     // dejó la RUTA, sin carreras con el trabajo de fondo.
-    jest.spyOn(registerStatus, 'setStatus').mockImplementation(async (id, row) => {
-      if (row.status !== 'pending') return new Promise<void>(() => {}); // cuelga al runner
-      registerStatus.seedStatus(id, row);
-    });
+    // El runner queda colgado en su PRIMER write (el claim del running): así el estado observable
+    // es exactamente el que dejó la RUTA con su reserva, sin carreras con el trabajo de fondo.
+    jest.spyOn(registerStatus, 'compareAndSet').mockImplementation(() => new Promise<boolean>(() => {}));
 
     const { app } = await buildApp({ registerStatus });
     await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
@@ -212,10 +212,7 @@ describe('POST /customers/:id/register — 202 asíncrono (W2.1)', () => {
    */
   it('el request responde sin haber tocado al partner NI UNA VEZ', async () => {
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-    jest.spyOn(registerStatus, 'setStatus').mockImplementation(async (id, row) => {
-      if (row.status !== 'pending') return new Promise<void>(() => {});
-      registerStatus.seedStatus(id, row);
-    });
+    jest.spyOn(registerStatus, 'compareAndSet').mockImplementation(() => new Promise<boolean>(() => {}));
     const { app, port } = await buildApp({ registerStatus });
 
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
@@ -392,6 +389,152 @@ describe('POST /register — guard anti-doble-disparo (W2.3)', () => {
     const { app } = await buildApp({ registerStatus });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(202);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C1 (fix wave) — el guard tiene que ser una RESERVA ATÓMICA, no read-then-write
+// ---------------------------------------------------------------------------
+
+/**
+ * Los cinco tests de W2.3 de acá arriba mandan UN SOLO request y siembran el estado con
+ * `seedStatus`: un fixture DEGENERADO donde el invariante "un solo alta viva por cliente" no puede
+ * romperse ni queriendo. El invariante REAL sólo se rompe con CONCURRENCIA.
+ *
+ * `getStatus(...)` + `await` + `setStatus('pending')` es un TOCTOU de manual: entre la lectura y la
+ * escritura hay un yield del event loop, y ahí entra el segundo request. Con UNA sola réplica, un
+ * doble click en el botón alcanza. Y el daño no es un 409 de más: son DOS `register` REALES contra
+ * el partner ⇒ dos activaciones pendientes ⇒ cliente quemado PARA SIEMPRE (Calabria, Abello,
+ * Aceste). Por eso la reserva se hace con un compare-and-set en el port, que en Postgres es un
+ * `UPDATE … WHERE` condicional y no un par de llamadas.
+ *
+ * NO se puede resolver con un Set en memoria: el día que escalen a 2 réplicas se rompe EN SILENCIO.
+ */
+describe('POST /register — la reserva es ATÓMICA (fix wave C1)', () => {
+  /**
+   * ⚠️ SIN ESTA CLASE NINGÚN TEST PUEDE EXHIBIR UN TOCTOU, y el archivo entero sería teatro.
+   *
+   * Todos los fakes in-memory resuelven en MICROTASKS. Eso hace que cada handler de Express corra
+   * de punta a punta dentro de un solo turno del event loop: el request B ni siquiera se empieza a
+   * procesar hasta que A terminó de responder. Con ese fixture, `getStatus()` + `setStatus()` da el
+   * mismo resultado que un compare-and-set y el race queda vivo SÓLO en producción — donde el port
+   * habla con Postgres y cada llamada es I/O real.
+   *
+   * Esta clase reintroduce ese round-trip: cede al event loop ANTES de tocar el store. La sección
+   * crítica del adapter (la decisión + la escritura) sigue siendo síncrona, que es justo lo que el
+   * fix garantiza.
+   */
+  class RepoConLatenciaDeRed extends InMemoryClientTvRegisterStatusRepository {
+    private pendientes: Array<() => void> = [];
+    private disparada = false;
+
+    /** @param esperados cuántos requests concurrentes tienen que juntarse en la ventana. */
+    constructor(private readonly esperados: number) { super(); }
+
+    /**
+     * El round-trip. La PRIMERA vez es un rendezvous: los `esperados` primeros llamadores se
+     * juntan y salen todos a la vez, así la ventana de carrera existe SIEMPRE y no depende de
+     * cómo el sistema operativo haya ordenado los sockets ese día. Después degrada a un yield
+     * común (el runner de fondo tiene que poder seguir).
+     */
+    private viaje(): Promise<void> {
+      if (this.disparada) return new Promise<void>(r => setImmediate(r));
+      return new Promise<void>(r => {
+        this.pendientes.push(r);
+        if (this.pendientes.length >= this.esperados) {
+          this.disparada = true;
+          for (const seguir of this.pendientes.splice(0)) seguir();
+        }
+      });
+    }
+
+    override async getStatus(id: string) {
+      await this.viaje();
+      return super.getStatus(id);
+    }
+    override async tryReserve(id: string, startedAt: Date, ttlMs: number) {
+      await this.viaje();
+      return super.tryReserve(id, startedAt, ttlMs);
+    }
+    override async compareAndSet(id: string, esperado: Date, row: TvRegisterStatusRow) {
+      await this.viaje();
+      return super.compareAndSet(id, esperado, row);
+    }
+  }
+
+  /**
+   * Un pool con dos CICs libres (si el guard falla, cada job agarra el suyo y quedan DOS altas
+   * reales) y una PUERTA sobre la primera llamada al partner.
+   *
+   * La puerta no es decoración: sin ella el job entero se resuelve en un puñado de microtasks —los
+   * mocks no tienen I/O real— y termina ANTES de que llegue el segundo request. El estado ya sería
+   * terminal, el segundo POST reservaría legítimamente y el test mediría cualquier cosa menos la
+   * concurrencia. Con la puerta, el primer job queda garantizadamente VIVO mientras entran los
+   * demás.
+   */
+  function escenarioConcurrente() {
+    const register = jest.fn(async () => {});
+    let abrir!: () => void;
+    const puerta = new Promise<void>(r => { abrir = r; });
+    const libre = (cic: string) =>
+      fakeAccount({ cic, gigaredId: null, email: null, firstName: null, lastName: null, registrationDate: null, internalId: null, clientId: null });
+
+    const port = fakePort({
+      register,
+      // Primera llamada al partner del use case. Bloquea hasta `abrir()`; después 404 siempre: el
+      // cliente no tiene cuenta, así que el alta va al pool.
+      getAccountByInternalId: jest.fn(async () => { await puerta; throw new GigaredNotFoundError(); }),
+      listAccounts: jest.fn(async (filter?: { status?: string; email?: string }) => {
+        if (filter?.email) return [];               // nadie tiene ese mail
+        return [libre('0000009001'), libre('0000009002')];
+      }),
+    });
+    return { port, register, abrir };
+  }
+
+  async function esperarTerminal(app: express.Express): Promise<void> {
+    for (let i = 0; i < 300; i++) {
+      const st = await request(app).get(`/api/gigared/customers/${CUST}/register/status`);
+      if (st.body.status === 'done' || st.body.status === 'failed') return;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    throw new Error('el job del alta nunca alcanzó un estado terminal');
+  }
+
+  it('dos POST CONCURRENTES → 202 + 409 y UN SOLO register real contra el partner', async () => {
+    const { port, register, abrir } = escenarioConcurrente();
+    // El repo con latencia es lo que permite que los handlers se INTERCALEN (ver la clase).
+    const { app } = await buildApp({ port, registerStatus: new RepoConLatenciaDeRed(2) });
+
+    const disparo = () => request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    const [a, b] = await Promise.all([disparo(), disparo()]);
+
+    // PRESENCIA primero: uno de los dos TIENE que haber encolado. Un test que sólo asertara
+    // "register se llamó una vez" daría verde también si los dos requests fallaran sin encolar.
+    expect([a.status, b.status].sort()).toEqual([202, 409]);
+
+    abrir();
+    await esperarTerminal(app);
+    // LA aserción: el daño permanente se mide en llamadas REALES al partner, no en HTTP codes.
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
+  it('cinco POST concurrentes → exactamente un 202 y cuatro 409, y UN solo register', async () => {
+    const { port, register, abrir } = escenarioConcurrente();
+    // El repo con latencia es lo que permite que los handlers se INTERCALEN (ver la clase).
+    const { app } = await buildApp({ port, registerStatus: new RepoConLatenciaDeRed(5) });
+
+    const res = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido)),
+    );
+
+    expect(res.filter(r => r.status === 202)).toHaveLength(1);
+    expect(res.filter(r => r.status === 409)).toHaveLength(4);
+
+    abrir();
+    await esperarTerminal(app);
+    expect(register).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -20,7 +20,7 @@ import type { ClientTvCancelStatusRepository } from '@domain/ports/ClientTvCance
 import type { ClientTvRegisterStatusRepository } from '@domain/ports/ClientTvRegisterStatusRepository';
 import type { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
 import type { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRunner';
-import { isTvRegisterJobActive } from '@domain/gigared/tvRegisterJob';
+import { isTvRegisterJobActive, TV_REGISTER_JOB_TTL_MS } from '@domain/gigared/tvRegisterJob';
 import { deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from '@application/use-cases/gigared/lookups';
 import { GIGARED_FLAG } from '@application/use-cases/gigared/GetGigaredConfig';
@@ -459,21 +459,28 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         throw new GrContractIdRequiredError(contractId);
       }
 
-      // W2.3 — guard anti-doble-disparo. `isTvRegisterJobActive` aplica el WATCHDOG: un job
-      // pending/running cuyo proceso murió expira y deja de bloquear. Sin eso, un deploy en el
-      // momento equivocado deja al cliente sin poder operar hasta que alguien edite la DB a mano —
-      // el agujero abierto de CancelTvJobRunner, que este change no hereda.
-      const existing = await deps.registerStatus.getStatus(customerId);
-      if (isTvRegisterJobActive(existing, new Date())) {
+      // W2.3 — guard anti-doble-disparo. Es una RESERVA ATÓMICA, no un `getStatus` + `setStatus`:
+      // entre esas dos llamadas hay un yield del event loop y ahí entra el segundo request. Con UNA
+      // sola réplica, un doble click en el botón produce DOS `register` REALES contra el partner ⇒
+      // dos activaciones pendientes ⇒ cliente quemado PARA SIEMPRE (Calabria, Abello, Aceste).
+      // El port lo resuelve con un `UPDATE … WHERE` condicional del que se ramifica por el count.
+      //
+      // La condición incluye el WATCHDOG: un job pending/running que dejó de dar señales de vida
+      // expira y deja de bloquear. Sin eso, un deploy en el momento equivocado deja al cliente sin
+      // poder operar hasta que alguien edite la DB a mano — el agujero abierto de CancelTvJobRunner,
+      // que este change no hereda.
+      //
+      // El sello vale DOS cosas: es el ancla del watchdog y es el FENCE TOKEN que el runner tiene
+      // que presentar para escribir el desenlace.
+      const reservadoEn = new Date();
+      const reservado = await deps.registerStatus.tryReserve(customerId, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+      if (!reservado) {
         res.status(409).json({ queued: false, reason: 'already-running' });
         return;
       }
 
       // #5 BE — el actor se captura ANTES de responder (el response limpia el contexto del req).
       const actor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
-      // El `startedAt` se escribe YA en `pending` (a diferencia del molde del cancel): es lo que le
-      // da al watchdog una edad que medir si el proceso muere antes de que el runner arranque.
-      await deps.registerStatus.setStatus(customerId, { status: 'pending', startedAt: new Date() });
       res.status(202).json({ jobId: customerId, status: 'pending' });
       void deps.registerTvRunner.run(
         customerId,
@@ -484,6 +491,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
           sendActivationEmail: b.sendActivationEmail ?? false,
           contractId,
         },
+        reservadoEn,
         actor,
       );
     } catch (err) {
