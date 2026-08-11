@@ -18,10 +18,10 @@ import type { GigaredConfigRepository } from '@domain/ports/GigaredConfigReposit
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { ListAccountsFilter } from '@domain/ports/GigaredPort';
 import type { ClientTvCancelStatusRepository } from '@domain/ports/ClientTvCancelStatusRepository';
-import type { ClientTvRegisterStatusRepository } from '@domain/ports/ClientTvRegisterStatusRepository';
+import type { ClientTvRegisterStatusRepository, TvRegisterStatusRow } from '@domain/ports/ClientTvRegisterStatusRepository';
 import type { CancelTvJobRunner } from '@infrastructure/scheduling/CancelTvJobRunner';
 import type { RegisterTvJobRunner } from '@infrastructure/scheduling/RegisterTvJobRunner';
-import { isTvRegisterJobActive } from '@domain/gigared/tvRegisterJob';
+import { isTvRegisterJobActive, TV_REGISTER_JOB_TTL_MS } from '@domain/gigared/tvRegisterJob';
 import { deterministicTvPassword, isValidGigaredPassword } from '@infrastructure/security/gigaredPassword';
 import type { CustomerLookup, ContractLookup } from '@application/use-cases/gigared/lookups';
 import { GIGARED_FLAG } from '@application/use-cases/gigared/GetGigaredConfig';
@@ -99,6 +99,46 @@ export function createGigaredReadyMiddleware(
 function sendUnhandled(res: Response, err: unknown, route: string): void {
   console.error(`[gigared] ${route}: unhandled`, err);
   res.status(500).json({ error: 'Ha ocurrido un error inesperado en el servidor.', code: 'INTERNAL_ERROR' });
+}
+
+/**
+ * Cierra la reserva del alta de TV escribiendo su estado terminal. BEST-EFFORT: no lanza NUNCA.
+ *
+ * POR QUÉ no lanza. Se invoca desde el `finally` del POST de alta, y una excepción ahí REEMPLAZA a
+ * la que venía propagando (o rompe una respuesta ya enviada). El resultado del alta manda sobre el
+ * resultado del sellado: un blip de NUESTRA base no puede convertir un alta EXITOSA en un error
+ * para el operador —con la cuenta ya creada en el partner— porque el operador reintentaría y
+ * quemaría al cliente. Ese bug ya existió del lado del runner con el `done` adentro del try.
+ *
+ * El costo de tragarse el fallo es que la reserva queda colgada hasta que el watchdog la expire
+ * (15 min). Es el lado seguro: bloquear de más es operativo y reversible, disparar un segundo
+ * `register` es permanente.
+ *
+ * NO reusa `RegisterTvJobRunner.persistirDesenlace` a propósito: aquél resuelve un problema que acá
+ * no existe (heartbeat, generaciones zombi, sello movido por un latido en vuelo). Con el alta
+ * síncrona el sello NUNCA se mueve —no hay latidos—, así que el token sigue siendo el de la
+ * reserva y un `false` sólo puede significar que otra generación tomó el turno: ahí no se escribe.
+ *
+ * @param token el sello con el que se reservó. `tryReserve` deja `heartbeatAt === startedAt`, así
+ *        que el fence token vigente es exactamente ese valor.
+ */
+async function liberarReserva(
+  repo: ClientTvRegisterStatusRepository,
+  customerId: string,
+  token: Date,
+  desenlace: TvRegisterStatusRow | null,
+): Promise<void> {
+  // `null` = no se llegó a calcular un desenlace (no debería pasar: el try/catch cubre los dos
+  // caminos). Se deja la reserva al watchdog antes que escribir un estado inventado.
+  if (!desenlace) return;
+  try {
+    const aplicado = await repo.compareAndSet(customerId, token, desenlace);
+    if (!aplicado) {
+      console.warn('[gigared] register: el desenlace no se pudo sellar, la reserva es de otra generacion', { customerId, status: desenlace.status });
+    }
+  } catch (err) {
+    console.error('[gigared] register: no se pudo sellar el desenlace del alta', { customerId, status: desenlace.status, err });
+  }
 }
 
 /** Map a Gigared/domain error to its FROZEN wire-contract HTTP status + body. Returns false if unhandled. */
@@ -416,6 +456,7 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   // Contrato de cable:
   //   201 { account, partnerCreated, localReconciled, credentialsPersisted, recovered }
   //   207 idem, cuando el reconcile LOCAL falló (`localReconciled === 'failed'`)
+  //   409 { queued:false, reason:'already-running' } — ya hay un alta VIVA para este cliente
   //   400 VALIDATION_ERROR / 404 CLIENT|CONTRACT_NOT_FOUND / 422 GR_CONTRACT_ID_REQUIRED
   //       — chequeos locales, TODOS antes de tocar al partner
   //   4xx/5xx de dominio con sus campos propios (poisonedCount, cic, internalId,
@@ -483,31 +524,74 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
         throw new GrContractIdRequiredError(contractId);
       }
 
+      // GUARD ANTI-DOBLE-DISPARO. Es una RESERVA ATÓMICA, no un `getStatus` + escritura: entre esas
+      // dos llamadas hay un yield del event loop y ahí entra el segundo request. Con UNA sola
+      // réplica, un doble click en el botón produce DOS `register` REALES contra el partner ⇒ dos
+      // activaciones pendientes ⇒ cliente quemado PARA SIEMPRE (Calabria, Abello, Aceste). El port
+      // lo resuelve con un `UPDATE … WHERE` condicional del que se ramifica por el count.
+      //
+      // Que el alta haya vuelto a ser síncrona NO cierra esa ventana: al contrario, ahora el request
+      // se queda esperando al partner MINUTOS, y toda esa espera es ventana.
+      //
+      // La condición incluye el WATCHDOG: un job cuyo proceso murió deja de bloquear al cumplirse el
+      // TTL (15 min, ~2.4× el peor alta medida). Sin eso, un deploy en el momento equivocado deja al
+      // cliente sin poder operar hasta que alguien edite la DB a mano — el agujero abierto de
+      // CancelTvJobRunner, que este camino no hereda.
+      const reservadoEn = new Date();
+      const reservado = await deps.registerStatus.tryReserve(customerId, reservadoEn, TV_REGISTER_JOB_TTL_MS);
+      if (!reservado) {
+        res.status(409).json({ queued: false, reason: 'already-running' });
+        return;
+      }
+
       // #5 BE — thread actor from req.user for the TV activation event recording.
       const actor = req.user ? { actorId: req.user.id, actorName: req.user.username } : { actorId: null, actorName: '' };
-      // El alta se ESPERA. El resultado viaja en ESTA respuesta: es la diferencia entre que el
-      // operador vea lo que pasó y que vea un OK sobre algo que todavía no pasó.
-      //
-      // El estado del job (`deps.registerStatus`) NO se toca acá a propósito: escribir un
-      // 'pending' que nadie va a cerrar dejaría al cliente con un job fantasma bloqueando el
-      // polling de la W5. Mientras el alta sea síncrona, el GET .../register/status responde
-      // 'idle', que es la verdad.
-      const result = await deps.registerAccount.execute(customerId, {
-        firstName: b.firstName,
-        lastName: b.lastName,
-        email: b.email,
-        sendActivationEmail: b.sendActivationEmail ?? false,
-        contractId,
-        actorId:   actor.actorId,
-        actorName: actor.actorName,
-      });
-      // B3 (D3) — 207 = parcial: el ÚNICO gatillo es el reconcile local (localReconciled==='failed').
-      // F5(c) — la disyunción con `!result.partnerCreated` era muerta: partnerCreated es true por
-      // construcción (si el write al partner falla de verdad, execute lanza y nunca construye el
-      // result → no se llega a esta línea), así que `!partnerCreated` es constante false. `recovered`
-      // es observability-only, NO gatea el status (espejo transfer/link/addService).
-      const partial = result.localReconciled === 'failed';
-      res.status(partial ? 207 : 201).json(result);
+
+      // El desenlace que hay que sellar. Se calcula en el try/catch y se escribe en el `finally`,
+      // porque la reserva tiene que liberarse SIEMPRE: si un alta fallida la dejara colgada, el
+      // operador —que reintenta justo después de un fallo— comería 409 durante los 15 min del TTL.
+      // O sea: el guard que existe para protegerlo lo dejaría sin poder reintentar.
+      let desenlace: TvRegisterStatusRow | null = null;
+      try {
+        // El alta se ESPERA. El resultado viaja en ESTA respuesta: es la diferencia entre que el
+        // operador vea lo que pasó y que vea un OK sobre algo que todavía no pasó.
+        const result = await deps.registerAccount.execute(customerId, {
+          firstName: b.firstName,
+          lastName: b.lastName,
+          email: b.email,
+          sendActivationEmail: b.sendActivationEmail ?? false,
+          contractId,
+          actorId:   actor.actorId,
+          actorName: actor.actorName,
+        });
+        desenlace = { status: 'done', result, startedAt: reservadoEn, heartbeatAt: new Date() };
+        // B3 (D3) — 207 = parcial: el ÚNICO gatillo es el reconcile local (localReconciled==='failed').
+        // F5(c) — la disyunción con `!result.partnerCreated` era muerta: partnerCreated es true por
+        // construcción (si el write al partner falla de verdad, execute lanza y nunca construye el
+        // result → no se llega a esta línea), así que `!partnerCreated` es constante false. `recovered`
+        // es observability-only, NO gatea el status (espejo transfer/link/addService).
+        //
+        // Se responde ACÁ, antes del sellado: así el resultado del alta no puede quedar rehén de si
+        // NUESTRA base estaba disponible para anotar el desenlace.
+        const partial = result.localReconciled === 'failed';
+        res.status(partial ? 207 : 201).json(result);
+      } catch (err) {
+        // Mismo shape que persiste el runner: el GET .../register/status lo publica sin traducirlo.
+        // El mensaje del error de dominio va TAL CUAL (es lo único que el operador ve) y el `code`
+        // viaja aparte, que es con lo que el FE ramifica.
+        const error = err instanceof Error ? err.message : String(err);
+        const rawCode = (err as { code?: unknown } | null)?.code;
+        const code = typeof rawCode === 'string' ? rawCode : undefined;
+        desenlace = {
+          status: 'failed',
+          result: code !== undefined ? { error, code } : { error },
+          startedAt: reservadoEn,
+          heartbeatAt: new Date(),
+        };
+        throw err;
+      } finally {
+        await liberarReserva(deps.registerStatus, customerId, reservadoEn, desenlace);
+      }
     } catch (err) {
       if (!sendGigaredError(res, err)) sendUnhandled(res, err, 'register');
     }
@@ -516,9 +600,11 @@ export function createGigaredRouter(deps: GigaredRouterDeps): Router {
   // gigared-alta-asincrona (W2.4) — estado del alta para el polling del FE. MISMO permiso que el
   // alta (tv.register): quien puede disparar el job puede ver cómo terminó.
   //
-  // OJO: mientras el POST sea SÍNCRONO nadie encola desde HTTP, así que este endpoint responde
-  // 'idle' en producción. No es código muerto ni un bug: queda en pie —con su contrato y sus
-  // tests— para que la W5 encienda el alta asíncrona del lado del FE sin reescribir el BE.
+  // OJO: mientras el POST sea SÍNCRONO, este endpoint nunca va a mostrar un alta EN CURSO desde la
+  // perspectiva del FE — el POST reserva y sella el desenlace dentro del mismo request, así que lo
+  // que se lee acá es 'idle' (nunca se dio un alta) o el terminal del último intento. No es código
+  // muerto ni un bug: queda en pie —con su contrato y sus tests— para que la W5 encienda el alta
+  // asíncrona del lado del FE sin reescribir el BE.
   //
   //   200 { status, message, startedAt?, result? }
   //   404 CLIENT_NOT_FOUND
