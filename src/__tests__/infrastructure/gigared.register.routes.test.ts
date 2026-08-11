@@ -100,6 +100,18 @@ interface Opts {
   port?: GigaredPort;
   csRepo?: InMemoryContractServiceRepository;
   registerStatus?: InMemoryClientTvRegisterStatusRepository;
+  /**
+   * TTL de la reserva y período del latido. En producción son las constantes del dominio; acá se
+   * encogen para poder ejercitar "el alta sigue VIVA más allá del TTL" sin esperar 15 minutos.
+   */
+  ttlMs?: number;
+  heartbeatMs?: number;
+  /**
+   * Selector de CIC del pool. El default `() => 0` hace que TODAS las altas converjan en el MISMO
+   * CIC; en producción es `Math.random`, o sea CICs DISTINTOS. Los tests de concurrencia necesitan
+   * el comportamiento de producción o el fixture ablanda el daño que dicen medir.
+   */
+  pick?: (n: number) => number;
   customerExists?: boolean;
   contractExists?: boolean;
   contractOwner?: string;
@@ -140,7 +152,8 @@ async function buildApp(opts: Opts = {}) {
 
   const cancelTv = new CancelTv(port, csRepo, catalog, contractLookup, customerLookup, tvCancellation);
   const registerAccount = new RegisterGigaredAccount(
-    port, customerLookup, contractLookup, csRepo, catalog, tvCancellation, undefined, eventRepo, () => 0,
+    port, customerLookup, contractLookup, csRepo, catalog, tvCancellation, undefined, eventRepo,
+    opts.pick ?? (() => 0),
   );
   // El runner sigue construido y cableado a propósito: la infraestructura del alta asíncrona no se
   // borró, sólo dejó de gobernar el contrato del POST. La W5 la vuelve a encender desde el FE.
@@ -175,6 +188,8 @@ async function buildApp(opts: Opts = {}) {
     cancelStatus,
     registerTvRunner,
     registerStatus,
+    ...(opts.ttlMs !== undefined ? { registerJobTtlMs: opts.ttlMs } : {}),
+    ...(opts.heartbeatMs !== undefined ? { registerHeartbeatMs: opts.heartbeatMs } : {}),
     customerLookup,
     contractLookup,
     listActivationHistory: new ListTvActivationHistory(eventRepo),
@@ -291,38 +306,56 @@ describe('POST /customers/:id/register — 201/207 con el resultado del alta', (
 // Validaciones LOCALES — siguen resolviéndose sin tocar al partner
 // ---------------------------------------------------------------------------
 
+/**
+ * ⚠️ CADA test de este describe afirma DOS cosas, y la segunda es la que se perdió una vez:
+ * el status correcto Y que NO quedó una reserva escrita (`getStatus(...) === null`).
+ *
+ * Sin esa segunda aserción, mover el bloque de `tryReserve` ARRIBA de las validaciones locales es
+ * un mutante que la suite entera deja pasar (verificado: 282 tests en verde con el orden invertido).
+ * Y ese orden es un bug REAL: el 400/404/422 se lanza ANTES del `try`, así que el `finally` que
+ * sella el desenlace NO CORRE, la fila queda en `pending` y el cliente come 409 durante los 15
+ * minutos del TTL — por haber mandado un contractId mal escrito.
+ */
 describe('POST /register — las validaciones locales corren ANTES de tocar al partner', () => {
   it('sin contractId → 400 VALIDATION_ERROR, Gigared intacto', async () => {
-    const { app, port } = await buildApp();
+    const { app, port, registerStatus } = await buildApp();
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`)
       .send({ firstName: 'J', lastName: 'P', email: 'e@x.com' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
   it('contractId vacío → 400 VALIDATION_ERROR', async () => {
-    const { app, port } = await buildApp();
+    const { app, port, registerStatus } = await buildApp();
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`)
       .send({ ...cuerpoValido, contractId: '' });
     expect(res.status).toBe(400);
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
   it('cliente inexistente → 404 CLIENT_NOT_FOUND, Gigared intacto', async () => {
-    const { app, port } = await buildApp({ customerExists: false });
+    const { app, port, registerStatus } = await buildApp({ customerExists: false });
     const res = await request(app).post('/api/gigared/customers/ghost/register').send(cuerpoValido);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('CLIENT_NOT_FOUND');
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus('ghost')).toBeNull();
   });
 
   it('contrato inexistente → 404 CONTRACT_NOT_FOUND, Gigared intacto', async () => {
-    const { app, port } = await buildApp({ contractExists: false });
+    const { app, port, registerStatus } = await buildApp({ contractExists: false });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
   /**
@@ -331,12 +364,14 @@ describe('POST /register — las validaciones locales corren ANTES de tocar al p
    * credenciales del cliente equivocado. Se valida en la ruta, ANTES de cualquier llamada.
    */
   it('contrato de OTRO cliente → 404 CONTRACT_NOT_FOUND (ownership), Gigared intacto', async () => {
-    const { app, port } = await buildApp({ contractOwner: 'cust-B' });
+    const { app, port, registerStatus } = await buildApp({ contractOwner: 'cust-B' });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`)
       .send({ ...cuerpoValido, contractId: 'C-de-B' });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('CONTRACT_NOT_FOUND');
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
   /**
@@ -345,26 +380,32 @@ describe('POST /register — las validaciones locales corren ANTES de tocar al p
    * resuelven en la ruta para que el partner NUNCA reciba un alta que ya se sabía inválida.
    */
   it('contrato sin grContratoId → 422 GR_CONTRACT_ID_REQUIRED, Gigared intacto', async () => {
-    const { app, port } = await buildApp({ grContratoId: null });
+    const { app, port, registerStatus } = await buildApp({ grContratoId: null });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('GR_CONTRACT_ID_REQUIRED');
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
   it('grContratoId con caracteres fuera de CUA → 422 GR_CONTRACT_ID_REQUIRED, Gigared intacto', async () => {
-    const { app, port } = await buildApp({ grContratoId: 'A-B/C' });
+    const { app, port, registerStatus } = await buildApp({ grContratoId: 'A-B/C' });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('GR_CONTRACT_ID_REQUIRED');
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 
   it('sin permiso tv.register → 403 (el guard va antes que todo)', async () => {
-    const { app, port } = await buildApp({ perms: { register: deny } });
+    const { app, port, registerStatus } = await buildApp({ perms: { register: deny } });
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(403);
     expect(llamadasAlPartner(port)).toBe(0);
+    // Ninguna validación puede dejar una reserva escrita: el 4xx sale ANTES del tryReserve.
+    expect(await registerStatus.getStatus(CUST)).toBeNull();
   });
 });
 
@@ -383,15 +424,48 @@ describe('POST /register — las validaciones locales corren ANTES de tocar al p
  * quién la libera: ya no el runner desde el background, sino la propia ruta al terminar.
  */
 describe('POST /register — guard anti-doble-disparo (reserva atómica)', () => {
-  it('ya hay un alta running → 409 { queued:false, reason:"already-running" }, Gigared intacto', async () => {
+  it('ya hay un alta running → 409 con code TV_REGISTER_IN_PROGRESS, Gigared intacto', async () => {
     const registerStatus = new InMemoryClientTvRegisterStatusRepository();
     registerStatus.seedStatus(CUST, { status: 'running', startedAt: new Date(), heartbeatAt: new Date() });
     const { app, port } = await buildApp({ registerStatus });
 
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(409);
-    expect(res.body).toEqual({ queued: false, reason: 'already-running' });
+    expect(res.body.code).toBe('TV_REGISTER_IN_PROGRESS');
+    expect(res.body.reason).toBe('already-running');
     expect(llamadasAlPartner(port)).toBe(0);
+  });
+
+  /**
+   * HONESTIDAD DEL COPY — el 409 no puede decirle al operador que reintente.
+   *
+   * El FE (`GigaredPanel.errorCode` → `registerErrorView`) lee `data.code` y `data.detail`. Con un
+   * body sin ninguno de los dos, `code` es null, `detail` es null y `registerErrorView` cae a su
+   * fallback genérico: **"No se pudo registrar la cuenta. Reintentá."** — o sea, el guard que
+   * existe para decir "NO toques el botón" produce en pantalla la instrucción contraria, y
+   * martillar el botón es exactamente como se queman los clientes.
+   *
+   * Con `code` + `detail`, la rama de passthrough de `registerErrorView` muestra NUESTRO texto
+   * ("No se pudo registrar: …"), con `action: null` (sin botón de reintentar). Ese es el contrato
+   * que este test pinea: `detail` presente y sin la palabra "reintent" en ninguna forma.
+   */
+  it('el 409 viaja con { error, code, detail } y su copy NO invita a reintentar', async () => {
+    const registerStatus = new InMemoryClientTvRegisterStatusRepository();
+    registerStatus.seedStatus(CUST, { status: 'running', startedAt: new Date(), heartbeatAt: new Date() });
+    const { app } = await buildApp({ registerStatus });
+
+    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    expect(res.status).toBe(409);
+    // PRESENCIA: sin estos dos campos el FE cae al genérico que dice "Reintentá".
+    expect(typeof res.body.error).toBe('string');
+    expect(typeof res.body.detail).toBe('string');
+    expect(res.body.detail.length).toBeGreaterThan(0);
+    // Y el copy: ni "Reintentá", ni "reintentar", ni "Reintenta".
+    for (const texto of [res.body.error, res.body.detail]) {
+      expect(texto.toLowerCase()).not.toContain('reintent');
+    }
+    // El texto tiene que decir QUÉ está pasando, no un genérico.
+    expect(res.body.detail.toLowerCase()).toContain('curso');
   });
 
   it('ya hay un alta pending → 409 (no dispara una segunda)', async () => {
@@ -505,6 +579,18 @@ describe('POST /register — la reserva es ATÓMICA (concurrencia real)', () => 
    * request llegue a pedirla. El estado ya sería terminal, el segundo POST reservaría legítimamente
    * y el test mediría cualquier cosa menos la concurrencia.
    */
+  /**
+   * ⚠️ En producción el selector del pool es `Math.random`: dos altas concurrentes agarran CICs
+   * DISTINTOS y las dos registran de verdad. El default `() => 0` de `buildApp` las hace converger
+   * en el MISMO CIC, y ahí el perdedor puede tomar el camino `recovered` en vez de registrar — el
+   * fixture ABLANDA el daño y deja inerte la aserción que dice medirlo (`register` llamado una vez
+   * pasa igual con el guard roto). Este pick reparte índices distintos, determinístico.
+   */
+  function pickRotativo(): (n: number) => number {
+    let i = 0;
+    return (n: number) => (n <= 0 ? 0 : i++ % n);
+  }
+
   function escenarioConcurrente() {
     const register = jest.fn(async () => {});
     let abrir!: () => void;
@@ -553,7 +639,7 @@ describe('POST /register — la reserva es ATÓMICA (concurrencia real)', () => 
     const { port, register, abrir } = escenarioConcurrente();
     // El repo con latencia es lo que permite que los handlers se INTERCALEN (ver la clase).
     const registerStatus = new RepoConLatenciaDeRed(2);
-    const { app } = await buildApp({ port, registerStatus });
+    const { app } = await buildApp({ port, registerStatus, pick: pickRotativo() });
 
     const disparo = () => request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     const enVuelo = Promise.all([disparo(), disparo()]);
@@ -574,7 +660,7 @@ describe('POST /register — la reserva es ATÓMICA (concurrencia real)', () => 
   it('cinco POST concurrentes → exactamente un 201 y cuatro 409, y UN solo register', async () => {
     const { port, register, abrir } = escenarioConcurrente();
     const registerStatus = new RepoConLatenciaDeRed(5);
-    const { app } = await buildApp({ port, registerStatus });
+    const { app } = await buildApp({ port, registerStatus, pick: pickRotativo() });
 
     const enVuelo = Promise.all(
       Array.from({ length: 5 }, () =>
@@ -653,6 +739,141 @@ describe('POST /register — la reserva se libera al terminar (sellado en el fin
     const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
     expect(res.status).toBe(201);
     expect(res.body.account).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// El LEASE se renueva mientras el alta corre — un alta VIVA no expira
+// ---------------------------------------------------------------------------
+
+/**
+ * Sin renovación, la reserva sella `heartbeatAt = startedAt` UNA sola vez y el watchdog empieza a
+ * contar desde ahí. Pasado el TTL, un segundo POST entra y produce el SEGUNDO `register` real: el
+ * guard se evapora justo en las altas LENTAS, que son exactamente las que el operador reintenta.
+ *
+ * No es teórico: `tvRegisterJob.ts` lo dice por escrito — 17 llamadas × 30 s de timeout son 510 s
+ * de piso contra un TTL de 900 s, y arriba de eso está el backoff de los 429 del partner. Ese
+ * archivo rechaza explícitamente usar `startedAt` como lease "porque no puede distinguir 'el
+ * proceso murió' de 'el job está tardando'".
+ *
+ * Acá el TTL y el período del latido se encogen (100 ms / 15 ms) para ejercitar la MISMA regla sin
+ * esperar quince minutos: el alta se queda colgada contra el partner MUCHO más que el TTL.
+ */
+describe('POST /register — el lease se renueva mientras el alta está en curso', () => {
+  /**
+   * Un alta que se queda colgada contra el partner DESPUÉS de haber registrado, hasta que se la
+   * suelta. Es el alta LENTA que motiva todo esto: ya tocó a Gigared y sigue en curso.
+   *
+   * La puerta cuelga sólo la PRIMERA llamada a `activate`. No es un detalle del fixture: si colgara
+   * TODAS, un segundo alta admitida por error también quedaría colgada y el test moriría por
+   * timeout de jest en vez de reportar el daño. Así, cuando el guard se rompe, el alta #2 corre
+   * ENTERA y el fallo se lee donde tiene que leerse: dos `register` REALES contra el partner.
+   */
+  function altaColgada() {
+    const register = jest.fn(async () => {});
+    let soltar!: () => void;
+    const colgado = new Promise<void>(r => { soltar = r; });
+    let primerActivate = true;
+    let cicEstampado: string | null = null;
+    const libre = (cic: string) =>
+      fakeAccount({ cic, gigaredId: null, email: null, firstName: null, lastName: null, registrationDate: null, internalId: null, clientId: null });
+
+    const port = fakePort({
+      register,
+      activate: jest.fn(async () => {
+        if (primerActivate) { primerActivate = false; await colgado; }
+      }),
+      setInternalId: jest.fn(async (cic: string) => { cicEstampado = cic; }),
+      getAccountByInternalId: jest.fn(async () => {
+        if (cicEstampado === null) throw new GigaredNotFoundError();
+        return fakeAccount({ cic: cicEstampado, internalId: CUST, clientId: CUST });
+      }),
+      listAccounts: jest.fn(async (filter?: { status?: string; email?: string }) => {
+        if (filter?.email) return [];
+        return [libre('0000009001'), libre('0000009002')];
+      }),
+    });
+    return { port, register, soltar };
+  }
+
+  const dormir = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+  /**
+   * El `finally` NO es decoración: si una aserción falla con el alta colgada contra el partner, el
+   * request queda vivo para siempre y la corrida entera de jest SE CUELGA en vez de reportar el
+   * fallo. Un test que se cuelga no te dice qué se rompió. (Nos pasó.)
+   */
+  async function conAltaEnCurso(
+    ttlMs: number,
+    heartbeatMs: number,
+    pick: ((n: number) => number) | undefined,
+    cuerpo: (ctx: { app: express.Express; registerStatus: InMemoryClientTvRegisterStatusRepository; register: jest.Mock }) => Promise<void>,
+  ): Promise<{ register: jest.Mock; primera: Promise<request.Response> }> {
+    const { port, register, soltar } = altaColgada();
+    const { app, registerStatus } = await buildApp({ port, ttlMs, heartbeatMs, ...(pick ? { pick } : {}) });
+    // ⚠️ El `.then(r => r)` NO es ruido: el `Test` de supertest es LAZY — no despacha el request
+    // hasta que alguien se suscribe. Sin esto el "alta en curso" no existe, el estado queda en
+    // `idle` y el test mide un mundo donde nunca se disparó nada.
+    const primera = request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido).then(r => r);
+    try {
+      // Muy por encima del TTL: sin latido, la reserva ya estaría "muerta".
+      await dormir(ttlMs * 4);
+      await cuerpo({ app, registerStatus, register: register as jest.Mock });
+    } finally {
+      soltar();
+    }
+    return { register: register as jest.Mock, primera };
+  }
+
+  it('un alta VIVA más allá del TTL sigue bloqueando el segundo POST (y no hay segundo register)', async () => {
+    const { register, primera } = await conAltaEnCurso(100, 15, (n: number) => (n <= 0 ? 0 : 1), async ({ app, registerStatus, register: reg }) => {
+      // PRESENCIA — y a propósito NO se mide con el heartbeat, que es lo que este test juzga: se
+      // mide con hechos independientes. Hay una reserva escrita y el alta #1 YA tocó al partner
+      // (registró) pero todavía no terminó. Sin esto, el 409 de abajo podría venir de cualquier
+      // otro lado, por ejemplo de un alta que ya terminó y dejó basura.
+      expect(await registerStatus.getStatus(CUST)).not.toBeNull();
+      expect(reg).toHaveBeenCalledTimes(1);
+
+      // EL DAÑO. El alta #1 sigue viva, así que el segundo POST NO puede entrar. Sin renovación del
+      // lease, a esta altura (4× el TTL) el watchdog ya la dio por muerta y devuelve 201.
+      const segunda = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+      expect(segunda.status).toBe(409);
+
+      // Y el MECANISMO que lo sostiene: el sello se movió respecto del inicial.
+      const fila = await registerStatus.getStatus(CUST);
+      expect(fila?.status).toBe('running');
+      expect(fila!.heartbeatAt!.getTime()).toBeGreaterThan(fila!.startedAt!.getTime());
+    });
+
+    await primera;
+    // Un solo `register` REAL contra el partner: el daño permanente se mide en llamadas, no en
+    // HTTP codes.
+    expect(register).toHaveBeenCalledTimes(1);
+  });
+
+  it('el GET de estado NO dice "expired" mientras el alta sigue corriendo', async () => {
+    const { primera } = await conAltaEnCurso(100, 15, undefined, async ({ app }) => {
+      // Decirle 'expired' ("El alta se interrumpió… Podés reintentarla") a un alta que está VIVA es
+      // el sistema PIDIÉNDOLE al operador que dispare el segundo register.
+      const st = await request(app).get(`/api/gigared/customers/${CUST}/register/status`);
+      expect(st.body.status).toBe('running');
+      expect(st.body.message).not.toMatch(/interrump/i);
+    });
+    await primera;
+  });
+
+  it('al terminar, el lease deja de latir (no quedan timers escribiendo sobre una fila terminal)', async () => {
+    const { app, registerStatus } = await buildApp({ ttlMs: 100, heartbeatMs: 15 });
+
+    const res = await request(app).post(`/api/gigared/customers/${CUST}/register`).send(cuerpoValido);
+    expect(res.status).toBe(201);
+
+    const despuesDelAlta = await registerStatus.getStatus(CUST);
+    await dormir(120); // varios períodos de latido
+    const masTarde = await registerStatus.getStatus(CUST);
+
+    expect(masTarde?.status).toBe('done');
+    expect(masTarde?.heartbeatAt?.getTime()).toBe(despuesDelAlta?.heartbeatAt?.getTime());
   });
 });
 

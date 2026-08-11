@@ -2920,10 +2920,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // #10/#11 — async TV-cancel deps
     cancelTvRunner:     gigaredCancelTvRunner,
     cancelStatus:       gigaredTvCancelStatus,
-    // gigared-alta-asincrona (W2) — async TV-register deps. Hoy el POST NO las usa (el alta volvió
-    // a ser síncrona porque el FE no está adaptado al polling), pero el `registerStatus` sostiene
-    // el GET .../register/status y las dos quedan cableadas para que la W5 encienda el alta
-    // asíncrona sin rearmar el composition root. Pinneado por gigared-composition.test.ts.
+    // gigared-alta-asincrona (W2) — deps del estado del alta. El `registerStatus` lo usa la ruta
+    // SÍNCRONA para la reserva atómica (guard anti-doble-disparo), el lease que la mantiene viva y
+    // el sellado del desenlace, además del GET .../register/status. El `registerTvRunner` NO lo
+    // dispara nadie hoy: queda cableado para que la W5 encienda el alta asíncrona sin rearmar el
+    // composition root. Pinneado por gigared-composition.test.ts.
     registerTvRunner:   gigaredRegisterTvRunner,
     registerStatus:     gigaredTvRegisterStatus,
     customerLookup:     gigaredCustomerLookup,
