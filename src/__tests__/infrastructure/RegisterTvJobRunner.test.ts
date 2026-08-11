@@ -458,6 +458,24 @@ const resultOk = () => ({
 /** Deja correr el event loop (el runner arranca con `void`, no siempre se puede awaitear). */
 const respirar = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
+/**
+ * Espera a que una condición se cumpla, con deadline generoso.
+ *
+ * NUNCA dormir un tiempo fijo y asertar sobre cuántos latidos "deberían" haber pasado: con la suite
+ * completa corriendo en paralelo el planificador estira los timers y el test cae por CONTENCIÓN, no
+ * por regresión. Pasó exactamente eso con un `respirar(150)` y un `heartbeatMs: 10`: aislado daba 15
+ * latidos, en la suite completa daba 3.
+ */
+async function esperarHasta<T>(cond: () => Promise<T | null | undefined | false>, msMax = 10_000): Promise<T> {
+  const limite = Date.now() + msMax;
+  for (;;) {
+    const v = await cond();
+    if (v) return v;
+    if (Date.now() > limite) throw new Error('la condición nunca se cumplió');
+    await respirar(5);
+  }
+}
+
 describe('C2 — heartbeat: al job VIVO no se le roba el turno', () => {
   /**
    * EL BUG: `startedAt` se sellaba UNA vez y nunca se renovaba, así que el watchdog no podía
@@ -479,20 +497,28 @@ describe('C2 — heartbeat: al job VIVO no se le roba el turno', () => {
     expect(await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS)).toBe(true);
     const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
 
-    await respirar(150); // ~15 latidos con el job todavía adentro del use case
+    // El claim del `running` sella por primera vez; después esperamos a que ese sello CAMBIE, que
+    // es la prueba de que hubo un latido de verdad (y no depende de cuántos ms tarde en llegar).
+    const claim = await esperarHasta(async () => (await registerStatus.getStatus(CUSTOMER))?.heartbeatAt);
+    const row = await esperarHasta(async () => {
+      const r = await registerStatus.getStatus(CUSTOMER);
+      return r && r.heartbeatAt!.getTime() > claim.getTime() ? r : null;
+    });
 
-    const row = await registerStatus.getStatus(CUSTOMER);
-    expect(row?.status).toBe('running');
-    // PRESENCIA: el sello se movió. Sin esto, la aserción de abajo sería verde también en un mundo
-    // donde el heartbeat no existe pero el reloj no llegó a correr.
-    expect(row!.heartbeatAt!.getTime()).toBeGreaterThan(reservadoEn.getTime());
+    expect(row.status).toBe('running');
+    // El job está VIVO desde `reservadoEn` pero latió hace mucho menos. Toda la aritmética sale de
+    // UN solo `ahora`, así que el test no mide el reloj: mide la diferencia entre los dos sellos.
+    const ahora = new Date();
+    const edad = ahora.getTime() - row.startedAt!.getTime();
+    const frescura = ahora.getTime() - row.heartbeatAt!.getTime();
+    expect(frescura).toBeLessThan(edad); // PRESENCIA: el lease se renovó
 
-    // El job lleva >100 ms VIVO. Con un TTL de 50 ms, medido contra el heartbeat sigue activo…
-    expect(isTvRegisterJobActive(row, new Date(), 50)).toBe(true);
-    // …y medido contra startedAt (lo que hacía el código viejo) estaría MUERTO. Ésta es la
-    // diferencia exacta entre el bug y el arreglo.
-    expect(Date.now() - row!.startedAt!.getTime()).toBeGreaterThan(50);
-    expect(isTvRegisterJobActive({ ...row!, heartbeatAt: undefined }, new Date(), 50)).toBe(false);
+    // Con un TTL entre ambos: medido contra el heartbeat el job sigue ACTIVO…
+    const ttl = frescura + Math.ceil((edad - frescura) / 2);
+    expect(isTvRegisterJobActive(row, ahora, ttl)).toBe(true);
+    // …y medido contra startedAt (lo que hacía el código viejo) estaría MUERTO y el watchdog le
+    // robaría el turno a un job vivo. Ésta es la diferencia exacta entre el bug y el arreglo.
+    expect(isTvRegisterJobActive({ ...row, heartbeatAt: undefined }, ahora, ttl)).toBe(false);
 
     liberar();
     await corriendo;
@@ -529,12 +555,16 @@ describe('C2 — heartbeat: al job VIVO no se le roba el turno', () => {
     const reservadoEn = new Date();
     await registerStatus.tryReserve(CUSTOMER, reservadoEn, TV_REGISTER_JOB_TTL_MS);
     const corriendo = runner.run(CUSTOMER, input(), reservadoEn);
-    await respirar(150);
 
-    const row = await registerStatus.getStatus(CUSTOMER);
-    expect(escriturasRunning).toBeGreaterThan(3); // PRESENCIA: hubo latidos DESPUÉS de los blips
-    expect(row!.heartbeatAt!.getTime()).toBeGreaterThan(reservadoEn.getTime());
-    expect(isTvRegisterJobActive(row, new Date(), 50)).toBe(true);
+    // Se ESPERA al 4º intento de escritura, no a un puñado de milisegundos: el que dice si el
+    // heartbeat sobrevivió a los blips es el CONTADOR, no el reloj.
+    const row = await esperarHasta(async () =>
+      escriturasRunning > 3 ? await registerStatus.getStatus(CUSTOMER) : null);
+
+    // Los dos blips no dejaron sello, así que un heartbeat que sigue vivo es lo único que puede
+    // haber movido este timestamp.
+    expect(row.heartbeatAt!.getTime()).toBeGreaterThan(reservadoEn.getTime());
+    expect(row.status).toBe('running');
 
     liberar();
     await corriendo;
@@ -545,7 +575,9 @@ describe('C2 — heartbeat: al job VIVO no se le roba el turno', () => {
     await correr();
 
     const alTerminar = (await registerStatus.getStatus(CUSTOMER))!.heartbeatAt!.getTime();
-    await respirar(60); // 12 latidos de margen si el timer siguiera vivo
+    // Acá SÍ va una espera fija: la aserción es que NADA cambia, y la contención sólo puede hacer
+    // este test más permisivo, nunca romperlo. 200 ms son 40 latidos de margen.
+    await respirar(200);
     expect((await registerStatus.getStatus(CUSTOMER))!.heartbeatAt!.getTime()).toBe(alTerminar);
   });
 });
