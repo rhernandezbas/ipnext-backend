@@ -22,6 +22,37 @@ const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_MAX_RATE_LIMIT_RETRIES = 4;
 const DEFAULT_BACKOFF_MS = 400;
 
+/**
+ * W4 — THROTTLE PREVENTIVO. Números MEDIDOS en vivo el 2026-08-10 contra
+ * `partners.gigaredsa.com.ar`: 15 llamadas seguidas dieron `200×10` y después `429×5` (corta
+ * a las ~10 por ventana), se recupera dentro de los 60 s, y NO manda `Retry-After` ni
+ * `X-RateLimit-*`. No hay límite que negociar: hay que respetarlo desde acá.
+ *
+ * POR QUÉ PREVENTIVO Y NO REACTIVO. Un alta hace hasta 17 llamadas al partner (probe + pool
+ * + MAX_CANDIDATOS × 5). Si el `activate` se come un 429 DESPUÉS de que el `register` fue
+ * aceptado, del otro lado queda una activación pendiente y ese cliente no se puede dar de
+ * alta NUNCA MÁS. Un backoff reactivo, por definición, primero cobra el 429 — o sea juega
+ * con el daño permanente. Espaciando por debajo del límite, el 429 no ocurre.
+ *
+ * El costo (~114 s de espaciado por alta) ya no es una restricción: el alta es asíncrona
+ * (job + polling), así que no hay `requestTimeout` de 300 s cortando el socket a mitad.
+ */
+const RATE_LIMIT_INTERVAL_MS = 7500;
+/**
+ * **La ráfaga se SUMA a la ventana, no se amortigua contra ella.** Es el error que hundió
+ * la primera versión de este throttle: con `burst = 8`, un cliente ocioso emitía las 8
+ * inmediatas MÁS las 7 del régimen dentro del mismo minuto = 15 requests en la primera
+ * ventana, contra un límite de 10 — el alta se comía el 429 igual, o sea el fix no arreglaba
+ * nada. El techo real es `límite − 60000/intervalo` = 10 − 8 = **2**.
+ */
+const RATE_LIMIT_BURST = 2;
+/**
+ * Techo del `Retry-After`. El partner no lo manda, pero cualquier WAF/CDN/gateway delante
+ * puede inyectarlo: sin tope, un `Retry-After: 3600` dormiría UNA HORA. Y este cliente es un
+ * singleton (`app.ts`) compartido por el panel del operador Y el portal del cliente.
+ */
+const MAX_RETRY_AFTER_MS = 60_000;
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Minimal shape of an axios-style transport error. */
@@ -168,6 +199,14 @@ export interface GigaredClientOptions {
   backoffMs?: number;
   /** Injectable sleep for tests (no real waits). */
   _sleep?: (ms: number) => Promise<void>;
+  /**
+   * Reloj inyectable. Los tests del throttle usan un reloj VIRTUAL que el `_sleep` AVANZA:
+   * con `Date.now()` real y un sleep instantáneo, un test da verde certificando una espera
+   * que en producción no ocurre.
+   */
+  _now?: () => number;
+  /** Ráfaga permitida antes de empezar a espaciar. Sólo para tests. */
+  _burstCapacity?: number;
 }
 
 /**
@@ -187,13 +226,62 @@ export class GigaredClient implements GigaredPort {
   private readonly maxRateLimitRetries: number;
   private readonly backoffMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
+  private readonly burstCapacity: number;
+  /**
+   * Instante (epoch ms) en que puede salir la PRÓXIMA request. Cada llamada RESERVA su turno
+   * y adelanta la marca, así que dos llamadas concurrentes se llevan turnos DISTINTOS en vez
+   * de despertarse juntas y golpear en ráfaga a un partner que corta POR CONTEO.
+   *
+   * La reserva es atómica sin necesidad de lock: el cálculo no tiene ningún `await` entre el
+   * `now()` y la escritura de la marca, y el event loop de Node es de un solo hilo.
+   */
+  private proximoTurnoMs = 0;
+  /** Último `now()` observado, para detectar que el reloj de pared RETROCEDIÓ (NTP). */
+  private ultimoAhoraMs = 0;
 
   constructor(opts: GigaredClientOptions) {
     this.configProvider = opts.configProvider;
     this.maxRateLimitRetries = opts.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES;
     this.backoffMs = opts.backoffMs ?? DEFAULT_BACKOFF_MS;
     this.sleep = opts._sleep ?? sleep;
+    this.now = opts._now ?? Date.now;
+    this.burstCapacity = opts._burstCapacity ?? RATE_LIMIT_BURST;
     this.http = opts.http ?? axios.create({ timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS });
+  }
+
+  /**
+   * Espacia las llamadas al partner para NO llegar nunca al 429 (ver el bloque de
+   * constantes). Permite una ráfaga de `burstCapacity` tras un período de inactividad —por
+   * eso el crédito se resta de `ahora`— y a partir de ahí entrega un turno cada
+   * `RATE_LIMIT_INTERVAL_MS`.
+   *
+   * NO hay techo de espera. Hubo uno (`MAX_THROTTLE_WAIT_MS`) y era un CRÍTICO: rechazaba
+   * una llamada del alta DESPUÉS de que su `register` fuera aceptado, o sea quemaba al
+   * cliente con nuestro propio throttle — exactamente el daño que todo esto existe para
+   * evitar. Aquel techo protegía el `requestTimeout` de 300 s, que ya no aplica porque el
+   * alta es asíncrona. Si alguna vez hace falta limitar la cola, va POR JOB ENCOLADO, nunca
+   * por llamada: un job se puede rechazar entero y sin secuelas; una llamada a mitad de un
+   * alta, no.
+   */
+  private async reservarTurno(): Promise<void> {
+    const ahora = this.now();
+
+    // Re-anclaje por salto de reloj. `proximoTurnoMs` es un instante de reloj de PARED: si
+    // NTP retrasa el reloj, la marca queda en un futuro que no llega y este cliente
+    // —singleton compartido por el panel y el portal— dormiría el salto entero.
+    //
+    // El disparador es que el reloj RETROCEDA, que es el evento real. Detectarlo por
+    // DISTANCIA de la marca sería peor que el bug: un backlog legítimo también la deja
+    // lejos, y borrarla ahí desarma el throttle justo cuando más hace falta.
+    if (ahora < this.ultimoAhoraMs) this.proximoTurnoMs = ahora;
+    this.ultimoAhoraMs = ahora;
+
+    const credito = (this.burstCapacity - 1) * RATE_LIMIT_INTERVAL_MS;
+    const salida = Math.max(ahora - credito, this.proximoTurnoMs);
+    this.proximoTurnoMs = salida + RATE_LIMIT_INTERVAL_MS;
+    const espera = salida - ahora;
+    if (espera > 0) await this.sleep(espera);
   }
 
   // ---- per-call config + request helpers -----------------------------------
@@ -207,12 +295,16 @@ export class GigaredClient implements GigaredPort {
   /** Retry 429 (Retry-After or exponential backoff), then map errors. No 401-relogin. */
   private async withRetry429<T>(fn: () => Promise<{ data: T }>): Promise<T> {
     for (let attempt = 0; attempt <= this.maxRateLimitRetries; attempt++) {
+      // Turno ANTES de cada request real (también en los reintentos): el throttle es la
+      // defensa primaria contra el 429; el backoff de abajo es sólo la red de contención.
+      await this.reservarTurno();
       try {
         const res = await fn();
         return res.data;
       } catch (e) {
         if (isAxiosLikeError(e) && e.response?.status === 429 && attempt < this.maxRateLimitRetries) {
-          const ms = parseRetryAfterMs(e) ?? this.backoffMs * Math.pow(2, attempt);
+          const crudo = parseRetryAfterMs(e) ?? this.backoffMs * Math.pow(2, attempt);
+          const ms = Math.min(crudo, MAX_RETRY_AFTER_MS);
           await this.sleep(ms);
           continue;
         }

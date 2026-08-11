@@ -408,6 +408,235 @@ describe('GigaredClient (#47)', () => {
     });
   });
 
+  /**
+   * W4 — THROTTLE PREVENTIVO. Números MEDIDOS en vivo el 2026-08-10 contra
+   * `partners.gigaredsa.com.ar`: 15 llamadas seguidas dieron `200×10` y después `429×5`
+   * (o sea corta a las ~10 por ventana), con recuperación dentro de los 60 s, y SIN mandar
+   * `Retry-After` ni `X-RateLimit-*` — no hay forma de negociar el límite, hay que
+   * respetarlo desde acá.
+   *
+   * POR QUÉ PREVENTIVO Y NO UN BACKOFF REACTIVO. Un alta hace hasta 17 llamadas al partner
+   * (probe + pool + MAX_CANDIDATOS × 5). Si el `activate` se come un 429 DESPUÉS de que el
+   * `register` ya fue aceptado, del otro lado queda una activación pendiente y ese cliente
+   * NO SE PUEDE DAR DE ALTA NUNCA MÁS. El daño es permanente, así que la única defensa
+   * aceptable es no llegar nunca al 429.
+   *
+   * TODOS estos tests usan un reloj VIRTUAL que el `_sleep` AVANZA. Es deliberado y no es
+   * ceremonia: con `Date.now()` real y un sleep instantáneo, un test da verde certificando
+   * una espera que en producción no ocurre. Y la base del reloj es una fecha REAL, no
+   * `1_000_000`: con un origen de juguete, restarle una hora manda el tiempo a negativo y
+   * un test puede pasar por ese accidente en vez de por el código.
+   */
+  describe('W4 — throttle preventivo del rate limit del partner', () => {
+    /** Base realista (no un origen de juguete): restarle una hora sigue siendo positivo. */
+    const T0 = Date.UTC(2026, 7, 10, 15, 0, 0);
+
+    /** Reloj virtual: el `sleep` ADELANTA el tiempo, así el test mide lo que pasa en prod. */
+    function makeRelojVirtual(inicio = T0) {
+      let ahora = inicio;
+      return {
+        now: () => ahora,
+        sleep: async (ms: number) => {
+          ahora += ms;
+        },
+        retroceder: (ms: number) => {
+          ahora -= ms;
+        },
+        get t() {
+          return ahora;
+        },
+      };
+    }
+
+    function makeThrottledClient(
+      http: ReturnType<typeof makeHttp>,
+      opts: { reloj?: ReturnType<typeof makeRelojVirtual>; extra?: Record<string, unknown> } = {},
+    ) {
+      const reloj = opts.reloj ?? makeRelojVirtual();
+      const cfg = new InMemoryGigaredConfigRepository();
+      const ready = cfg.update({ apiKey: 'mykey1234' });
+      const client = new GigaredClient({
+        configProvider: cfg,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        http: http as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _sleep: reloj.sleep as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _now: reloj.now as any,
+        ...(opts.extra ?? {}),
+      });
+      return { client, ready, reloj };
+    }
+
+    /**
+     * EL TEST QUE EXPRESA EL INVARIANTE REAL: **conteo por ventana deslizante de 60 s,
+     * medido DESDE FRÍO**.
+     *
+     * Desde frío importa: la ráfaga se SUMA a la ventana, no se amortigua contra ella. Un
+     * test que gaste el burst antes de medir excluye justamente el tramo donde el invariante
+     * se rompe — que es el tramo que corre un alta real sobre un cliente ocioso.
+     */
+    it('en NINGUNA ventana de 60 s salen más de 9 requests, medido DESDE FRÍO', async () => {
+      const http = makeHttp();
+      const salidas: number[] = [];
+      const reloj = makeRelojVirtual();
+      http.get.mockImplementation(async () => {
+        salidas.push(reloj.t);
+        return { data: SUMMARY_FIXTURE };
+      });
+      const { client, ready } = makeThrottledClient(http, { reloj });
+      await ready;
+
+      // 17 = el peor caso de un alta (probe + pool + MAX_CANDIDATOS × 5).
+      for (let i = 0; i < 17; i++) await client.getSummary();
+
+      expect(salidas).toHaveLength(17);
+      for (const inicio of salidas) {
+        const enVentana = salidas.filter((t) => t >= inicio && t < inicio + 60_000).length;
+        // 9 y no 10: el límite MEDIDO es 10 y se midió UNA sola vez. Assertear `<= 10`
+        // dejaría pasar `burst = 3`, que da EXACTAMENTE 10 — margen cero contra el número
+        // donde el partner ya cortó. El margen es parte del diseño, así que se pinea acá.
+        expect(enVentana).toBeLessThanOrEqual(9);
+      }
+    });
+
+    it('una ráfaga corta (abrir un panel) no paga NINGUNA espera', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
+      const { client, ready, reloj } = makeThrottledClient(http);
+      await ready;
+      const antes = reloj.t;
+
+      // La ráfaga es 2 y no puede ser más: el techo real es `límite − 60000/intervalo`.
+      await client.getSummary();
+      await client.getSummary();
+
+      expect(reloj.t - antes).toBe(0);
+      expect(http.get).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * Dos llamadas concurrentes tienen que llevarse turnos DISTINTOS. Si se llevaran el
+     * mismo, se despertarían juntas y saldrían en ráfaga contra un partner que corta POR
+     * CONTEO — que es exactamente lo que el throttle existe para evitar.
+     */
+    it('dos llamadas concurrentes reservan turnos DISTINTOS (sin thundering herd)', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
+      const esperas: number[] = [];
+      const cfg = new InMemoryGigaredConfigRepository();
+      await cfg.update({ apiKey: 'mykey1234' });
+      const client = new GigaredClient({
+        configProvider: cfg,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        http: http as any,
+        // El reloj NO avanza acá a propósito: lo que se aísla es la RESERVA, no la espera.
+        // Con el tiempo detenido, dos turnos tienen que salir a instantes distintos y
+        // crecientes. El comportamiento temporal real lo cubre el test de la ventana.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _sleep: (async (ms: number) => {
+          esperas.push(ms);
+        }) as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _now: (() => T0) as any,
+        _burstCapacity: 1,
+      });
+      await client.getSummary(); // gasta el único turno inmediato
+
+      esperas.length = 0;
+      await Promise.all([client.getSummary(), client.getSummary()]);
+
+      expect(esperas).toHaveLength(2);
+      expect(new Set(esperas).size).toBe(2);
+      // Y el segundo turno va DESPUÉS del primero: la marca sólo avanza.
+      expect(Math.max(...esperas) - Math.min(...esperas)).toBe(7500);
+    });
+
+    /**
+     * NO HAY TECHO DE ESPERA (fail-fast por saturación). Hubo uno y era un CRÍTICO: rechazaba
+     * la llamada #9 DESPUÉS de que el `register` fuera aceptado, o sea quemaba al cliente
+     * con nuestro propio throttle. Ahora el alta es asíncrona (job + polling), así que no
+     * existe el `requestTimeout` que aquel techo protegía: la cola puede tomarse sus ~114 s.
+     *
+     * Reloj CONGELADO a propósito: es el PEOR caso, las 17 llamadas encoladas de una. Acá la
+     * regla del reloj que avanza no aplica — lo que se afirma no es una espera (que un reloj
+     * congelado podría falsear) sino que las 17 llamadas LLEGAN al partner.
+     */
+    it('un alta completa (17 llamadas) NUNCA es rechazada por el throttle', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
+      const cfg = new InMemoryGigaredConfigRepository();
+      await cfg.update({ apiKey: 'mykey1234' });
+      const client = new GigaredClient({
+        configProvider: cfg,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        http: http as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _sleep: (async () => {}) as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _now: (() => T0) as any,
+      });
+
+      for (let i = 0; i < 17; i++) await client.getSummary();
+
+      expect(http.get).toHaveBeenCalledTimes(17);
+    });
+
+    /**
+     * Salto de reloj NTP hacia atrás. `proximoTurnoMs` es un instante de reloj de PARED: si
+     * el reloj retrocede una hora, la marca queda en un futuro que no llega y el cliente
+     * —singleton compartido por el panel del operador Y el portal— dormiría la hora entera.
+     *
+     * El disparador es que el reloj RETROCEDA, no que la marca esté lejos: detectarlo por
+     * DISTANCIA sería peor que el bug, porque un backlog legítimo también deja la marca
+     * lejos y borrarla ahí desarma el throttle justo cuando más hace falta.
+     */
+    it('se re-ancla cuando el reloj retrocede, en vez de dormir el salto entero', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
+      const { client, ready, reloj } = makeThrottledClient(http);
+      await ready;
+      for (let i = 0; i < 5; i++) await client.getSummary();
+
+      reloj.retroceder(3_600_000); // NTP retrasa el reloj una hora
+      const antes = reloj.t;
+      await client.getSummary();
+
+      // Sin re-anclaje esto dormía ~1 h; con re-anclaje paga a lo sumo un turno.
+      expect(reloj.t - antes).toBeLessThanOrEqual(7500);
+      expect(http.get).toHaveBeenCalledTimes(6);
+    });
+
+    it('clampea un Retry-After absurdo a 60 s', async () => {
+      const http = makeHttp();
+      // El partner no manda Retry-After, pero un WAF/CDN intermedio puede inyectarlo. Sin
+      // tope, `Retry-After: 3600` dormía UNA HORA en un cliente que es singleton.
+      http.get.mockRejectedValue(axiosError(429, { headers: { 'retry-after': '3600' } }));
+      const dormido: number[] = [];
+      const reloj = makeRelojVirtual();
+      const cfg = new InMemoryGigaredConfigRepository();
+      await cfg.update({ apiKey: 'mykey1234' });
+      const client = new GigaredClient({
+        configProvider: cfg,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        http: http as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _sleep: (async (ms: number) => {
+          dormido.push(ms);
+          await reloj.sleep(ms);
+        }) as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _now: reloj.now as any,
+      });
+
+      await expect(client.getSummary()).rejects.toBeInstanceOf(GigaredUnavailableError);
+
+      // Hubo backoffs reales (si no, esto asertaría sobre una lista vacía y pasaría siempre).
+      expect(dormido.length).toBeGreaterThan(0);
+      for (const ms of dormido) expect(ms).toBeLessThanOrEqual(60_000);
+    });
+  });
+
   // ---- #47d — REAL Gigared error bodies (verified live 2026-06-11) ----------
   // The live API DIFFERS from its docs: "not found" is HTTP 424 (external-service-error),
   // and "CIC not owned" is HTTP 403 (cic-ownership-error) — NOT 404. mapError discriminates
