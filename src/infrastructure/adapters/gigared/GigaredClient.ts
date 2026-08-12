@@ -34,8 +34,14 @@ const DEFAULT_BACKOFF_MS = 400;
  * alta NUNCA MÁS. Un backoff reactivo, por definición, primero cobra el 429 — o sea juega
  * con el daño permanente. Espaciando por debajo del límite, el 429 no ocurre.
  *
- * El costo (~114 s de espaciado por alta) ya no es una restricción: el alta es asíncrona
- * (job + polling), así que no hay `requestTimeout` de 300 s cortando el socket a mitad.
+ * EL COSTO ES REAL Y ESTÁ ASUMIDO. El alta es SÍNCRONA otra vez (`5ffcf53c` revirtió el 202:
+ * contra un FE que no pollea, el 202 era un éxito falso, y un éxito invisiblemente falso es
+ * peor que un timeout visible). Con throttle honesto un alta tarda ~114 s en vacío y ~361 s
+ * con ruido, contra el `requestTimeout` de 300 s de Node — o sea que bajo contención el alta
+ * PUEDE morir por timeout. Es un trade deliberado, documentado en `gigared.routes.ts`: un
+ * timeout deja un error VISIBLE, mientras que llegar al 429 deja al cliente quemado en
+ * silencio y PARA SIEMPRE. La cura de fondo es que el FE aprenda a pollear (W5), no aflojar
+ * el espaciado.
  */
 const RATE_LIMIT_INTERVAL_MS = 7500;
 /**
@@ -256,13 +262,17 @@ export class GigaredClient implements GigaredPort {
    * eso el crédito se resta de `ahora`— y a partir de ahí entrega un turno cada
    * `RATE_LIMIT_INTERVAL_MS`.
    *
-   * NO hay techo de espera. Hubo uno (`MAX_THROTTLE_WAIT_MS`) y era un CRÍTICO: rechazaba
-   * una llamada del alta DESPUÉS de que su `register` fuera aceptado, o sea quemaba al
-   * cliente con nuestro propio throttle — exactamente el daño que todo esto existe para
-   * evitar. Aquel techo protegía el `requestTimeout` de 300 s, que ya no aplica porque el
-   * alta es asíncrona. Si alguna vez hace falta limitar la cola, va POR JOB ENCOLADO, nunca
-   * por llamada: un job se puede rechazar entero y sin secuelas; una llamada a mitad de un
-   * alta, no.
+   * NO hay techo de espera. Hubo uno (`MAX_THROTTLE_WAIT_MS`) y era un CRÍTICO: rechazaba una
+   * llamada del alta DESPUÉS de que su `register` fuera aceptado, o sea quemaba al cliente con
+   * nuestro propio throttle — exactamente el daño que todo esto existe para evitar.
+   *
+   * OJO con el argumento por el que se sacó: NO es "ya no hay `requestTimeout`". El alta
+   * volvió a ser síncrona (`5ffcf53c`) y los 300 s de Node vuelven a estar sobre la mesa. El
+   * argumento que SÍ vale, y que no depende de eso, es cuál de los dos fracasos es reversible:
+   * un timeout deja un error visible y el operador reintenta; una llamada rechazada a mitad de
+   * un alta con el `register` ya aceptado deja al cliente inalta-ble PARA SIEMPRE. Si alguna
+   * vez hace falta limitar la cola, va POR JOB ENCOLADO, nunca por llamada: un job se rechaza
+   * entero y sin secuelas; una llamada a mitad de un alta, no.
    */
   private async reservarTurno(): Promise<void> {
     const ahora = this.now();
@@ -274,7 +284,15 @@ export class GigaredClient implements GigaredPort {
     // El disparador es que el reloj RETROCEDA, que es el evento real. Detectarlo por
     // DISTANCIA de la marca sería peor que el bug: un backlog legítimo también la deja
     // lejos, y borrarla ahí desarma el throttle justo cuando más hace falta.
-    if (ahora < this.ultimoAhoraMs) this.proximoTurnoMs = ahora;
+    //
+    // Y se DESPLAZA por el delta del salto, NO se resetea a `ahora`. Resetear era un bug
+    // grave: las llamadas ya dormidas siguen despertando en sus instantes viejos —`setTimeout`
+    // es MONOTÓNICO, el salto de reloj no las toca— mientras una marca reseteada arranca un
+    // SEGUNDO calendario desde cero. Dos calendarios en paralelo emiten al doble del rate
+    // mientras dure la profundidad de la cola: medido, un salto de apenas 10 s (un `chronyd
+    // makestep`, una live-migration, un restore de snapshot) daba 17 requests en una ventana
+    // REAL de 60 s, contra un límite del partner de 10. Desplazar preserva el espaciado.
+    if (ahora < this.ultimoAhoraMs) this.proximoTurnoMs -= this.ultimoAhoraMs - ahora;
     this.ultimoAhoraMs = ahora;
 
     const credito = (this.burstCapacity - 1) * RATE_LIMIT_INTERVAL_MS;

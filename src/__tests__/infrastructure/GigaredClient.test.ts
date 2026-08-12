@@ -431,6 +431,72 @@ describe('GigaredClient (#47)', () => {
     /** Base realista (no un origen de juguete): restarle una hora sigue siendo positivo. */
     const T0 = Date.UTC(2026, 7, 10, 15, 0, 0);
 
+    /** Deja correr la cola de microtareas hasta que se asiente. */
+    const asentar = async () => {
+      for (let i = 0; i < 5; i++) await new Promise<void>((r) => setImmediate(r));
+    };
+
+    /**
+     * Simulador de eventos discretos con DOS EJES DE TIEMPO. La separación es el corazón del
+     * bug que este bloque protege:
+     *
+     *  - `mono` — tiempo MONOTÓNICO. Es el que gobierna `setTimeout`, y por lo tanto cuándo
+     *    despiertan las llamadas YA dormidas. Un ajuste de NTP **no lo toca**.
+     *  - `pared = mono + offset` — lo que devuelve `Date.now()`. Un ajuste de NTP mueve
+     *    `offset`, y con eso `proximoTurnoMs` —que es un instante de PARED— queda descolocado
+     *    respecto de una cola que sigue durmiendo en tiempo monotónico.
+     *
+     * Las emisiones se miden en `mono`, porque el partner cuenta en tiempo REAL. Un reloj de
+     * un solo eje no puede expresar este bug: haría avanzar a los dormidos junto con el salto.
+     */
+    function makeSimulador(base = T0) {
+      let mono = 0;
+      let offset = base;
+      let seq = 0;
+      const pendientes: { t: number; seq: number; despertar: () => void }[] = [];
+      return {
+        now: () => mono + offset,
+        sleep: (ms: number) =>
+          new Promise<void>((despertar) => {
+            // Monotónico a propósito: el salto de reloj NO reprograma lo ya dormido.
+            pendientes.push({ t: mono + Math.max(0, ms), seq: seq++, despertar });
+          }),
+        /** NTP atrasa el reloj de pared. El monotónico sigue igual. */
+        atrasarReloj: (ms: number) => {
+          offset -= ms;
+        },
+        get mono() {
+          return mono;
+        },
+        async drenarHasta(terminado: () => boolean, limite = 5000) {
+          let pasos = 0;
+          await asentar();
+          while (!terminado() && pasos++ < limite) {
+            if (pendientes.length === 0) {
+              await asentar();
+              if (pendientes.length === 0) break;
+              continue;
+            }
+            pendientes.sort((a, b) => a.t - b.t || a.seq - b.seq);
+            const p = pendientes.shift() as { t: number; seq: number; despertar: () => void };
+            if (p.t > mono) mono = p.t;
+            p.despertar();
+            await asentar();
+          }
+        },
+      };
+    }
+
+    /** Máximo de emisiones en cualquier ventana deslizante de 60 s de tiempo REAL. */
+    function maxPorVentana(emisiones: number[]): number {
+      let peor = 0;
+      for (const inicio of emisiones) {
+        const n = emisiones.filter((t) => t >= inicio && t < inicio + 60_000).length;
+        if (n > peor) peor = n;
+      }
+      return peor;
+    }
+
     /** Reloj virtual: el `sleep` ADELANTA el tiempo, así el test mide lo que pasa en prod. */
     function makeRelojVirtual(inicio = T0) {
       let ahora = inicio;
@@ -583,28 +649,144 @@ describe('GigaredClient (#47)', () => {
     });
 
     /**
-     * Salto de reloj NTP hacia atrás. `proximoTurnoMs` es un instante de reloj de PARED: si
-     * el reloj retrocede una hora, la marca queda en un futuro que no llega y el cliente
-     * —singleton compartido por el panel del operador Y el portal— dormiría la hora entera.
+     * Salto de reloj NTP hacia atrás. `proximoTurnoMs` es un instante de reloj de PARED: si el
+     * reloj retrocede, la marca queda en un futuro que no llega y el cliente —singleton
+     * compartido por el panel del operador Y el portal— dormiría el salto ENTERO.
      *
      * El disparador es que el reloj RETROCEDA, no que la marca esté lejos: detectarlo por
-     * DISTANCIA sería peor que el bug, porque un backlog legítimo también deja la marca
-     * lejos y borrarla ahí desarma el throttle justo cuando más hace falta.
+     * DISTANCIA sería peor que el bug, porque un backlog legítimo también deja la marca lejos
+     * y borrarla ahí desarma el throttle justo cuando más hace falta.
+     *
+     * ESTE TEST NO DISCRIMINA resetear de desplazar —con la cola vacía las dos políticas dan
+     * lo mismo—, y por eso NO alcanza solo: de eso se ocupa el test del segundo calendario,
+     * acá abajo. Lo que este fija es lo otro: que la espera **no escale con el tamaño del
+     * salto**. Se mide con dos saltos que difieren en tres órdenes de magnitud y se exige que
+     * den EXACTAMENTE lo mismo; sin re-anclaje, la espera se lleva el salto puesto.
      */
-    it('se re-ancla cuando el reloj retrocede, en vez de dormir el salto entero', async () => {
+    it('la espera tras un salto de reloj no escala con el tamaño del salto', async () => {
+      async function esperaTrasSalto(saltoMs: number): Promise<number> {
+        const http = makeHttp();
+        http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
+        const { client, ready, reloj } = makeThrottledClient(http);
+        await ready;
+        for (let i = 0; i < 5; i++) await client.getSummary();
+
+        reloj.retroceder(saltoMs);
+        const antes = reloj.t;
+        await client.getSummary();
+        expect(http.get).toHaveBeenCalledTimes(6);
+        return reloj.t - antes;
+      }
+
+      // 10 s = un `chronyd makestep` típico. 1 h = un husario/NTP grosero.
+      const chico = await esperaTrasSalto(10_000);
+      const grande = await esperaTrasSalto(3_600_000);
+
+      expect(grande).toBe(chico);
+      // Y en términos absolutos es un puñado de turnos, no el salto. (Son 2 y no 1 porque
+      // `ultimoAhoraMs` se registra ANTES del sleep, así que el delta medido subestima el
+      // salto en un intervalo y la marca se desplaza un turno de menos. Está acotado por un
+      // intervalo y siempre para el lado SEGURO —espaciar de más, nunca de menos—, así que no
+      // se persigue dentro de la reserva, que no puede tener un `await` en el medio.)
+      expect(grande).toBeLessThanOrEqual(2 * 7500);
+    });
+
+    /**
+     * EL TEST QUE DISCRIMINA RESETEAR de DESPLAZAR. El de arriba NO lo hace: con una cola
+     * vacía, `marca = ahora` y `marca -= salto` dan lo mismo, así que pasaba con las DOS
+     * políticas y dejaba el bug sin protección.
+     *
+     * El bug: si el re-anclaje RESETEA la marca, las llamadas ya dormidas siguen despertando
+     * en sus instantes viejos —`setTimeout` es MONOTÓNICO, el salto no las toca— mientras la
+     * marca reseteada arranca un SEGUNDO calendario desde cero. Dos calendarios en paralelo
+     * emiten al DOBLE del rate mientras dure la profundidad de la cola.
+     *
+     * Desplazar la marca por el mismo delta del salto preserva el espaciado: la cola dormida
+     * y las llegadas nuevas siguen compartiendo UN calendario.
+     */
+    it('un salto de reloj hacia atrás NO abre un segundo calendario en paralelo', async () => {
       const http = makeHttp();
-      http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
-      const { client, ready, reloj } = makeThrottledClient(http);
-      await ready;
-      for (let i = 0; i < 5; i++) await client.getSummary();
+      const sim = makeSimulador();
+      const emisiones: number[] = [];
+      http.get.mockImplementation(async () => {
+        emisiones.push(sim.mono);
+        return { data: SUMMARY_FIXTURE };
+      });
+      const cfg = new InMemoryGigaredConfigRepository();
+      await cfg.update({ apiKey: 'mykey1234' });
+      const client = new GigaredClient({
+        configProvider: cfg,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        http: http as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _sleep: sim.sleep as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _now: sim.now as any,
+      });
 
-      reloj.retroceder(3_600_000); // NTP retrasa el reloj una hora
-      const antes = reloj.t;
-      await client.getSummary();
+      // Backlog real: 12 llamadas concurrentes se reparten turnos que cubren ~90 s de pared.
+      const enVuelo: Promise<unknown>[] = [];
+      for (let i = 0; i < 12; i++) enVuelo.push(client.getSummary());
+      await asentar();
 
-      // Sin re-anclaje esto dormía ~1 h; con re-anclaje paga a lo sumo un turno.
-      expect(reloj.t - antes).toBeLessThanOrEqual(7500);
-      expect(http.get).toHaveBeenCalledTimes(6);
+      // NTP atrasa 10 s con la cola TODAVÍA dormida. No hace falta un salto grande: 10 s es
+      // el tamaño típico de un `chronyd makestep`, una live-migration o un restore de snapshot.
+      sim.atrasarReloj(10_000);
+
+      // Y siguen llegando llamadas después del salto (el panel y el portal no se enteran).
+      for (let i = 0; i < 12; i++) enVuelo.push(client.getSummary());
+
+      await sim.drenarHasta(() => emisiones.length >= 24);
+      await Promise.all(enVuelo);
+
+      expect(emisiones).toHaveLength(24);
+      // Medido en tiempo REAL (monotónico), que es como cuenta el partner.
+      expect(maxPorVentana(emisiones)).toBeLessThanOrEqual(9);
+    });
+
+    /**
+     * EL GUARDA DE UNA GARANTÍA QUE EL COMENTARIO PROMETE Y NINGÚN TEST PROTEGÍA: el turno se
+     * reserva TAMBIÉN en cada reintento, no sólo en el primer intento.
+     *
+     * Es la rama que corre justamente cuando el throttle preventivo YA falló —o sea cuando el
+     * partner ya está cortando— y es donde un reintento sin turno multiplica el daño en vez de
+     * contenerlo. Sin este test, mutar `await this.reservarTurno()` a
+     * `if (attempt === 0) await this.reservarTurno()` sobrevive la suite entera.
+     */
+    it('reserva turno TAMBIÉN en los reintentos del 429, no sólo en el primer intento', async () => {
+      const http = makeHttp();
+      const sim = makeSimulador();
+      const emisiones: number[] = [];
+      http.get.mockImplementation(async () => {
+        emisiones.push(sim.mono);
+        throw axiosError(429);
+      });
+      const cfg = new InMemoryGigaredConfigRepository();
+      await cfg.update({ apiKey: 'mykey1234' });
+      const client = new GigaredClient({
+        configProvider: cfg,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        http: http as any,
+        maxRateLimitRetries: 10,
+        // Backoff mínimo a propósito: si el espaciado saliera del backoff en vez del turno,
+        // el test no probaría nada. Con 1 ms, lo único que puede espaciar es el throttle.
+        backoffMs: 1,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _sleep: sim.sleep as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        _now: sim.now as any,
+      });
+
+      let fallo: unknown;
+      const p = client.getSummary().catch((e) => {
+        fallo = e;
+      });
+      await sim.drenarHasta(() => emisiones.length >= 11);
+      await p;
+
+      expect(fallo).toBeInstanceOf(GigaredUnavailableError);
+      expect(emisiones).toHaveLength(11); // intento inicial + 10 reintentos
+      expect(maxPorVentana(emisiones)).toBeLessThanOrEqual(9);
     });
 
     it('clampea un Retry-After absurdo a 60 s', async () => {
