@@ -206,9 +206,13 @@ export interface GigaredClientOptions {
   /** Injectable sleep for tests (no real waits). */
   _sleep?: (ms: number) => Promise<void>;
   /**
-   * Reloj inyectable. Los tests del throttle usan un reloj VIRTUAL que el `_sleep` AVANZA:
-   * con `Date.now()` real y un sleep instantáneo, un test da verde certificando una espera
-   * que en producción no ocurre.
+   * Reloj inyectable. Por defecto es MONOTÓNICO (`performance.now`) — ver `reservarTurno`;
+   * inyectar acá un reloj de PARED reintroduce el bug de los dos calendarios.
+   *
+   * Los tests del throttle usan un reloj VIRTUAL que el `_sleep` AVANZA: con un reloj real y
+   * un sleep instantáneo, un test da verde certificando una espera que en producción no
+   * ocurre. Ojo: como todos inyectan `_now`, ninguno de ellos ve cuál es el reloj por DEFECTO
+   * — de eso se ocupa un test dedicado, que es el único que caza que vuelva a ser `Date.now`.
    */
   _now?: () => number;
   /** Ráfaga permitida antes de empezar a espaciar. Sólo para tests. */
@@ -235,23 +239,22 @@ export class GigaredClient implements GigaredPort {
   private readonly now: () => number;
   private readonly burstCapacity: number;
   /**
-   * Instante (epoch ms) en que puede salir la PRÓXIMA request. Cada llamada RESERVA su turno
-   * y adelanta la marca, así que dos llamadas concurrentes se llevan turnos DISTINTOS en vez
-   * de despertarse juntas y golpear en ráfaga a un partner que corta POR CONTEO.
+   * Instante —en el reloj MONOTÓNICO de `this.now`— en que puede salir la PRÓXIMA request.
+   * Cada llamada RESERVA su turno y adelanta la marca, así que dos llamadas concurrentes se
+   * llevan turnos DISTINTOS en vez de despertarse juntas y golpear en ráfaga a un partner que
+   * corta POR CONTEO.
    *
    * La reserva es atómica sin necesidad de lock: el cálculo no tiene ningún `await` entre el
    * `now()` y la escritura de la marca, y el event loop de Node es de un solo hilo.
    */
   private proximoTurnoMs = 0;
-  /** Último `now()` observado, para detectar que el reloj de pared RETROCEDIÓ (NTP). */
-  private ultimoAhoraMs = 0;
 
   constructor(opts: GigaredClientOptions) {
     this.configProvider = opts.configProvider;
     this.maxRateLimitRetries = opts.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES;
     this.backoffMs = opts.backoffMs ?? DEFAULT_BACKOFF_MS;
     this.sleep = opts._sleep ?? sleep;
-    this.now = opts._now ?? Date.now;
+    this.now = opts._now ?? (() => performance.now());
     this.burstCapacity = opts._burstCapacity ?? RATE_LIMIT_BURST;
     this.http = opts.http ?? axios.create({ timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS });
   }
@@ -261,6 +264,19 @@ export class GigaredClient implements GigaredPort {
    * constantes). Permite una ráfaga de `burstCapacity` tras un período de inactividad —por
    * eso el crédito se resta de `ahora`— y a partir de ahí entrega un turno cada
    * `RATE_LIMIT_INTERVAL_MS`.
+   *
+   * EL RELOJ ES MONOTÓNICO (`performance.now`), NO de pared, y eso es load-bearing: acá sólo
+   * se mide tiempo TRANSCURRIDO, nunca una fecha. Con `Date.now` el throttle quedaba a merced
+   * de los saltos de NTP, y el sentido peligroso es el de ADELANTE: `Math.max(ahora - crédito,
+   * marca)` no puede distinguir un salto adelante del ocio legítimo, así que regala la ráfaga
+   * y re-basa el calendario mientras las llamadas ya dormidas siguen despertando en sus
+   * instantes monotónicos. Dos calendarios en paralelo. Medido con cola concurrente de 12 +
+   * 12 llegadas nuevas: +10 s → 10 req/ventana real, +60 s → 16, +1 h → 18, contra un límite
+   * del partner de 10. Con reloj monotónico da 8 en los cinco escenarios.
+   *
+   * NO se intentó "hacer simétrico" el viejo guard de re-anclaje: un solo reloj de pared NO
+   * PUEDE distinguir un salto del ocio, y el intento cancela el burst-tras-ocio legítimo.
+   * Un reloj monotónico no puede retroceder, así que aquel guard directamente dejó de existir.
    *
    * NO hay techo de espera. Hubo uno (`MAX_THROTTLE_WAIT_MS`) y era un CRÍTICO: rechazaba una
    * llamada del alta DESPUÉS de que su `register` fuera aceptado, o sea quemaba al cliente con
@@ -276,24 +292,6 @@ export class GigaredClient implements GigaredPort {
    */
   private async reservarTurno(): Promise<void> {
     const ahora = this.now();
-
-    // Re-anclaje por salto de reloj. `proximoTurnoMs` es un instante de reloj de PARED: si
-    // NTP retrasa el reloj, la marca queda en un futuro que no llega y este cliente
-    // —singleton compartido por el panel y el portal— dormiría el salto entero.
-    //
-    // El disparador es que el reloj RETROCEDA, que es el evento real. Detectarlo por
-    // DISTANCIA de la marca sería peor que el bug: un backlog legítimo también la deja
-    // lejos, y borrarla ahí desarma el throttle justo cuando más hace falta.
-    //
-    // Y se DESPLAZA por el delta del salto, NO se resetea a `ahora`. Resetear era un bug
-    // grave: las llamadas ya dormidas siguen despertando en sus instantes viejos —`setTimeout`
-    // es MONOTÓNICO, el salto de reloj no las toca— mientras una marca reseteada arranca un
-    // SEGUNDO calendario desde cero. Dos calendarios en paralelo emiten al doble del rate
-    // mientras dure la profundidad de la cola: medido, un salto de apenas 10 s (un `chronyd
-    // makestep`, una live-migration, un restore de snapshot) daba 17 requests en una ventana
-    // REAL de 60 s, contra un límite del partner de 10. Desplazar preserva el espaciado.
-    if (ahora < this.ultimoAhoraMs) this.proximoTurnoMs -= this.ultimoAhoraMs - ahora;
-    this.ultimoAhoraMs = ahora;
 
     const credito = (this.burstCapacity - 1) * RATE_LIMIT_INTERVAL_MS;
     const salida = Math.max(ahora - credito, this.proximoTurnoMs);

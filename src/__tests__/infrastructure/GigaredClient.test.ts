@@ -437,34 +437,27 @@ describe('GigaredClient (#47)', () => {
     };
 
     /**
-     * Simulador de eventos discretos con DOS EJES DE TIEMPO. La separación es el corazón del
-     * bug que este bloque protege:
+     * Simulador de eventos discretos con COLA CONCURRENTE. Ese es el ingrediente que le da
+     * poder de detección, y conviene ser preciso sobre por qué: el reloj virtual secuencial de
+     * más arriba corre una llamada por vez —cada una termina antes de que empiece la
+     * siguiente—, así que nunca hay dos tandas dormidas solapándose y no puede expresar
+     * ningún bug de rate REAL. Acá las llamadas duermen de verdad, en paralelo, y despiertan
+     * por vencimiento.
      *
-     *  - `mono` — tiempo MONOTÓNICO. Es el que gobierna `setTimeout`, y por lo tanto cuándo
-     *    despiertan las llamadas YA dormidas. Un ajuste de NTP **no lo toca**.
-     *  - `pared = mono + offset` — lo que devuelve `Date.now()`. Un ajuste de NTP mueve
-     *    `offset`, y con eso `proximoTurnoMs` —que es un instante de PARED— queda descolocado
-     *    respecto de una cola que sigue durmiendo en tiempo monotónico.
-     *
-     * Las emisiones se miden en `mono`, porque el partner cuenta en tiempo REAL. Un reloj de
-     * un solo eje no puede expresar este bug: haría avanzar a los dormidos junto con el salto.
+     * El `sleep` es MONOTÓNICO, igual que `setTimeout` en producción: lo ya dormido despierta
+     * por tiempo transcurrido, no por fecha. Las emisiones se miden en `mono`, que es como
+     * cuenta el partner.
      */
-    function makeSimulador(base = T0) {
+    function makeSimulador() {
       let mono = 0;
-      let offset = base;
       let seq = 0;
       const pendientes: { t: number; seq: number; despertar: () => void }[] = [];
       return {
-        now: () => mono + offset,
+        monotonico: () => mono,
         sleep: (ms: number) =>
           new Promise<void>((despertar) => {
-            // Monotónico a propósito: el salto de reloj NO reprograma lo ya dormido.
             pendientes.push({ t: mono + Math.max(0, ms), seq: seq++, despertar });
           }),
-        /** NTP atrasa el reloj de pared. El monotónico sigue igual. */
-        atrasarReloj: (ms: number) => {
-          offset -= ms;
-        },
         get mono() {
           return mono;
         },
@@ -504,9 +497,6 @@ describe('GigaredClient (#47)', () => {
         now: () => ahora,
         sleep: async (ms: number) => {
           ahora += ms;
-        },
-        retroceder: (ms: number) => {
-          ahora -= ms;
         },
         get t() {
           return ahora;
@@ -649,62 +639,18 @@ describe('GigaredClient (#47)', () => {
     });
 
     /**
-     * Salto de reloj NTP hacia atrás. `proximoTurnoMs` es un instante de reloj de PARED: si el
-     * reloj retrocede, la marca queda en un futuro que no llega y el cliente —singleton
-     * compartido por el panel del operador Y el portal— dormiría el salto ENTERO.
+     * EL INVARIANTE BAJO COLA CONCURRENTE DORMIDA — el escenario que rompía todas las
+     * versiones anteriores de este throttle.
      *
-     * El disparador es que el reloj RETROCEDA, no que la marca esté lejos: detectarlo por
-     * DISTANCIA sería peor que el bug, porque un backlog legítimo también deja la marca lejos
-     * y borrarla ahí desarma el throttle justo cuando más hace falta.
+     * El ingrediente que lo hace capaz de cazar bugs es **la cola concurrente**: 12 llamadas
+     * que reservan turno y se quedan dormidas, y otras 12 que llegan mientras la primera
+     * tanda todavía duerme. El reloj virtual SECUENCIAL de los tests de arriba no puede
+     * expresarlo —cada llamada termina antes de que empiece la siguiente, así que nunca hay
+     * dos calendarios que solapar—, y por eso dejaba pasar bugs de rate real.
      *
-     * ESTE TEST NO DISCRIMINA resetear de desplazar —con la cola vacía las dos políticas dan
-     * lo mismo—, y por eso NO alcanza solo: de eso se ocupa el test del segundo calendario,
-     * acá abajo. Lo que este fija es lo otro: que la espera **no escale con el tamaño del
-     * salto**. Se mide con dos saltos que difieren en tres órdenes de magnitud y se exige que
-     * den EXACTAMENTE lo mismo; sin re-anclaje, la espera se lleva el salto puesto.
+     * Las emisiones se miden en tiempo MONOTÓNICO, que es como cuenta el partner.
      */
-    it('la espera tras un salto de reloj no escala con el tamaño del salto', async () => {
-      async function esperaTrasSalto(saltoMs: number): Promise<number> {
-        const http = makeHttp();
-        http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
-        const { client, ready, reloj } = makeThrottledClient(http);
-        await ready;
-        for (let i = 0; i < 5; i++) await client.getSummary();
-
-        reloj.retroceder(saltoMs);
-        const antes = reloj.t;
-        await client.getSummary();
-        expect(http.get).toHaveBeenCalledTimes(6);
-        return reloj.t - antes;
-      }
-
-      // 10 s = un `chronyd makestep` típico. 1 h = un husario/NTP grosero.
-      const chico = await esperaTrasSalto(10_000);
-      const grande = await esperaTrasSalto(3_600_000);
-
-      expect(grande).toBe(chico);
-      // Y en términos absolutos es un puñado de turnos, no el salto. (Son 2 y no 1 porque
-      // `ultimoAhoraMs` se registra ANTES del sleep, así que el delta medido subestima el
-      // salto en un intervalo y la marca se desplaza un turno de menos. Está acotado por un
-      // intervalo y siempre para el lado SEGURO —espaciar de más, nunca de menos—, así que no
-      // se persigue dentro de la reserva, que no puede tener un `await` en el medio.)
-      expect(grande).toBeLessThanOrEqual(2 * 7500);
-    });
-
-    /**
-     * EL TEST QUE DISCRIMINA RESETEAR de DESPLAZAR. El de arriba NO lo hace: con una cola
-     * vacía, `marca = ahora` y `marca -= salto` dan lo mismo, así que pasaba con las DOS
-     * políticas y dejaba el bug sin protección.
-     *
-     * El bug: si el re-anclaje RESETEA la marca, las llamadas ya dormidas siguen despertando
-     * en sus instantes viejos —`setTimeout` es MONOTÓNICO, el salto no las toca— mientras la
-     * marca reseteada arranca un SEGUNDO calendario desde cero. Dos calendarios en paralelo
-     * emiten al DOBLE del rate mientras dure la profundidad de la cola.
-     *
-     * Desplazar la marca por el mismo delta del salto preserva el espaciado: la cola dormida
-     * y las llegadas nuevas siguen compartiendo UN calendario.
-     */
-    it('un salto de reloj hacia atrás NO abre un segundo calendario en paralelo', async () => {
+    it('sostiene el invariante ≤9 con cola concurrente dormida', async () => {
       const http = makeHttp();
       const sim = makeSimulador();
       const emisiones: number[] = [];
@@ -720,28 +666,61 @@ describe('GigaredClient (#47)', () => {
         http: http as any,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         _sleep: sim.sleep as any,
+        // Monotónico, igual que producción.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        _now: sim.now as any,
+        _now: sim.monotonico as any,
       });
 
-      // Backlog real: 12 llamadas concurrentes se reparten turnos que cubren ~90 s de pared.
       const enVuelo: Promise<unknown>[] = [];
       for (let i = 0; i < 12; i++) enVuelo.push(client.getSummary());
       await asentar();
-
-      // NTP atrasa 10 s con la cola TODAVÍA dormida. No hace falta un salto grande: 10 s es
-      // el tamaño típico de un `chronyd makestep`, una live-migration o un restore de snapshot.
-      sim.atrasarReloj(10_000);
-
-      // Y siguen llegando llamadas después del salto (el panel y el portal no se enteran).
+      // Segunda tanda con la primera TODAVÍA dormida.
       for (let i = 0; i < 12; i++) enVuelo.push(client.getSummary());
 
       await sim.drenarHasta(() => emisiones.length >= 24);
       await Promise.all(enVuelo);
 
       expect(emisiones).toHaveLength(24);
-      // Medido en tiempo REAL (monotónico), que es como cuenta el partner.
       expect(maxPorVentana(emisiones)).toBeLessThanOrEqual(9);
+    });
+
+    /**
+     * EL RELOJ POR DEFECTO TIENE QUE SER MONOTÓNICO. Este test existe porque TODOS los demás
+     * inyectan `_now`, así que ninguno puede ver cuál es el reloj real de producción: volver
+     * el default a `Date.now` los deja a todos en verde. Es el caso de libro de "la función
+     * que decide no es la que se testea".
+     *
+     * Y no es cosmético. Con `Date.now`, un salto de NTP hacia ADELANTE es indistinguible del
+     * ocio: `Math.max(ahora - crédito, marca)` regala la ráfaga y re-basa el calendario
+     * mientras la cola dormida sigue despertando en tiempo monotónico. Medido con cola
+     * concurrente: +10 s → 10 req/ventana, +60 s → 16, +1 h → 18, contra un límite de 10.
+     */
+    it('usa un reloj MONOTÓNICO por defecto, no el de pared', async () => {
+      const http = makeHttp();
+      http.get.mockResolvedValue({ data: SUMMARY_FIXTURE });
+      const cfg = new InMemoryGigaredConfigRepository();
+      await cfg.update({ apiKey: 'mykey1234' });
+      const espiaPerf = jest.spyOn(performance, 'now');
+      const espiaDate = jest.spyOn(Date, 'now');
+      try {
+        // SIN `_now`: se ejercita el default, que es lo que corre en producción.
+        const client = new GigaredClient({
+          configProvider: cfg,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          http: http as any,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          _sleep: (async () => {}) as any,
+        });
+        espiaPerf.mockClear();
+        espiaDate.mockClear();
+        await client.getSummary();
+
+        expect(espiaPerf).toHaveBeenCalled();
+        expect(espiaDate).not.toHaveBeenCalled();
+      } finally {
+        espiaPerf.mockRestore();
+        espiaDate.mockRestore();
+      }
     });
 
     /**
@@ -774,7 +753,7 @@ describe('GigaredClient (#47)', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         _sleep: sim.sleep as any,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        _now: sim.now as any,
+        _now: sim.monotonico as any,
       });
 
       let fallo: unknown;
