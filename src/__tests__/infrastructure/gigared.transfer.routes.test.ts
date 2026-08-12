@@ -143,14 +143,12 @@ async function buildApp(opts: Opts = {}) {
 
   const tvCancellation = opts.tvCancellation ?? new InMemoryClientTvCancellationRepository();
   const cancelStatus = new InMemoryClientTvCancelStatusRepository();
-  // gigared-alta-asincrona (W2) — el alta ahora es asincrona: el router recibe el runner y el
-  // repo de estado en vez del use case. Este archivo no ejercita el alta; lo cablea para
-  // satisfacer el contrato del router (los tests del alta viven en gigared.register-async.routes).
+  // El router exige el use case del alta (que invoca y espera) MÁS las deps del job asíncrono,
+  // que siguen cableadas para la W5. Este archivo no ejercita el alta: la cablea para satisfacer
+  // el contrato del router (los tests del alta viven en gigared.register.routes).
+  const registerAccount = new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation);
   const registerStatus = new InMemoryClientTvRegisterStatusRepository();
-  const registerTvRunner = new RegisterTvJobRunner(
-    new RegisterGigaredAccount(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
-    registerStatus,
-  );
+  const registerTvRunner = new RegisterTvJobRunner(registerAccount, registerStatus);
   const eventRepo = new InMemoryContractServiceEventRepository();
 
   const cancelTv = new CancelTv(port, csRepo, catalog, contractLookup, customerLookup, tvCancellation);
@@ -164,6 +162,7 @@ async function buildApp(opts: Opts = {}) {
     listAccounts: new ListGigaredAccounts(port),
     getCustomerAccount: new GetGigaredCustomerAccount(port, customerLookup, tvCancellation),
     linkCustomerToCic: new LinkCustomerToCic(port, customerLookup, contractLookup, csRepo, catalog, tvCancellation),
+    registerAccount,
     addTvService: new AddTvService(port, csRepo, catalog, contractLookup, customerLookup),
     removeTvService: new RemoveTvService(port, csRepo, catalog, contractLookup, customerLookup),
     setOttStatus: new SetOttStatus(port, customerLookup),

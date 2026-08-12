@@ -2868,10 +2868,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const gigaredCancelTv = new CancelTv(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvCancellation);
   // #5 BE — pass eventRepo to runner so it records 'baja' on success (best-effort).
   const gigaredCancelTvRunner = new CancelTvJobRunner(gigaredCancelTv, gigaredTvCancelStatus, gigaredTvActivationEventRepo);
-  // gigared-alta-asincrona (W2/W3) — el ALTA de TV corre en background. La ruta ya NO recibe
-  // `registerAccount`: lo consume el runner. Los 3 últimos args del use case son POSICIONALES
-  // (pick = undefined → Math.random en prod, elegibilidad de reuso de CIC, auditoría) y su orden
-  // está pinneado por gigared-composition.cicReuse.test.ts.
+  // El ALTA de TV la ejecuta la RUTA y la espera (201/207 con el resultado): el `registerAccount`
+  // vuelve a viajar en las deps del router. Sin esa línea el POST no tiene con qué dar el alta —
+  // y así fue como quedó respondiendo 202 sobre un FE que interpreta cualquier 2xx como éxito.
+  // El runner sigue construido igual: la infraestructura asíncrona no se desarmó, sólo dejó de
+  // gobernar el contrato del POST (la enciende la W5, cuando el FE sepa pollear).
+  // Los 3 últimos args del use case son POSICIONALES (pick = undefined → Math.random en prod,
+  // elegibilidad de reuso de CIC, auditoría) y su orden está pinneado por
+  // gigared-composition.cicReuse.test.ts.
   const gigaredTvRegisterStatus = new PrismaClientTvRegisterStatusRepository();
   const gigaredRegisterAccount = new RegisterGigaredAccount(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation, gigaredTvActivation, gigaredTvActivationEventRepo, undefined, gigaredCicReuseEligibility, auditEventRepo);
   const gigaredRegisterTvRunner = new RegisterTvJobRunner(gigaredRegisterAccount, gigaredTvRegisterStatus);
@@ -2886,6 +2890,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     listAccounts:       new ListGigaredAccounts(gigaredClient, contractServiceRepo, serviceCatalogRepo),
     getCustomerAccount: new GetGigaredCustomerAccount(gigaredClient, gigaredCustomerLookup, gigaredTvCancellation),
     linkCustomerToCic:  new LinkCustomerToCic(gigaredClient, gigaredCustomerLookup, gigaredContractLookup, contractServiceRepo, serviceCatalogRepo, gigaredTvCancellation),
+    // #5 BE — el mismo use case que consume el runner: la ruta lo invoca y espera su resultado.
+    registerAccount:    gigaredRegisterAccount,
     // #131 PARTE B -- pass gigaredTvActivationEventRepo so AddTvService can record 'reactivacion' on row reuse.
     addTvService:       new AddTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup, gigaredTvActivationEventRepo),
     removeTvService:    new RemoveTvService(gigaredClient, contractServiceRepo, serviceCatalogRepo, gigaredContractLookup, gigaredCustomerLookup),
@@ -2914,9 +2920,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // #10/#11 — async TV-cancel deps
     cancelTvRunner:     gigaredCancelTvRunner,
     cancelStatus:       gigaredTvCancelStatus,
-    // gigared-alta-asincrona (W2) — async TV-register deps. Sin ESTAS dos líneas el alta
-    // asíncrona queda muerta en producción con el CI en verde (los tests inyectan su propio
-    // wiring). Pinneado por gigared-composition.test.ts.
+    // gigared-alta-asincrona (W2) — deps del estado del alta. El `registerStatus` lo usa la ruta
+    // SÍNCRONA para la reserva atómica (guard anti-doble-disparo), el lease que la mantiene viva y
+    // el sellado del desenlace, además del GET .../register/status. El `registerTvRunner` NO lo
+    // dispara nadie hoy: queda cableado para que la W5 encienda el alta asíncrona sin rearmar el
+    // composition root. Pinneado por gigared-composition.test.ts.
     registerTvRunner:   gigaredRegisterTvRunner,
     registerStatus:     gigaredTvRegisterStatus,
     customerLookup:     gigaredCustomerLookup,

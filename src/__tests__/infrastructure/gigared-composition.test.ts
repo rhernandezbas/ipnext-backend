@@ -156,6 +156,22 @@ describe('Gigared composition root (#47)', () => {
       expect(bloque).toMatch(/registerStatus:\s*gigaredTvRegisterStatus/);
     });
 
+    /**
+     * EL PIN DEL CONTRATO SÍNCRONO. El POST del alta espera al use case y devuelve 201/207 con su
+     * resultado; si `registerAccount` no llega a las deps, la ruta no tiene con qué dar el alta —
+     * y así fue como terminó devolviendo un 202 { jobId } que el FE resuelve como ÉXITO (axios no
+     * lanza con un 2xx). El operador veía un alta exitosa sobre un job que recién arrancaba.
+     *
+     * Además tiene que ser EL MISMO use case que consume el runner: dos instancias distintas
+     * significan dos configuraciones de reuso de CIC y auditoría, y el día que la W5 encienda el
+     * alta asíncrona la diferencia sale a la luz en producción, no acá.
+     */
+    it('el router recibe el use case del alta, y es EL MISMO que consume el runner', () => {
+      const idx = code.indexOf('createGigaredRouter(');
+      const bloque = code.slice(idx, idx + 4000);
+      expect(bloque).toMatch(/registerAccount:\s*gigaredRegisterAccount/);
+    });
+
     it('el repo de estado del alta es el adapter Prisma (no queda en memoria)', () => {
       expect(code).toMatch(/const gigaredTvRegisterStatus = new PrismaClientTvRegisterStatusRepository\(\)/);
     });
