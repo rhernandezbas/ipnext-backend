@@ -33,6 +33,13 @@ explícita.
 - [domain-glossary.md](business/domain-glossary.md) — glosario del dominio.
 - [domain-rules.md](business/domain-rules.md) — reglas de negocio observadas.
 
+### Integraciones e investigaciones
+- [iclass-integration.md](iclass-integration.md) — integración con IClass (despacho de órdenes de servicio).
+- [investigacion-iclass-estados.md](investigacion-iclass-estados.md) — exploración (2026-06-14): traer los estados de IClass a Prominense. **No es implementación.**
+- [EXTERNAL-API.md](EXTERNAL-API.md) — API externa para terceros.
+- [NEWS-API.md](NEWS-API.md) — API de novedades.
+- [gigared/](gigared/) — PDFs de referencia de la API del partner Gigared (TV).
+
 ## Mapa rápido del código
 
 ```
