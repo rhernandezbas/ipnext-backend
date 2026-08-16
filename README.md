@@ -7,8 +7,8 @@ Nació como réplica funcional de Splynx y hoy es el sistema propio de IPNEXT. P
 datos de clientes y contratos se alimenta de la API externa de **Gestión Real (GR)** a
 través de un mirror read-only; GR está en deprecación planificada.
 
-> El paquete todavía se llama `splynx-replica-backend` en el `package.json` por razones
-> históricas. El sistema es **Prominense**.
+> El repositorio se llama `ipnext-backend` y el paquete `prominense-backend`.
+> Ambos nombres refieren al mismo sistema: **Prominense**, el producto de IPNEXT.
 
 ## Stack
 
