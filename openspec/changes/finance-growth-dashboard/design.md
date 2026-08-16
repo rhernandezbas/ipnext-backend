@@ -1078,6 +1078,15 @@ ahora", no para acelerar el histórico.
 
 Response `202`: `{ started: true }`
 
+**Guard adicional — `503 SCHEDULER_NOT_RUNNING` cuando el kill-switch está apagado.** Si
+`FinanceReceiptIngestScheduler.isEnabled()` (`this.currentEnabled`, ver R7 abajo) es `false`, el endpoint
+responde `503 { error: 'finance receipt ingest scheduler is not running', code: 'SCHEDULER_NOT_RUNNING' }` en
+vez de `202` (`financeGrowth.routes.ts`, guard `deps.isSchedulerRunning()`). **fix-wave-5 (FE) 🔴3** — este
+código NUNCA estuvo documentado acá pese a existir desde R3/R7 abajo, y el FE de Fase 5 lo tradujo
+genéricamente a "reintentá en unos segundos" — un consejo FALSO cuando la causa es el kill-switch apagado
+(reintentar nunca funciona hasta que alguien lo prenda). El FE debe distinguir `code === 'SCHEDULER_NOT_RUNNING'`
+de cualquier otro error de red/5xx transitorio.
+
 **fix-wave-3 R7 — el kill-switch (`FinanceReceiptSyncConfig.enabled=false`) nunca se reactiva solo.** El
 scheduler lee la config completa (pacing + `enabled`) en vivo, en cada tick (F6); un fallo de ESA lectura
 (timeout, fila lockeada — no hace falta que la DB entera esté caída) hace fallback a
@@ -1131,6 +1140,16 @@ Response `200`:
     degraded: boolean;               // effectiveIntervalMs > requestIntervalMs
     consecutiveFailures: number;     // 0 si no degradado
     activeLane: 'delta' | 'backfill' | 'idle'; // a qué carril fue el ÚLTIMO tick servido
+    // fix-wave-2 R3 (BE) — kill-switch operativo (FinanceReceiptSyncConfig.enabled,
+    // this.currentEnabled). `false` = el ingest de recibos está APAGADO a propósito:
+    // ambos carriles quedan en pausa, "hoy" deja de actualizarse aunque `degraded`
+    // sea `false` (degraded mide backoff por fallas, no el kill-switch). Este campo
+    // vive en el DTO/código desde R3 pero NUNCA se agregó a este contrato — el FE de
+    // Fase 5 copió este bloque sin `enabled`, TypeScript no lo detectó (un campo
+    // extra en el JSON es legal), y el panel mostraba "● Sincronización al día" en
+    // VERDE con la ingesta apagada (fix-wave-5 FE 🔴3). Documentado acá para que no
+    // vuelva a driftear.
+    enabled: boolean;
   };
   delta: {
     lastRunAt: string | null;

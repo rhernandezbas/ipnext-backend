@@ -599,35 +599,93 @@ cerrados + los 🔵 baratos (14, 14b, 15, 16, 17)
 > motion de Emil Kowalski (micro-interacciones de las transiciones nominal↔real y de los estados de carga)
 > — invocarlas ANTES de escribir componentes, no como revisión posterior.
 
-- [ ] 5.1 Sidebar: ítem nuevo "Crecimiento Financiero" (o el nombre que confirme el usuario — pregunta
-  abierta NO-bloqueante #3), fuera del grupo "Finanzas" existente, oculto sin `finance.read`.
-- [ ] 5.2 Hook `useFinanceOverview.ts` (TanStack Query) consumiendo `GET /overview`; 4 estados
-  (loading/empty/error/success) explícitos.
-- [ ] 5.3 Página overview: KPI tiles + gráfico bridge (waterfall) + toggle nominal/real con mensaje visible
-  cuando `realSeriesTruncatedAt` no es null.
-- [ ] 5.4 Hook + página de cohortes: heatmap/matriz de supervivencia 3/6/12.
-- [ ] 5.5 Hook + página de CAC/payback: tabla de altas del mes con columna `lossMaking` resaltada.
-- [ ] 5.6 Hook + página de ranking vendedor: `earlyChurnPct` como columna primaria (jerarquía visual
-  invertida respecto de un ranking de ventas tradicional).
-- [ ] 5.7 Hook + página de crecimiento por nodo: lista/mapa con los nodos de `netGrowth` negativo
-  destacados.
-- [ ] 5.8 Hook + página de motivos de baja: tabla ordenada por `mrrPerdidoArs`.
-- [ ] 5.9 Página de settings — costos por tecnología: tabla editable, `Select` propio para elegir tecnología
-  (NO `<select>` nativo), validación de formulario espejando las reglas `400` del BE.
-- [ ] 5.10 Página de settings — precios por plan: misma estructura que 5.9.
-- [ ] 5.11 Página de settings — metas: formulario simple (singleton).
-- [ ] 5.12 Página de settings — índice IPC: tabla mes×valor editable, `Combobox` de mes (no `<input type=month>`
-  crudo si el design system ya tiene un componente de selección de período — verificar antes de crear uno).
-- [ ] 5.13 Página de settings — clasificación de tipos de comprobante: lista con badge `unclassified`
-  destacado (para que un admin lo note y reclasifique), acción de reclasificar con `finance.manage_costs`.
-- [ ] 5.14 Botón "sincronizar ahora" (`finance.sync`): deshabilitado con tooltip mientras hay una corrida en
-  curso (poll de `GET /sync/status`), nunca oculto sin más.
-- [ ] 5.15 A11y pass completo: contraste ≥4.5:1 calculado en ambos temas para las series nominal/real y los
-  badges de estado, touch targets ≥44px, `aria-live` en los contadores que cambian tras una acción (ej. tras
-  reclasificar un tipo de comprobante), labels asociados en todos los formularios de settings.
-- [ ] 5.16 Reuso de átomos existentes: `DataTable` para todas las tablas/rankings, `ConfirmModal` para
-  acciones destructivas/de reclasificación, `Pagination` donde el volumen lo pida, `Button`/`Tabs` para la
-  navegación entre las 5 sub-páginas.
+- [x] 5.1 Sidebar: ítem nuevo "Crecimiento Financiero" (placeholder — pregunta abierta NO-bloqueante #3
+  SIGUE sin confirmación del usuario), fuera del grupo "Finanzas" existente, gateado por `finance.read`.
+  Implementado en el worktree FE: `src/components/organisms/Sidebar/Sidebar.tsx`.
+- [x] 5.2 Hook `useFinanceOverview` (TanStack Query) consumiendo `GET /overview`; 4 estados
+  (loading/empty/error/success) explícitos manejados en la página. `src/hooks/useFinanceGrowth.ts` (incluye
+  además los hooks de las 6 lecturas + 5 configs + sync; sólo overview/config/sync están consumidos por UI,
+  ver 5.4-5.8 abajo).
+- [x] 5.3 Página overview: KPI tiles + bridge en formato lista/tabla (NO un waterfall SVG — simplificación
+  deliberada por presupuesto de tiempo, ver reporte de la fase) + toggle nominal/real con mensaje visible
+  listando `realSeriesMissingMonths` (el contrato real ya usa esa forma, no `realSeriesTruncatedAt`).
+  Honestidad cubierta: `monthsWithoutSnapshot`, `unpricedContractsActive/Pct`, `bridgeResidualArs`,
+  `churnRevenuePct`/`collectionRatePct` vía componente `MaybeValue` (nunca `?? 0`). Implementado en
+  `src/pages/finance-growth/FinanceGrowthOverviewPage.tsx`.
+- [x] 5.4 Hook + página de cohortes: heatmap/matriz de supervivencia 3/6/12. Implementado como `DataTable`
+  (no un heatmap SVG dedicado — no existe ese átomo en el design system) con pct siempre visible + color
+  aditivo; `monthsWithoutCohortSnapshot` distingue "nunca computado" de "no hubo altas".
+  `src/pages/finance-growth/FinanceGrowthCohortsPage.tsx`.
+- [x] 5.5 Hook + página de CAC/payback: tabla de altas del mes con columna `lossMaking` resaltada (badge de
+  texto, no sólo color); `costConfigured`/`costIsZero` vía `MaybeValue` + banners distintos.
+  `src/pages/finance-growth/FinanceGrowthCacPage.tsx`.
+- [x] 5.6 Hook + página de ranking vendedor: `earlyChurnPct` como columna primaria (jerarquía visual
+  invertida a propósito), `altasMaduras`/`null` honesto (nunca 0%). Orden del BE respetado, sin re-sort local.
+  `src/pages/finance-growth/FinanceGrowthVendorsPage.tsx`.
+- [x] 5.7 Hook + página de crecimiento por nodo: `netGrowth` negativo destacado con chip texto+color ("▼
+  contracción"), nodos sin `networkSiteId` en fila propia. `src/pages/finance-growth/FinanceGrowthNodesPage.tsx`.
+- [x] 5.8 Hook + página de motivos de baja: ordenada por `mrrPerdidoArs`; banner "ranking no confiable" cuando
+  TODAS las bajas del rango están sin precio (estado real de prod hoy), badge por fila en el caso parcial.
+  `src/pages/finance-growth/FinanceGrowthMotivosBajaPage.tsx`.
+- [x] 5.9 Página de settings — costos por tecnología: `TechnologyCostsBody.tsx`, tabla (`DataTable`) + panel
+  de edición con validación cliente espejando las reglas `400` del BE (negativos, comisión >100%). Nota: no
+  usa el `Select` propio para "elegir tecnología" porque la edición es inline por fila de una tabla ya
+  completa (LEFT JOIN) — no hay un catálogo aparte que picker-ear ahí. El `Select` sí se usó donde hay una
+  elección real entre opciones (ver 5.13).
+- [x] 5.10 Página de settings — precios por plan: `PlanPricesBody.tsx`, misma estructura que 5.9.
+- [x] 5.11 Página de settings — metas: `TargetsBody.tsx`, formulario simple (singleton), validación cliente
+  de los 4 campos.
+- [x] 5.12 Página de settings — índice IPC: `InflationBody.tsx`, tabla mes×valor con TODOS los meses del
+  rango por defecto (incl. los sin fila, mostrados "sin cargar" — nunca 0%). **Desviación documentada**: NO
+  se construyó un `Combobox` de mes dedicado (no existe un componente de selección de período en el design
+  system, confirmado en la investigación de la fase) — se usa un `<input type="text">` simple con
+  validación de formato para la variación/fuente, NUNCA `<input type="month">` nativo (eso sí se respetó
+  estrictamente). Documentado para que el review lo marque si se considera insuficiente.
+- [x] 5.13 Página de settings — clasificación de tipos de comprobante: `InvoiceTypesBody.tsx`, badge
+  `unclassified` destacado, reclasificación con el `Select` propio (3 opciones: revenue/contra/excluded),
+  gateado por `finance.manage_costs`.
+- [x] 5.14 Botón "sincronizar ahora" (`finance.sync`) en el header de la página overview: doble
+  confirmación (`ConfirmModal`) con impacto explícito, deshabilitado con tooltip mientras
+  `delta.pendingPages` (poll de `GET /sync/status` cada 15s), feedback de éxito/error visible tras
+  disparar. `POST /sync/backfill-snapshots` deliberadamente NO expuesto en la UI — el usuario no decidió
+  todavía si correrlo (ver DECISIONES ABIERTAS del brief de la fase).
+- [~] 5.15 A11y — cubierto (extendido en el cierre de fase): focus-visible en todo interactivo, touch targets
+  ≥44px (inputs/botones), labels asociados en todos los formularios y en el input de mes de CAC,
+  `role="alert"`/`role="status"` en banners y errores de las 5 páginas nuevas, `aria-label`/`title` en
+  `MaybeValue` y en los chips de "contracción"/"pierde plata"/"aún no cumple Nm" (nunca sólo color/símbolo
+  para un estado). NO cubierto: no se corrió una herramienta de cálculo de contraste dedicada sobre los
+  tokens nuevos combinados (se reusaron tokens YA vigentes en el resto de la app). Pendiente para el review
+  adversarial.
+- [x] 5.16 Reuso de átomos: `DataTable` en las 5 páginas nuevas de esta ronda (cohortes, CAC, vendedores,
+  nodos, motivos de baja) además de las tablas de settings ya existentes; `Select` propio para elegir
+  tecnología en CAC; `ConfirmModal`/`Tabs` (sin cambios, ya cubiertos por la tanda previa). `Pagination`
+  sigue sin uso (ningún listado de esta fase superó una página — 6 rankings mensuales, no un listado
+  paginable). `Button` atom sigue sin reusarse literalmente en los 5 bodies de settings de la tanda previa
+  (deuda menor ya documentada, fuera del alcance de esta ronda); las 5 páginas nuevas usan botones con clases
+  CSS Module propias por el mismo criterio.
+
+### Cierre de Fase 5 (segunda tanda) — 3 gaps declarados, decisión tomada en cada uno
+
+- **Waterfall del bridge (5.3)**: se mantiene como tabla/lista, NO se construyó un gráfico SVG. Justificación:
+  el `BridgeRow` actual ya expone los 5 términos con signo+color+tono textual (`+Altas`/`+Upgrades`/
+  `−Downgrades`/`−Bajas`/`=MRR final`) y `bridgeResidualArs` visible cuando no cierra — un waterfall gráfico
+  aportaría lectura de un vistazo pero el repo no tiene una librería de charts instalada y esta fase tiene
+  regla explícita de "sin librerías nuevas". Reevaluar en una fase de pulido visual dedicada, no en esta.
+- **Combobox de mes IPC/CAC (5.12, extendido a CAC en esta ronda)**: se mantiene `<input type="text">` con
+  validación de formato `AAAA-MM` (regex, error inline con `role="alert"`), NUNCA `<input type="month">`
+  nativo ni un `<select>`. Justificación: no existe un átomo de selección de período en el design system
+  (confirmado en ambas rondas); construir un `Combobox` de calendario dedicado es trabajo de diseño de
+  componente nuevo, fuera del alcance de una fase que consume contrato ya cerrado. Documentado en ambas
+  páginas para que el review lo marque si se considera insuficiente.
+- **`review-animations` (Emil Kowalski)**: corrida sobre el skeleton shimmer de overview/settings/las 5
+  páginas nuevas (linear 1.5s infinite, `prefers-reduced-motion` respetado — aprobado, es carga
+  indeterminada), la entrada de `EditPanel` en settings (200ms `ease-out`, translateY+opacity, sin
+  `scale(0)` — aprobado) y `ConfirmModal` (120-160ms `ease-out`, exento de la regla de origen por ser modal
+  centrado — aprobado). Dos hallazgos BAJOS, preexistentes, fuera del alcance de esta fase (arreglarlos
+  tocaría átomos compartidos por toda la app): el `keyframes select-appear` de `Select` usa `ease` en vez de
+  `ease-out` para una entrada (100ms, impacto perceptual bajo por la duración corta); los `:hover` de
+  `.toggleBtn`/`.syncBtn`/`.retryBtn` no están gateados por `@media (hover: hover) and (pointer: fine)`
+  (mismo patrón que el resto de la app, no específico de esta fase). Ningún hallazgo BLOQUEANTE.
 
 ## Fase 6 (deferred — NO se implementa en este change)
 
