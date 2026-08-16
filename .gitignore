@@ -12,9 +12,13 @@ RADIUS.md
 MIGRACION-ACCESO-SUR-HA.md
 infra-ne8000/
 CREDENCIALES-LOCAL.md
+INFRAESTRUCTURA-LOCAL.md
 
 # Playwright artifacts (local exploration only)
 .playwright-mcp/
+# Screenshots de verificacion en vivo: caen en la RAIZ del repo y no son codigo.
+# Anclado a la raiz (/) a proposito: un `*.png` global bloquearia assets legitimos en src/.
+/*.png
 
 # Splynx exploration artifacts (kept locally, see md/splynx-scheduling/OVERVIEW.md)
 md/splynx-scheduling/screenshots/
