@@ -54,6 +54,13 @@ export interface TemplateSummaryDto {
 export interface ManualContactDto {
   name: string;
   phone: string;
+  /**
+   * external-bulk-messaging (D4.c/D4.e) — literales POR-RECIPIENT del caller
+   * externo (`SendExternalBulk`). Ausente en TODO caller de la UI admin/CSV
+   * humano (comportamiento actual intacto). Pisa `variablesMap` GLOBAL por key
+   * en `SendCampaign` (SEND-10), NUNCA acá.
+   */
+  variables?: Record<string, string>;
 }
 
 export interface PreviewSegmentInput {
@@ -270,6 +277,12 @@ export interface CreateCampaignInput {
    */
   allowedBulkActions?: Set<string> | string[];
   createdById: string;
+  /**
+   * external-bulk-messaging (D1.a) — presente SOLO cuando `SendExternalBulk`
+   * crea la campaña (`api-messaging`). Ausente/`undefined` → `Campaign.
+   * externalIdempotencyKey` persiste `null` (UI admin, comportamiento actual).
+   */
+  externalIdempotencyKey?: string | null;
 }
 
 export interface CreateCampaignOutput {

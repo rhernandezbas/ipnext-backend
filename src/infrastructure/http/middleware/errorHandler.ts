@@ -251,6 +251,23 @@ const statusMap: Record<string, number> = {
   // TEMPLATE_IN_USE: borrar un template retenido por una campaña activa (guard).
   TEMPLATE_NOT_FOUND: 404,
   TEMPLATE_IN_USE: 409,
+  // external-bulk-messaging (design.md D7.a) — envío masivo WhatsApp M2M vía API
+  // Externa, preview de 2 pasos (validate → send). VALIDATION_ERROR (400),
+  // TEMPLATE_NOT_APPROVED/MISSING_TEMPLATE_VARIABLES (422, reusados de
+  // messaging-bulk), CHATWOOT_UNAVAILABLE (503, reusado de messaging.ts) y
+  // CAMPAIGN_NOT_FOUND (404, reusado de messaging-bulk para STATUS-1) YA están
+  // mapeados arriba/abajo — sólo los códigos NUEVOS de esta capability van acá.
+  FEATURE_DISABLED: 403,
+  CAP_EXCEEDED: 422,
+  EMPTY_RECIPIENTS: 422,
+  CHATWOOT_LABEL_NOT_FOUND: 422,
+  PREVIEW_NOT_FOUND: 404,
+  PREVIEW_EXPIRED: 410,
+  PREVIEW_ALREADY_CONSUMED: 409,
+  PREVIEW_PAYLOAD_MISMATCH: 409,
+  IDEMPOTENCY_KEY_CONFLICT: 409,
+  CAMPAIGN_RUNNER_BUSY: 409,
+  REPORTER_UNAVAILABLE: 503,
   // smartolt-provision (K2) — aprovisionamiento de ONUs fibra Huawei.
   // OltProvisioningError trae el reason tipado; acá solo vive el mapeo code→status:
   //   not_configured → 503 (envs SMARTOLT_* ausentes: feature apagada limpia)

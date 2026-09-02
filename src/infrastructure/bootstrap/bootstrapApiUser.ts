@@ -10,38 +10,30 @@
  * be referenced as a reporter. Idempotent: if login `api` already exists, no-op
  * (the existing id is returned and the passwordHash is left untouched).
  *
- * Pure function — no process.env / no bcrypt inside, the hash is injected — so it
- * is composition-root-driven and trivially testable with InMemoryRbacUserRepository.
+ * external-bulk-messaging (D2) — thin wrapper over `bootstrapMachineUser` (the
+ * generalized version of this exact logic). Kept as its own file/exports for
+ * backcompat: every existing caller/test imports `bootstrapApiUser`/`API_USER_*`
+ * from here unchanged. `bootstrapApiMessagingUser` (bootstrapApiMessagingUser.ts)
+ * is the analogous wrapper for the `api-messaging` system user.
  */
 import type { RbacUserRepository } from '@domain/ports/RbacUserRepository';
+import { bootstrapMachineUser, BootstrapMachineUserResult } from './bootstrapMachineUser';
 
 /** Stable login of the system reporter. Resolved by the ingest to set reporterId. */
 export const API_USER_LOGIN = 'api';
 export const API_USER_NAME = 'Api';
 export const API_USER_EMAIL = 'api@sistema.local';
 
-export interface BootstrapApiUserResult {
-  outcome: 'created' | 'exists';
-  /** Id of the system "Api" user — usable as a task reporterId. */
-  id: string;
-}
+export type BootstrapApiUserResult = BootstrapMachineUserResult;
 
 export async function bootstrapApiUser(
   userRepo: RbacUserRepository,
   opts: { passwordHash: string },
 ): Promise<BootstrapApiUserResult> {
-  const existing = await userRepo.findByLogin(API_USER_LOGIN);
-  if (existing) {
-    return { outcome: 'exists', id: existing.id };
-  }
-
-  const user = await userRepo.create({
+  return bootstrapMachineUser(userRepo, {
+    login: API_USER_LOGIN,
     name: API_USER_NAME,
     email: API_USER_EMAIL,
-    login: API_USER_LOGIN,
     passwordHash: opts.passwordHash,
-    status: 'active',
   });
-
-  return { outcome: 'created', id: user.id };
 }

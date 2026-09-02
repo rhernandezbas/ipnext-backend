@@ -228,7 +228,18 @@ export class SendCampaign {
       candidate = found;
     }
 
-    const variables = resolveCampaignVariables(campaign.variableSpec, candidate);
+    // external-bulk-messaging (D4.e punto 8, SEND-10) — override POR-RECIPIENT:
+    // gana sobre lo resuelto por `resolveCampaignVariables` (incluso sobre un
+    // `source:'name'` de un vinculado). `recipient.variables` es `null` en TODO
+    // dominio que no lo usa (segment/manual/csv/task de la UI admin) → el spread
+    // de `{}` deja el mapa IDÉNTICO al de siempre (no-regresión, SEND-10). Este
+    // MISMO `variables` alimenta los tres consumos: `sendTemplate` (Twilio),
+    // el body/`processedParams` del path Chatwoot, y el `renderedBody`
+    // proyectado al inbox — nunca tres mapas distintos.
+    const variables = {
+      ...resolveCampaignVariables(campaign.variableSpec, candidate),
+      ...(recipient.variables ?? {}),
+    };
 
     let result: SendTemplateResult;
     // chatwoot-hub-sendpath (D9) — sólo poblado en el path ON: ids REALES de

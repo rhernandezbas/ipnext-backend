@@ -113,7 +113,15 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(window).toMatch(/new PreviewCampaignSegment\(customerAdapter,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo,\s*taskStageTransitionConfigRepoForBulk\)/);
     // bulk-task-stage-transition — CreateCampaign gana el 7º arg (taskStageTransitionConfigRepoForBulk):
     // sin esto el estado resultante NO se snapshotea al create → la transición nunca dispara.
-    expect(window).toMatch(/new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo,\s*taskStageTransitionConfigRepoForBulk\)/);
+    // external-bulk-messaging fix wave F1 (F9 / R2 #8) — la instancia ya NO se
+    // construye INLINE en el mount: se hoisteó a `const bulkCreateCampaign`
+    // JUSTO ARRIBA, para COMPARTIRLA con el camino externo (que antes se
+    // construía uno propio con 3 de las 7 deps). Lo que este test protege —
+    // que el router admin reciba un CreateCampaign con las 7 dependencias
+    // reales — se sigue verificando, ahora en dos mitades: la referencia
+    // dentro de la ventana del mount + la construcción completa afuera.
+    expect(window).toMatch(/^\s*bulkCreateCampaign,\s*$/m);
+    expect(appSrc).toMatch(/const bulkCreateCampaign = new CreateCampaign\(campaignRepo,\s*customerAdapter,\s*templatePort,\s*customerAdapter,\s*taskRecipientSource,\s*taskStageConfigRepo,\s*taskStageTransitionConfigRepoForBulk\)/);
     expect(window).toMatch(/^\s*campaignRunner,\s*$/m);
     expect(window).toMatch(/new GetCampaign\(campaignRepo\)/);
     expect(window).toMatch(/new ListCampaigns\(campaignRepo\)/);
@@ -155,11 +163,10 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     expect(window).toMatch(/const taskStageConfigRepo = new PrismaTaskStageRecipientConfigRepository\(\)/);
   });
 
-  it('(g) CreateCampaign recibe 3 args — contradicción #2 (design §7 original tenía 2, sin templatePort)', () => {
-    const idx = appSrc.indexOf("app.use('/api/messaging/bulk', createMessagingBulkRouter(");
-    const end = appSrc.indexOf('));', idx);
-    const window = appSrc.slice(idx, end + '));'.length);
-    expect(window).toMatch(/new CreateCampaign\([^)]*,[^)]*,[^)]*\)/);
+  it('(g) CreateCampaign recibe al menos 3 args — contradicción #2 (design §7 original tenía 2, sin templatePort)', () => {
+    // fix wave F1 (F9) — la construcción vive ahora en `const bulkCreateCampaign`
+    // fuera de la llamada de mount (instancia COMPARTIDA con el camino externo).
+    expect(appSrc).toMatch(/const bulkCreateCampaign = new CreateCampaign\([^)]*,[^)]*,[^)]*\)/);
   });
 
   it('(h) guards RBAC messaging.bulk + messaging.templates y auth STATEFUL dentro de la ventana de mount', () => {

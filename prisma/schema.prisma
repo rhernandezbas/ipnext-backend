@@ -4142,6 +4142,12 @@ model Campaign {
   // messaging-bulk-inbox (F1) — texto plano del template capturado en CreateCampaign
   // (TemplateDto.body), para renderizar el body real del mensaje al proyectar al inbox.
   templateBody  String?
+  // external-bulk-messaging (D1.a) — molde ChatMessage.idempotencyKey. Nullable +
+  // @unique: Postgres trata cada NULL como distinto, así que las campañas de UI
+  // existentes (sin key) conviven sin backfill. Es el backstop de carrera (P2002)
+  // para 2 `send` concurrentes con la MISMA Idempotency-Key que ambos pasaron el
+  // guard-0 en el use case (mismo mecanismo que SendTemplateMessage.ts:69-73).
+  externalIdempotencyKey String? @unique
   segment       Json              // filtro serializado (reproducible/auditable):
                                   // { statuses: string[], balanceMin?: number, balanceMax?: number }
   variableSpec  Json              @default("{}") // cómo se llenan las variables del template
@@ -4187,6 +4193,12 @@ model CampaignRecipient {
   contactName            String?
   phoneNormalized        String                   // clave de de-dup (normalizePhone) — auditable
   phoneE164              String                   // el destino REAL enviado (whatsapp E164) — auditable
+  // external-bulk-messaging (D4.c) — literales POR-RECIPIENT del caller externo
+  // (`{key: value}`), snapshot auditable de lo que se le mandó a ESTE destinatario.
+  // Nullable/sin default: aditiva, `null` en todas las filas pre-existentes y en
+  // los dominios que no lo usan (segment/manual/csv/task). Persistencia únicamente
+  // en B1 — el merge/consumo en el render queda para B3 (SendExternalBulk).
+  variables              Json?
   status                 CampaignRecipientStatus  @default(queued)
   providerId             String?                  // SM… de Twilio (id del mensaje) cuando sent
   chatwootConversationId Int?                     // link al mirror F1 si el cliente responde (F3/opcional)
@@ -4219,6 +4231,50 @@ model CampaignRecipient {
   @@unique([campaignId, taskId])
   @@index([campaignId, status])       // progreso poleable + resume (WHERE status IN queued/failed)
   @@index([conversationId])           // etiqueta #1 — JOIN Conversation×CampaignRecipient
+  // external-bulk-messaging (fix wave F2, NEW-2) — respalda
+  // `countAuthorizedRecipientsByCreatorSince` (D3.a/D6, cupo diario): filtra por
+  // `createdAt >= since` en CADA `send` externo (SEND-4 paso 7); sin este índice
+  // era un full scan de la tabla.
+  @@index([createdAt])
+}
+
+// external-bulk-messaging (D1) — preview EFÍMERO de un lote externo (validate/send
+// de 2 pasos, API M2M). NO es una Campaign: no infla el historial admin ni el cupo
+// diario (que se cuenta sobre recipients realmente `sent`, D6).
+model ExternalBulkPreview {
+  id            String    @id @default(uuid())
+  payloadHash   String                       // sha256 canónico (D5) — anti-replay con payload distinto
+  templateRef   String                       // contentSid resuelto (HX…) — el preview congela el REF, no el nombre
+  templateName  String                       // friendlyName pedido por el caller (auditoría del input)
+  variables     Json      @default("{}")     // literales {"1":"...","2":"..."} tal cual los mandó el caller
+  chatwootLabel String?
+  // fix wave F1 (F15) — el comentario decía [{phoneE164, phoneNormalized}] y omitía
+  // los DOS campos que además se persisten. La forma REAL es
+  // [{phoneE164, phoneNormalized, name, variables}] — ya normalizados, dedupeados y con
+  // las variables MERGEADAS (global + por-recipient) FILTRADAS a las keys que declara el
+  // template (fix wave F12). Los CUATRO campos son load-bearing: `phoneE164` + `variables`
+  // entran al re-hash de SEND-3 (`assertPayloadUnchanged`), así que agregar/quitar un
+  // campo de acá sin tocar `externalBulkPayloadHash` invalida TODOS los previews vivos.
+  recipients    Json
+  invalid       Json      @default("[]")     // [{input, reason, missingVariables?}] — razón por número, auditable
+  validCount    Int
+  invalidCount  Int
+  expiresAt     DateTime                     // createdAt + 15 min
+  consumedAt    DateTime?                    // seteado ATÓMICAMENTE al crear la Campaign (D8)
+  campaignId    String?   @unique            // lazo 1:1 al resultado; SIN FK (el preview es efímero, D1.b)
+  createdAt     DateTime  @default(now())
+
+  @@index([expiresAt])                       // TTL lazy + purga acotada (D9)
+}
+
+// external-bulk-messaging (D1) — topes editables sin redeploy. Molde EXACTO
+// WhatsappTaskStageTransitionConfig / FinanceReceiptSyncConfig: id fijo
+// "singleton", una fila, upsert.
+model ExternalBulkMessagingConfig {
+  id            String   @id @default("singleton")
+  maxPerRequest Int      @default(500)
+  maxPerDay     Int      @default(2000)
+  updatedAt     DateTime @updatedAt
 }
 
 // =============================================

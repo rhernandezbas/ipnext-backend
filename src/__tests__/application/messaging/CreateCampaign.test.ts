@@ -445,6 +445,91 @@ describe('CreateCampaign', () => {
       expect(recipients.data[0]!.contactName).toBeNull();
     });
 
+    // external-bulk-messaging (D4.e puntos 1-6, SEND-10) — `manualContacts[].variables`
+    // viaja punta a punta hasta `CampaignRecipient.variables`. Paridad Prisma/InMemory
+    // del CAMPO en sí ya está pineada a nivel repo (B1,
+    // `PrismaCampaignRepository.variables.test.ts` + `InMemoryCampaignRepository.test.ts`
+    // — ambos adapters tratan `row.variables` idéntico sin importar su origen); acá se
+    // prueba la parte NUEVA: que `CreateCampaign` efectivamente puebla ese campo desde
+    // `manualContacts[].variables` para los 3 caminos (crudo/vinculado/ausente).
+    it('D4.e: manualContact CRUDO con variables → CampaignRecipient.variables persistido MERGEADO tal cual', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]); // universo vacío: no matchea a ningún Client
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({
+          segment: { statuses: [] },
+          manualContacts: [{ name: 'Ana', phone: '11 2345-6789', variables: { '1': 'Ana', '2': '$500' } }],
+        }),
+      );
+
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data[0]!.clientId).toBeNull();
+      expect(recipients.data[0]!.variables).toEqual({ '1': 'Ana', '2': '$500' });
+    });
+
+    it('D4.e: manualContact VINCULADO a un Client con variables → CampaignRecipient.variables persistido igual (no se pierde al linkear)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const client = makeCandidate({ clientId: 'k1', phone: '3364111111', name: 'Cliente Real' });
+      const segmentSource = makeSegmentSource([client]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({
+          segment: { statuses: [] },
+          manualContacts: [{ name: 'Cualquiera', phone: '3364111111', variables: { '1': 'Override' } }],
+        }),
+      );
+
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data[0]!.clientId).toBe('k1');
+      expect(recipients.data[0]!.variables).toEqual({ '1': 'Override' });
+    });
+
+    it('D4.e: manualContact SIN variables → CampaignRecipient.variables persiste null (no {}), no-regresión', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const segmentSource = makeSegmentSource([]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      const result = await uc.execute(
+        makeInput({
+          segment: { statuses: [] },
+          manualContacts: [{ name: 'Sin variables', phone: '11 2345-6789' }],
+        }),
+      );
+
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data[0]!.variables).toBeNull();
+    });
+
+    it('D4.e: manualContact EXCLUIDO (opt-out) con variables → no persiste ningún recipient (un excluido no se envía)', async () => {
+      const campaignRepo = new InMemoryCampaignRepository();
+      const optedOutClient = makeCandidate({
+        clientId: 'k1',
+        phone: '3364111111',
+        whatsappOptOutAt: '2026-01-01T00:00:00.000Z',
+      });
+      const segmentSource = makeSegmentSource([optedOutClient]);
+      const templatePort = makeTemplatePort([APPROVED_TEMPLATE]);
+      const uc = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+
+      await expect(
+        uc.execute(
+          makeInput({
+            segment: { statuses: [] },
+            manualContacts: [{ name: 'Opt-out', phone: '3364111111', variables: { '1': 'X' } }],
+          }),
+        ),
+      ).rejects.toThrow(EmptySegmentError); // el único contacto quedó excluido
+
+      const list = await campaignRepo.list({});
+      expect(list.total).toBe(0);
+    });
+
     it('MAN-2/CSV-1: los TRES vacíos (segmento sin criterio + sin manuales + sin manualContacts) → UnfilteredSegmentError', async () => {
       const campaignRepo = new InMemoryCampaignRepository();
       const segmentSource = makeSegmentSource([makeCandidate({ clientId: 'c1' })]);

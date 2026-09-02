@@ -81,6 +81,12 @@ export interface CombinedResolvedRecipient {
   taskId?: string;
   taskFromStageId?: string;
   taskResultingStageId?: string | null;
+  /**
+   * external-bulk-messaging (D4.e punto 4) — literales POR-RECIPIENT del caller
+   * externo. Poblado SOLO en la rama `csv` (`csvPreDedup`); `admit()` lo arrastra
+   * por spread sin tocarlo. Ausente en segment/manual/task.
+   */
+  variables?: Record<string, string>;
 }
 
 /**
@@ -345,6 +351,9 @@ export async function resolveCombinedRecipients(params: {
           balanceDue: candidate.balanceDue,
           status: candidate.status ?? 'unknown',
           source: 'csv',
+          // external-bulk-messaging (D4.e punto 4) — pass-through del literal
+          // por-recipient (ausente en el resto de los dominios).
+          ...(res.variables !== undefined ? { variables: res.variables } : {}),
         });
         continue;
       }
@@ -357,6 +366,7 @@ export async function resolveCombinedRecipients(params: {
         balanceDue: null,
         status: 'no_cliente',
         source: 'csv',
+        ...(res.variables !== undefined ? { variables: res.variables } : {}),
       });
     }
   }
@@ -639,7 +649,10 @@ export function normalizeManualContacts(raw: ManualContactInput[] | undefined): 
     const name = c.name.trim();
     const phone = c.phone.trim();
     if (name === '' && phone === '') continue;
-    out.push({ name, phone });
+    // external-bulk-messaging (D4.e punto 2) — `variables` viaja TAL CUAL (solo
+    // `name`/`phone` se trimean); ausente ⇒ ausente (ni siquiera la key queda
+    // seteada a `undefined`, para no ensuciar un `toEqual` estricto downstream).
+    out.push(c.variables !== undefined ? { name, phone, variables: c.variables } : { name, phone });
   }
   return out;
 }

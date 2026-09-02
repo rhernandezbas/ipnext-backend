@@ -685,6 +685,8 @@ import { PrismaRbacPermissionRepository } from '../adapters/prisma/PrismaRbacPer
 import { PrismaAuditEventRepository } from '../adapters/prisma/PrismaAuditEventRepository';
 import { PrismaSessionRepository } from '../adapters/prisma/PrismaSessionRepository';
 import { auditMutationsMiddleware } from './middleware/auditMutationsMiddleware';
+import { machineActorMiddleware } from './middleware/machineActorMiddleware';
+import { API_MESSAGING_USER_LOGIN } from '@domain/constants/machineUsers';
 import { PrismaRbacUserRoleRepository } from '../adapters/prisma/PrismaRbacUserRoleRepository';
 import { PrismaRbacRolePermissionRepository } from '../adapters/prisma/PrismaRbacRolePermissionRepository';
 import { requirePermission } from './middleware/requirePermission';
@@ -923,6 +925,17 @@ import { createTaskStageConfigRouter } from './routes/taskStageConfig.routes';
 import { PrismaTaskStageTransitionConfigRepository } from '../adapters/prisma/PrismaTaskStageTransitionConfigRepository';
 import { GetTaskStageTransitionConfig } from '@application/use-cases/GetTaskStageTransitionConfig';
 import { SetTaskStageTransitionConfig } from '@application/use-cases/SetTaskStageTransitionConfig';
+// external-bulk-messaging (B4a/B4b, D7) — envío masivo WhatsApp M2M vía API
+// Externa, preview de 2 pasos (validate → send) + admin de templates + config.
+import { createExternalMessagingRouter } from './routes/external-messaging.routes';
+import { createExternalBulkMessagingConfigRouter } from './routes/externalBulkMessagingConfig.routes';
+import { ValidateExternalBulk } from '@application/use-cases/messaging/ValidateExternalBulk';
+import { SendExternalBulk } from '@application/use-cases/messaging/SendExternalBulk';
+import { GetExternalBulkCampaign } from '@application/use-cases/messaging/GetExternalBulkCampaign';
+import { GetExternalBulkConfig } from '@application/use-cases/messaging/GetExternalBulkConfig';
+import { SetExternalBulkConfig } from '@application/use-cases/messaging/SetExternalBulkConfig';
+import { PrismaExternalBulkPreviewRepository } from '../adapters/prisma/PrismaExternalBulkPreviewRepository';
+import { PrismaExternalBulkMessagingConfigRepository } from '../adapters/prisma/PrismaExternalBulkMessagingConfigRepository';
 // finance-growth Fase 1 — ingest global de cobranza GR (design.md Decision 4b).
 import { createFinanceGrowthRouter } from './routes/financeGrowth.routes';
 import { ListFinanceInvoiceTypes } from '@application/use-cases/finance/ListFinanceInvoiceTypes';
@@ -1266,6 +1279,16 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // headroom. body-parser's req._body guard makes the second (global) parse a
   // no-op, same safety net as the two overrides above.
   app.use('/api/messaging/bulk', express.json({ limit: '2mb' }));
+  // external-bulk-messaging (fix wave F1, finding F1) — MISMO patrón que los
+  // tres overrides de arriba, y por la MISMA razón. El `express.json({limit:
+  // '2mb'})` que este mount declaraba junto a su router era CÓDIGO MUERTO: el
+  // `app.use(express.json())` global de la línea siguiente corre ANTES (se
+  // registra antes) y deja `req._body` seteado, así que body-parser saltea el
+  // segundo parseo y el `limit` nunca se aplica. Resultado: un lote de 1000
+  // destinatarios (~145 KB) moría con 413 `entity.too.large` ANTES del auth y
+  // del errorHandler — con `maxPerRequest` en 500 por default, la feature era
+  // inusable en su tamaño nominal y el 422 de negocio inalcanzable.
+  app.use('/api/external/v1/messaging/bulk', express.json({ limit: '2mb' }));
   app.use(express.json());
   app.use(cookieParser());
 
@@ -3513,6 +3536,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
         .filter((a) => (a as string) !== BULK_SUPER_ADMIN_SENTINEL);
     };
 
+    // fix wave F1 (F9 / R2 #8) — UNA sola instancia de `CreateCampaign` para el
+    // router admin Y para el camino externo. Antes el externo se construía con
+    // 3 de las 7 dependencias (`new CreateCampaign(campaignRepo,
+    // customerAdapter, templatePort)`): si un futuro cambio dejara al `send`
+    // externo pasar `manualClientIds`/`taskStageIds`, `resolveCombinedRecipients`
+    // encontraría el source `undefined` y tiraría un `Error` genérico → 500 en
+    // vez del error tipado. Compartir la instancia elimina la clase entera.
+    const bulkCreateCampaign = new CreateCampaign(campaignRepo, customerAdapter, templatePort, customerAdapter, taskRecipientSource, taskStageConfigRepo, taskStageTransitionConfigRepoForBulk);
+
     app.use('/api/messaging/bulk', createMessagingBulkRouter(
       new ListMessagingTemplates(templatePort),
       // manual-recipients (MAN-5) — customerAdapter también implementa
@@ -3530,7 +3562,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // manual-recipients (MAN-1): customerAdapter como ManualRecipientSource
       // (misma instancia) resuelve la lista manual combinable con el segmento.
       // bulk-task-recipients (D3/D5, B6) — mismos 2 args opcionales al final.
-      new CreateCampaign(campaignRepo, customerAdapter, templatePort, customerAdapter, taskRecipientSource, taskStageConfigRepo, taskStageTransitionConfigRepoForBulk),
+      bulkCreateCampaign,
       campaignRunner,
       new GetCampaign(campaignRepo),
       new ListCampaigns(campaignRepo),
@@ -3555,6 +3587,81 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new ListChatwootLabels(chatwootGatewayForBulk),
       new CreateChatwootLabel(chatwootGatewayForBulk),
     ));
+
+    // ─── external-bulk-messaging (B4a/B4b, D7) — envío masivo WhatsApp M2M vía
+    // API Externa, preview de 2 pasos (validate → send) + admin de templates.
+    // ⚠️ ORDEN LOAD-BEARING (COMP-1): este mount DEBE quedar registrado ANTES
+    // del mount GLOBAL más abajo (prefijo `/api/external/v1` + `createApiKeyMiddleware()` sin key dedicada)
+    // más abajo — Express matchea en orden de registro; si cayera DESPUÉS, la
+    // key GLOBAL interceptaría `/messaging/bulk/*` y la key dedicada
+    // (config.externalMessaging.apiKey) nunca se evaluaría (AUTH-2 roto en
+    // runtime aunque el middleware aislado siga verde). Pineado por
+    // `external-bulk-messaging-composition.test.ts`.
+    //
+    // DEVIATION de tasks.md 4.6 (que sugería un bloque self-contained pegado a
+    // la línea del mount global, molde "Change 3" de abajo): se prefirió
+    // REUSAR `campaignRepo`/`templatePort`/`chatwootGatewayForBulk`/
+    // `featureFlagRepoForBulk`/`campaignRunner` de ESTE bloque en vez de
+    // duplicar un segundo `CampaignRunner`/`SendCampaign` — un segundo runner
+    // competiría por el MISMO lock global (D6) con wiring redundante (rate
+    // limiter, projector, advisory-lock connection) sin ganar nada; el orden
+    // de REGISTRO (lo único que COMP-1 exige) sigue siendo el mismo, porque
+    // este bloque entero se ejecuta antes del mount global más abajo.
+    const externalBulkPreviewRepo = new PrismaExternalBulkPreviewRepository();
+    const externalBulkConfigRepo = new PrismaExternalBulkMessagingConfigRepository();
+    app.use('/api/external/v1/messaging/bulk',
+      createApiKeyMiddleware(config.externalMessaging.apiKey),
+      // fix wave F1 (F6, AUDIT-1/2) — actor MÁQUINA para la auditoría genérica.
+      // `auditMutationsMiddleware` (global, arriba) lee `req.user` en
+      // `res.on('finish')`; sin esto TODOS los POST de este router quedaban
+      // como `actorLogin:'anonymous'`, indistinguibles de cualquier otro M2M.
+      // `api-messaging` es un RbacUser REAL — el MISMO de `Campaign.createdById`.
+      machineActorMiddleware(rbacUserRepo, API_MESSAGING_USER_LOGIN),
+      // fix wave F1 (F1) — el `express.json({limit:'2mb'})` que vivía acá era
+      // código muerto (el global lo precede). Se movió al bloque de parsers
+      // path-scoped, ANTES del global.
+      // fix wave F1 (F7) — el rate limiter de escritura ya NO se aplica a TODO
+      // el prefijo: entra por `writeRateLimiter` y el router lo pone SOLO en
+      // los POST, para que el polling de `GET /campaigns/:id` (que SEND-8 le
+      // pide al caller tras un 409) no consuma el presupuesto de envíos.
+      createExternalMessagingRouter({
+        writeRateLimiter: createExternalWriteRateLimiter(),
+        validateExternalBulk: new ValidateExternalBulk(
+          externalBulkPreviewRepo,
+          externalBulkConfigRepo,
+          campaignRepo,
+          templatePort,
+          customerAdapter,
+          chatwootGatewayForBulk,
+          featureFlagRepoForBulk,
+          rbacUserRepo,
+        ),
+        sendExternalBulk: new SendExternalBulk(
+          externalBulkPreviewRepo,
+          externalBulkConfigRepo,
+          campaignRepo,
+          templatePort,
+          chatwootGatewayForBulk,
+          featureFlagRepoForBulk,
+          rbacUserRepo,
+          bulkCreateCampaign,
+          campaignRunner,
+        ),
+        getExternalBulkCampaign: new GetExternalBulkCampaign(campaignRepo, rbacUserRepo),
+        listTemplates: new ListMessagingTemplates(templatePort),
+        getTemplate: new GetTemplate(templatePort),
+        createTemplate: new CreateTemplate(templatePort),
+        submitTemplate: new SubmitTemplateForApproval(templatePort),
+        featureFlags: featureFlagRepoForBulk,
+      }),
+    );
+    // [external-bulk-mount-end] — MARCADOR load-bearing (fix wave F1, R3 #5).
+    // `external-bulk-messaging-composition.test.ts` recorta el bloque del mount
+    // desde `app.use('/api/external/v1/messaging/bulk'` HASTA esta linea para
+    // assertear sobre el. Antes cortaba en el primer `indexOf(');')`, que cae
+    // dentro del primer `new ValidateExternalBulk(...)`: la ventana quedaba
+    // truncada y los `expect(window).not.toMatch(...)` pasaban por vacuidad.
+    // NO borrar ni reformatear sin actualizar ese test.
   }
 
   // ─── Change 3 (templates CRUD) — VER/CREAR/SUBMIT/BORRAR templates WhatsApp ──
@@ -3657,6 +3764,26 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       new UpdateTaskStageRecipientConfig(taskStageConfigRepoForRoute),
       new GetTaskStageTransitionConfig(taskStageTransitionConfigRepo),
       new SetTaskStageTransitionConfig(taskStageTransitionConfigRepo, stageRepo),
+    ));
+  }
+
+  // ─── external-bulk-messaging (D7.c, CONFIG-1..3) — GET/PUT topes editables ──
+  // Molde EXACTO del bloque de arriba (task-stages): instancia PROPIA del repo
+  // (mismo criterio anti-interleave) — stateless, cualquier instancia sirve.
+  // El toggle del kill-switch NO vive acá: reusa
+  // PATCH /api/feature-flags/messaging-external-bulk-enabled (gate admin.flags,
+  // ya existente).
+  {
+    const externalBulkConfigRepoForRoute = new PrismaExternalBulkMessagingConfigRepository();
+    app.use('/api/messaging/config/external-bulk', createExternalBulkMessagingConfigRouter(
+      authAdapter,
+      sessionRepo,
+      {
+        read: requirePerm('messaging', 'read'),
+        manage: requirePerm('messaging', 'manage'),
+      },
+      new GetExternalBulkConfig(externalBulkConfigRepoForRoute),
+      new SetExternalBulkConfig(externalBulkConfigRepoForRoute),
     ));
   }
 

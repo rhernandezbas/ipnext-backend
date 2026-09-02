@@ -20,6 +20,7 @@ import { bootstrapFinanceSnapshotJob } from './infrastructure/scheduling/bootstr
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
+import { bootstrapApiMessagingUser } from './infrastructure/bootstrap/bootstrapApiMessagingUser';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
@@ -46,6 +47,16 @@ void (async () => {
   // DECOUPLED from Gestión Real (deprecated) — it used to be seeded ONLY inside
   // bootstrapGestionRealIngest, behind GR's early-returns (GR off → no reporter).
   await bootstrapSystemUsers(new PrismaRbacUserRepository(), {
+    passwordHash: bcrypt.hashSync(randomUUID(), 10),
+  });
+
+  // (a'') external-bulk-messaging (D2) — system "api-messaging" user, MUST exist
+  // before the first `send`: SendExternalBulk stamps it as Campaign.createdById
+  // (D3.a's daily quota filter reads it back). Runs UNCONDITIONALLY and idempotent,
+  // independiente del flag `messaging-external-bulk-enabled` (dark-launch friendly —
+  // el usuario existe aunque la feature esté apagada). Hash inusable, distinto por
+  // deploy, NUNCA literal en git (D2).
+  await bootstrapApiMessagingUser(new PrismaRbacUserRepository(), {
     passwordHash: bcrypt.hashSync(randomUUID(), 10),
   });
 

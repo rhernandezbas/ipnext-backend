@@ -6,6 +6,13 @@ import { toWhatsAppE164 } from './toWhatsAppE164';
 export interface ManualContactInput {
   name: string;
   phone: string;
+  /**
+   * external-bulk-messaging (D4.e punto 1) — literales POR-RECIPIENT del caller
+   * externo. Ausente/`undefined` en TODO dominio que no lo usa (manual UI/CSV
+   * humano). Pass-through puro acá: `matchManualContacts` NO lo valida ni lo
+   * transforma, solo lo carga en las resoluciones que SÍ se envían.
+   */
+  variables?: Record<string, string>;
 }
 
 /**
@@ -15,8 +22,8 @@ export interface ManualContactInput {
  * D9) ANTES de intentar el match.
  */
 export type ManualContactResolution =
-  | { kind: 'linked'; candidate: CampaignRecipientCandidate; contactName: string }
-  | { kind: 'raw'; name: string; phone: string; phoneNormalized: string; phoneE164: string }
+  | { kind: 'linked'; candidate: CampaignRecipientCandidate; contactName: string; variables?: Record<string, string> }
+  | { kind: 'raw'; name: string; phone: string; phoneNormalized: string; phoneE164: string; variables?: Record<string, string> }
   | { kind: 'excluded'; name: string; phone: string; reason: 'sin_nombre' | 'sin_telefono' | 'telefono_invalido' | 'opt_out' };
 
 /**
@@ -61,7 +68,7 @@ export async function matchManualContacts(
     }
 
     const matched = byPhone.get(phoneNormalized);
-    if (matched) return { kind: 'linked', candidate: matched, contactName: name };
+    if (matched) return { kind: 'linked', candidate: matched, contactName: name, variables: contact.variables };
 
     // M1 (review fix wave) — sin match EXACTO (D3), pero compliance es NO
     // NEGOCIABLE: un crudo cuyo SUFIJO coincide con un Client opted-out se
@@ -73,7 +80,7 @@ export async function matchManualContacts(
       return { kind: 'excluded', name, phone, reason: 'opt_out' };
     }
 
-    return { kind: 'raw', name, phone, phoneNormalized, phoneE164 };
+    return { kind: 'raw', name, phone, phoneNormalized, phoneE164, variables: contact.variables };
   });
 }
 

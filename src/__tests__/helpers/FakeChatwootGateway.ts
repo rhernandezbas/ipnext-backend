@@ -211,8 +211,16 @@ export class FakeChatwootGateway implements ChatwootGateway {
   // ─── campaign-chatwoot-label (design D1/D2, CLBL-1) — listAccountLabels ────
   /** Poblar antes de llamar `listAccountLabels()`. */
   public accountLabelsResult: ChatwootLabelDto[] = [];
+  /**
+   * external-bulk-messaging (VAL-5) — simula Chatwoot inalcanzable al listar
+   * labels. El use case (`ValidateExternalBulk`) envuelve CUALQUIER falla del
+   * gateway en `ChatwootUnavailableError` (mismo criterio que el resto del
+   * port) — este fake solo necesita lanzar ALGO, no el tipo exacto.
+   */
+  public failListAccountLabels = false;
 
   async listAccountLabels(): Promise<ChatwootLabelDto[]> {
+    if (this.failListAccountLabels) throw new Error('fake: Chatwoot unreachable (listAccountLabels)');
     return this.accountLabelsResult;
   }
 

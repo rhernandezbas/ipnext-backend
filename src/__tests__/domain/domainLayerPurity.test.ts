@@ -73,3 +73,53 @@ describe('domain layer purity (L5)', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * external-bulk-messaging fix wave F1 (finding F8) — el MISMO guard, una capa
+ * mas afuera: `application/` no puede importar de `infrastructure/` (CLAUDE.md,
+ * "DIP estricto"). Los 3 use cases nuevos de external-bulk importaban
+ * `API_MESSAGING_USER_LOGIN` desde `@infrastructure/bootstrap/...`; la constante
+ * se mudo a `@domain/constants/machineUsers` y el bootstrap la RE-EXPORTA (cero
+ * ruptura de sus consumidores de infraestructura).
+ *
+ * La allowlist pinea la deuda PREEXISTENTE (4 entradas, ajenas a este change)
+ * para que NO CREZCA: cualquier violacion nueva rompe este test.
+ */
+const APPLICATION_PREEXISTING_DEBT = new Set([
+  'use-cases/IngestClosedServiceOrders.ts -> @infrastructure/adapters/search/sequenceNumberClause',
+  'use-cases/gigared/ChangeTvPassword.ts -> @infrastructure/security/gigaredPassword',
+  'use-cases/gigared/RegisterGigaredAccount.ts -> @infrastructure/security/gigaredPassword',
+  'use-cases/TriggerUispSync.ts -> @infrastructure/scheduling/UispSyncScheduler',
+]);
+
+describe('application layer purity (external-bulk-messaging fix wave F1, F8)', () => {
+  const applicationDir = path.resolve(__dirname, '..', '..', 'application');
+  const files = listTsFiles(applicationDir);
+
+  it('encuentra archivos de application (el guard no escanea el vacio)', () => {
+    expect(files.length).toBeGreaterThan(50);
+  });
+
+  it('ningun archivo de src/application importa de infrastructure/', () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      const src = fs.readFileSync(file, 'utf8');
+      // Solo lineas de import/export-from efectivas (comentarios fuera —
+      // regla "tests sobre texto filtran comentarios").
+      const effective = src
+        .split('\n')
+        .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
+        .join('\n');
+      const importFrom = /(?:import|export)[^;]*?from\s+['"]([^'"]+)['"]/g;
+      let match: RegExpExecArray | null;
+      while ((match = importFrom.exec(effective)) !== null) {
+        const spec = match[1]!;
+        if (spec.startsWith('@infrastructure/') || /\.\.\/(?:\.\.\/)*infrastructure\//.test(spec)) {
+          const key = `${path.relative(applicationDir, file).replace(/\\/g, '/')} -> ${spec}`;
+          if (!APPLICATION_PREEXISTING_DEBT.has(key)) offenders.push(key);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

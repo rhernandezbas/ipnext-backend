@@ -12,6 +12,7 @@ import {
   ListRecipientsKeysetFilter,
 } from '@domain/ports/CampaignRepository';
 import { PaginatedResult } from '@application/dto/pagination';
+import { UniqueConstraintViolationError } from '@domain/errors/persistence';
 
 const DEFAULT_PAGE_SIZE = 25;
 
@@ -29,7 +30,22 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
     this.now = opts?.now ?? (() => new Date());
   }
 
+  /**
+   * fix wave F2 (NEW-1) — paridad campo-a-campo con el `@@unique([externalIdempotencyKey])`
+   * real de `PrismaCampaignRepository` (D1.a): sin este chequeo, un test de
+   * carrera contra el in-memory nunca podia ejercitar el path REAL de
+   * `UniqueConstraintViolationError` que `SendExternalBulk` cachea (fix wave F1
+   * F5) — quedaba testeado solo con un spy que inyectaba el error a mano.
+   */
   async create(data: CampaignCreateData): Promise<Campaign> {
+    if (data.externalIdempotencyKey != null) {
+      const clash = Array.from(this.campaigns.values()).find(
+        (c) => c.externalIdempotencyKey === data.externalIdempotencyKey,
+      );
+      if (clash) {
+        throw new UniqueConstraintViolationError('Campaign', 'externalIdempotencyKey');
+      }
+    }
     const campaign: Campaign = {
       id: randomUUID(),
       name: data.name,
@@ -37,6 +53,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
       templateName: data.templateName ?? null,
       templateBody: data.templateBody ?? null,
       chatwootLabel: data.chatwootLabel ?? null,
+      externalIdempotencyKey: data.externalIdempotencyKey ?? null,
       segment: data.segment,
       variableSpec: data.variableSpec,
       recipientStatuses: data.recipientStatuses ?? [],
@@ -60,6 +77,30 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
   async findById(id: string): Promise<Campaign | null> {
     const c = this.campaigns.get(id);
     return c ? { ...c } : null;
+  }
+
+  /** external-bulk-messaging (D3, GUARD-0) — lookup por la key dedicada del caller M2M. */
+  async findByExternalIdempotencyKey(key: string): Promise<Campaign | null> {
+    const c = Array.from(this.campaigns.values()).find((x) => x.externalIdempotencyKey === key);
+    return c ? { ...c } : null;
+  }
+
+  /**
+   * external-bulk-messaging (D3.a/D6, fix wave F1 — finding F2) — cuenta los
+   * `CampaignRecipient` AUTORIZADOS (`createdAt >= since`, inclusivo; status
+   * NOT IN skipped/opted_out) de campañas creadas por `createdById`. Mirror
+   * EXACTO campo-a-campo del filtro de `PrismaCampaignRepository`.
+   */
+  async countAuthorizedRecipientsByCreatorSince(createdById: string, since: Date): Promise<number> {
+    let count = 0;
+    for (const r of this.recipients.values()) {
+      if (r.status === 'skipped' || r.status === 'opted_out') continue;
+      if (new Date(r.createdAt).getTime() < since.getTime()) continue;
+      const campaign = this.campaigns.get(r.campaignId);
+      if (campaign?.createdById !== createdById) continue;
+      count++;
+    }
+    return count;
   }
 
   /**
@@ -134,6 +175,7 @@ export class InMemoryCampaignRepository implements CampaignRepository, ActiveCam
         contactName: row.contactName ?? null,
         phoneNormalized: row.phoneNormalized,
         phoneE164: row.phoneE164,
+        variables: row.variables ?? null,
         status: 'queued',
         providerId: null,
         chatwootConversationId: null,

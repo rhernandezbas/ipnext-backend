@@ -1,4 +1,5 @@
 import type { Campaign, CampaignRecipient } from '@domain/entities/campaign';
+import { UniqueConstraintViolationError } from '@domain/errors/persistence';
 import type {
   CampaignRepository,
   ActiveCampaignLookup,
@@ -11,7 +12,20 @@ import type {
   ListRecipientsKeysetFilter,
 } from '@domain/ports/CampaignRepository';
 import type { PaginatedResult } from '@application/dto/pagination';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../database/prisma';
+
+/**
+ * external-bulk-messaging (D4.c, scope addition B1) — molde
+ * `PrismaPortalNotificationRepository.toJson`: `undefined`/`null` → SQL NULL
+ * explícito (`Prisma.JsonNull`), nunca la key omitida (createMany no tolera
+ * `undefined` en una columna JSON nullable).
+ */
+function toRecipientVariablesJson(
+  value: Record<string, string> | null | undefined,
+): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  return value === undefined || value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
+}
 
 /**
  * messaging-bulk (F2, Batch 7, T7.4) — implementación Prisma real de
@@ -34,6 +48,7 @@ export function toCampaign(row: any): Campaign {
     templateName: row.templateName ?? null,
     templateBody: row.templateBody ?? null,
     chatwootLabel: row.chatwootLabel ?? null,
+    externalIdempotencyKey: row.externalIdempotencyKey ?? null,
     segment: row.segment,
     variableSpec: row.variableSpec,
     recipientStatuses: row.recipientStatuses ?? [],
@@ -60,6 +75,7 @@ export function toCampaignRecipient(row: any): CampaignRecipient {
     contactName: row.contactName ?? null,
     phoneNormalized: row.phoneNormalized,
     phoneE164: row.phoneE164,
+    variables: (row.variables as Record<string, string> | null | undefined) ?? null,
     status: row.status,
     providerId: row.providerId ?? null,
     chatwootConversationId: row.chatwootConversationId ?? null,
@@ -88,7 +104,38 @@ export class PrismaCampaignRepository implements CampaignRepository, ActiveCampa
     return rows.map(toCampaign);
   }
 
+  /**
+   * fix wave F1 (finding F5) — el `@unique` de `externalIdempotencyKey` (D1.a)
+   * es el BACKSTOP de carrera: dos `send` concurrentes con la MISMA key que
+   * AMBOS pasaron el guard-0 chocan acá. Sin traducción, ese P2002 sube crudo
+   * hasta el `errorHandler` como un 500 — cuando la respuesta correcta es la
+   * campaña GANADORA (SEND-6). La traducción vive en el ADAPTER: `application/`
+   * reacciona a `UniqueConstraintViolationError` sin conocer a Prisma.
+   *
+   * fix wave F2 (NEW-1) — la traducción tenía CERO scope: CUALQUIER P2002 de
+   * `campaign.create` (columna que fuera, o sin `meta.target` legible) se
+   * tragaba como `UniqueConstraintViolationError`. `SendExternalBulk` cachea
+   * ESE error puntual para responder la campaña ganadora — un P2002 de OTRA
+   * columna (o uno sin target, si Postgres algún día lo reporta distinto) no
+   * es esa carrera y no debe tragarse en silencio: sube tal cual, como
+   * cualquier otro error no mapeado.
+   */
   async create(data: CampaignCreateData): Promise<Campaign> {
+    try {
+      return await this.createRow(data);
+    } catch (err) {
+      if (err && typeof err === 'object' && (err as { code?: string }).code === 'P2002') {
+        const target = (err as { meta?: { target?: unknown } }).meta?.target;
+        const targets = Array.isArray(target) ? target.map(String) : typeof target === 'string' ? [target] : [];
+        if (targets.includes('externalIdempotencyKey')) {
+          throw new UniqueConstraintViolationError('Campaign', 'externalIdempotencyKey');
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async createRow(data: CampaignCreateData): Promise<Campaign> {
     const row = await prisma.campaign.create({
       data: {
         name: data.name,
@@ -96,6 +143,7 @@ export class PrismaCampaignRepository implements CampaignRepository, ActiveCampa
         templateName: data.templateName ?? null,
         templateBody: data.templateBody ?? null,
         chatwootLabel: data.chatwootLabel ?? null,
+        externalIdempotencyKey: data.externalIdempotencyKey ?? null,
         segment: data.segment as never,
         variableSpec: data.variableSpec as never,
         recipientStatuses: data.recipientStatuses ?? [],
@@ -110,6 +158,29 @@ export class PrismaCampaignRepository implements CampaignRepository, ActiveCampa
   async findById(id: string): Promise<Campaign | null> {
     const row = await prisma.campaign.findUnique({ where: { id } });
     return row ? toCampaign(row) : null;
+  }
+
+  /** external-bulk-messaging (D3, GUARD-0) — lookup por la key dedicada del caller M2M. */
+  async findByExternalIdempotencyKey(key: string): Promise<Campaign | null> {
+    const row = await prisma.campaign.findUnique({ where: { externalIdempotencyKey: key } });
+    return row ? toCampaign(row) : null;
+  }
+
+  /**
+   * external-bulk-messaging (D3.a/D6, fix wave F1 — finding F2) — cuenta lo
+   * AUTORIZADO: `CampaignRecipient` con `createdAt >= since` (inclusivo) y
+   * `status NOT IN (skipped, opted_out)`, de campañas cuyo `createdById`
+   * matchea. Filtro por relación (`campaign: {createdById}`) en vez de un JOIN
+   * manual — el mismo criterio que el resto del repo.
+   */
+  async countAuthorizedRecipientsByCreatorSince(createdById: string, since: Date): Promise<number> {
+    return prisma.campaignRecipient.count({
+      where: {
+        createdAt: { gte: since },
+        status: { notIn: ['skipped', 'opted_out'] as never },
+        campaign: { createdById },
+      },
+    });
   }
 
   async update(id: string, patch: CampaignPatch): Promise<Campaign> {
@@ -188,6 +259,7 @@ export class PrismaCampaignRepository implements CampaignRepository, ActiveCampa
           contactName: r.contactName ?? null,
           phoneNormalized: r.phoneNormalized,
           phoneE164: r.phoneE164,
+          variables: toRecipientVariablesJson(r.variables),
           taskId: r.taskId ?? null,
           taskFromStageId: r.taskFromStageId ?? null,
           taskResultingStageId: r.taskResultingStageId ?? null,

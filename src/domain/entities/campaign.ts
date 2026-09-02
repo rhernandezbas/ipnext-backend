@@ -83,6 +83,14 @@ export interface Campaign {
    * actual exacto, blast radius nulo).
    */
   chatwootLabel: string | null;
+  /**
+   * external-bulk-messaging (D1.a) — molde `ChatMessage.idempotencyKey`.
+   * `null` en TODA campaña creada desde la UI admin (dominio distinto); solo
+   * lo setean las campañas creadas por `SendExternalBulk` (`api-messaging`).
+   * `@unique` a nivel DB — backstop de carrera (P2002) para 2 `send`
+   * concurrentes con la MISMA `Idempotency-Key`.
+   */
+  externalIdempotencyKey: string | null;
   segment: CampaignSegment;
   variableSpec: CampaignVariableSpec;
   /**
@@ -128,6 +136,14 @@ export interface CampaignRecipient {
   phoneNormalized: string;
   /** Destino REAL enviado (`toWhatsAppE164`) — auditable. */
   phoneE164: string;
+  /**
+   * external-bulk-messaging (D4.c) — literales POR-RECIPIENT del caller
+   * externo, snapshot auditable de lo mandado a ESTE destinatario. `null` en
+   * todos los dominios que no lo usan (segment/manual/csv/task) y en toda fila
+   * pre-existente. Persistencia SOLO en B1 — el merge/consumo en el render es
+   * B3 (`SendExternalBulk`).
+   */
+  variables: Record<string, string> | null;
   status: CampaignRecipientStatus;
   /** SM… de Twilio cuando `status === 'sent'`. */
   providerId: string | null;

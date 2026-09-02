@@ -145,6 +145,9 @@ export class CreateCampaign {
       hasRawRecipients,
       total: resolved.length,
       createdById: input.createdById,
+      // external-bulk-messaging (D1.a) — pass-through puro; ausente ⇒ `null`
+      // (comportamiento actual de la UI admin, intacto).
+      externalIdempotencyKey: input.externalIdempotencyKey ?? null,
     });
 
     await this.campaignRepo.bulkCreateRecipients(
@@ -161,6 +164,9 @@ export class CreateCampaign {
         taskId: r.taskId ?? null,
         taskFromStageId: r.taskFromStageId ?? null,
         taskResultingStageId: r.taskResultingStageId ?? null,
+        // external-bulk-messaging (D4.e punto 6) — literales POR-RECIPIENT del
+        // caller externo; `undefined` (todo dominio que no lo usa) → `null`.
+        variables: r.variables ?? null,
       })),
     );
 

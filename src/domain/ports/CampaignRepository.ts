@@ -34,6 +34,12 @@ export interface CampaignCreateData {
   recipientStatuses?: string[];
   hasRawRecipients?: boolean;
   createdById: string;
+  /**
+   * external-bulk-messaging (D1.a) — presente SOLO en campañas creadas por
+   * `SendExternalBulk` (`api-messaging`). Ausente/`undefined` → persiste
+   * `null` (UI admin, comportamiento actual sin cambios).
+   */
+  externalIdempotencyKey?: string | null;
 }
 
 /** Campos mutables del header durante su corrida (last-write-wins; snapshot completo). */
@@ -62,6 +68,12 @@ export interface CampaignRecipientCreateRow {
   taskId?: string | null;
   taskFromStageId?: string | null;
   taskResultingStageId?: string | null;
+  /**
+   * external-bulk-messaging (D4.c) — literales POR-RECIPIENT del caller
+   * externo. Ausente/`undefined` → persiste `null` (aditivo, resto de
+   * dominios no lo usan). Persistencia SOLO en B1.
+   */
+  variables?: Record<string, string> | null;
 }
 
 export interface CampaignRecipientPatch {
@@ -120,6 +132,23 @@ export interface CampaignRepository {
   /** Crea el header en `pending` + persiste `total` (ya resuelto por el caller). */
   create(data: CampaignCreateData): Promise<Campaign>;
   findById(id: string): Promise<Campaign | null>;
+  /** external-bulk-messaging (D3, GUARD-0) — lookup por la key dedicada del caller M2M; `null` = key nunca usada. */
+  findByExternalIdempotencyKey(key: string): Promise<Campaign | null>;
+  /**
+   * external-bulk-messaging (D3.a/D6, REVISADO por el fix wave F1 — finding F2)
+   * — cupo diario: cuenta los `CampaignRecipient` AUTORIZADOS desde `since`
+   * (`createdAt >= since`, INCLUSIVO) de campañas creadas por `createdById`,
+   * excluyendo `skipped`/`opted_out` (a esos nunca se les autorizó un mensaje).
+   *
+   * Contar `status:'sent'` (la versión original) hacía el cupo INEXIGIBLE: el
+   * envío real corre asincrónico detrás del `CampaignRunner`, así que entre el
+   * `send` que autoriza N destinatarios y el momento en que salen, la cuenta
+   * devuelve ~0 y el siguiente lote pasa igual — N lotes concurrentes
+   * multiplican el tope. Contando lo CREADO, cada intento autorizado quema cupo
+   * en el instante en que la `Campaign` nace, que es cuando el compromiso de
+   * gasto ya está tomado.
+   */
+  countAuthorizedRecipientsByCreatorSince(createdById: string, since: Date): Promise<number>;
   /** Actualiza progreso/estado del header (snapshot completo de los campos provistos). */
   update(id: string, patch: CampaignPatch): Promise<Campaign>;
   list(query: ListCampaignsQuery): Promise<PaginatedResult<Campaign>>;

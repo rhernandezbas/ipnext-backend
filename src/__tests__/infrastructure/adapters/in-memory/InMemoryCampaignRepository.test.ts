@@ -4,6 +4,7 @@
  */
 import { InMemoryCampaignRepository } from '@infrastructure/adapters/in-memory/InMemoryCampaignRepository';
 import type { CampaignCreateData } from '@domain/ports/CampaignRepository';
+import { UniqueConstraintViolationError } from '@domain/errors/persistence';
 
 function makeCreateData(overrides: Partial<CampaignCreateData> = {}): CampaignCreateData {
   return {
@@ -177,6 +178,138 @@ describe('InMemoryCampaignRepository', () => {
       expect(contact?.contactName).toBe('Ana');
       expect(contact?.status).toBe('queued');
     });
+  });
+
+  // ── external-bulk-messaging (1.7): externalIdempotencyKey + cupo diario ──
+  describe('external-bulk-messaging (1.7)', () => {
+    it('create persiste externalIdempotencyKey; ausente queda null', async () => {
+      const repo = new InMemoryCampaignRepository();
+
+      const withKey = await repo.create(makeCreateData({ externalIdempotencyKey: 'idem-1' }));
+      const withoutKey = await repo.create(makeCreateData());
+
+      expect(withKey.externalIdempotencyKey).toBe('idem-1');
+      expect(withoutKey.externalIdempotencyKey).toBeNull();
+    });
+
+    it('findByExternalIdempotencyKey: hit devuelve la campaña, miss devuelve null', async () => {
+      const repo = new InMemoryCampaignRepository();
+      const created = await repo.create(makeCreateData({ externalIdempotencyKey: 'idem-1' }));
+
+      const hit = await repo.findByExternalIdempotencyKey('idem-1');
+      const miss = await repo.findByExternalIdempotencyKey('does-not-exist');
+
+      expect(hit?.id).toBe(created.id);
+      expect(miss).toBeNull();
+    });
+
+    /**
+     * fix wave F1 (F2) — el cupo diario cuenta lo AUTORIZADO (recipients
+     * CREADOS hoy para el creador pedido, status NOT IN skipped/opted_out), no
+     * lo ya enviado. `delivered` cuenta; `queued`/`sent`/`failed` tambien.
+     */
+    it('countAuthorizedRecipientsByCreatorSince cuenta lo autorizado del creador pedido dentro de la ventana', async () => {
+      const since = new Date('2026-09-02T03:00:00.000Z'); // 00:00 ART
+      const repo = new InMemoryCampaignRepository({ now: () => new Date('2026-09-02T10:00:00.000Z') });
+
+      const mine = await repo.create(makeCreateData({ createdById: 'api-messaging' }));
+      const other = await repo.create(makeCreateData({ createdById: 'admin-user' }));
+
+      const rows = await repo.bulkCreateRecipients(mine.id, [
+        { clientId: 'c1', phoneNormalized: '111', phoneE164: '+5491111' }, // queued → CUENTA (autorizado)
+        { clientId: 'c2', phoneNormalized: '222', phoneE164: '+5492222' }, // sent → cuenta
+        { clientId: 'c3', phoneNormalized: '333', phoneE164: '+5493333' }, // delivered → cuenta
+        { clientId: 'c5', phoneNormalized: '555', phoneE164: '+5495555' }, // failed → cuenta (se intento)
+        { clientId: 'c6', phoneNormalized: '666', phoneE164: '+5496666' }, // opted_out → NO cuenta
+        { clientId: 'c7', phoneNormalized: '777', phoneE164: '+5497777' }, // skipped → NO cuenta
+      ]);
+      const otherRows = await repo.bulkCreateRecipients(other.id, [
+        { clientId: 'c4', phoneNormalized: '444', phoneE164: '+5494444' }, // OTRO creador → NO cuenta
+      ]);
+
+      await repo.updateRecipient(rows[1]!.id, { status: 'sent', sentAt: '2026-09-02T10:00:00.000Z' });
+      await repo.updateRecipient(rows[2]!.id, { status: 'delivered' });
+      await repo.updateRecipient(rows[3]!.id, { status: 'failed' });
+      await repo.updateRecipient(rows[4]!.id, { status: 'opted_out' });
+      await repo.updateRecipient(rows[5]!.id, { status: 'skipped' });
+      await repo.updateRecipient(otherRows[0]!.id, { status: 'sent', sentAt: '2026-09-02T10:00:00.000Z' });
+
+      const count = await repo.countAuthorizedRecipientsByCreatorSince('api-messaging', since);
+
+      expect(count).toBe(4); // queued + sent + delivered + failed
+    });
+
+    it('countAuthorizedRecipientsByCreatorSince: la ventana es INCLUSIVA en `since` y excluye lo de ayer', async () => {
+      const since = new Date('2026-09-02T03:00:00.000Z');
+      const atBoundary = new InMemoryCampaignRepository({ now: () => since });
+      const yesterday = new InMemoryCampaignRepository({ now: () => new Date('2026-09-01T20:00:00.000Z') });
+
+      for (const repo of [atBoundary, yesterday]) {
+        const c = await repo.create(makeCreateData({ createdById: 'api-messaging' }));
+        await repo.bulkCreateRecipients(c.id, [{ clientId: 'c1', phoneNormalized: '111', phoneE164: '+5491111' }]);
+      }
+
+      expect(await atBoundary.countAuthorizedRecipientsByCreatorSince('api-messaging', since)).toBe(1);
+      expect(await yesterday.countAuthorizedRecipientsByCreatorSince('api-messaging', since)).toBe(0);
+    });
+
+    /**
+     * fix wave F2 (NEW-1) — paridad campo-a-campo con `@@unique([externalIdempotencyKey])`
+     * de `PrismaCampaignRepository`: el InMemory NO lo hacia respetar, asi que un
+     * test de carrera contra el in-memory nunca podia disparar el path real de
+     * `UniqueConstraintViolationError`.
+     */
+    it('create: una SEGUNDA campana con la MISMA externalIdempotencyKey lanza UniqueConstraintViolationError', async () => {
+      const repo = new InMemoryCampaignRepository();
+      await repo.create(makeCreateData({ externalIdempotencyKey: 'key-race' }));
+
+      await expect(repo.create(makeCreateData({ externalIdempotencyKey: 'key-race' }))).rejects.toThrow(
+        UniqueConstraintViolationError,
+      );
+      await expect(repo.create(makeCreateData({ externalIdempotencyKey: 'key-race' }))).rejects.toMatchObject({
+        entity: 'Campaign',
+        field: 'externalIdempotencyKey',
+      });
+    });
+
+    it('create: keys DISTINTAS no chocan', async () => {
+      const repo = new InMemoryCampaignRepository();
+      await repo.create(makeCreateData({ externalIdempotencyKey: 'key-a' }));
+
+      await expect(repo.create(makeCreateData({ externalIdempotencyKey: 'key-b' }))).resolves.toEqual(
+        expect.objectContaining({ externalIdempotencyKey: 'key-b' }),
+      );
+    });
+
+    it('create: DOS campanas sin externalIdempotencyKey (null) no chocan entre si', async () => {
+      const repo = new InMemoryCampaignRepository();
+      await repo.create(makeCreateData());
+
+      await expect(repo.create(makeCreateData())).resolves.toEqual(
+        expect.objectContaining({ externalIdempotencyKey: null }),
+      );
+    });
+  });
+
+  // ── external-bulk-messaging (D4.c): variables por-recipient, snapshot auditable ──
+  it('bulkCreateRecipients persiste variables por-recipient cuando vienen; ausente queda null', async () => {
+    const repo = new InMemoryCampaignRepository();
+    const campaign = await repo.create(makeCreateData());
+
+    const rows = await repo.bulkCreateRecipients(campaign.id, [
+      { clientId: 'c1', phoneNormalized: '111', phoneE164: '+5491111', variables: { nombre: 'Ana' } },
+      { clientId: 'c2', phoneNormalized: '222', phoneE164: '+5492222' },
+    ]);
+
+    const withVars = rows.find((r) => r.clientId === 'c1');
+    const withoutVars = rows.find((r) => r.clientId === 'c2');
+    expect(withVars?.variables).toEqual({ nombre: 'Ana' });
+    expect(withoutVars?.variables).toBeNull();
+
+    // round-trip vía listRecipients (no solo el valor recién devuelto por create)
+    const listed = await repo.listRecipients(campaign.id);
+    const listedWithVars = listed.data.find((r) => r.clientId === 'c1');
+    expect(listedWithVars?.variables).toEqual({ nombre: 'Ana' });
   });
 
   it('listRecipients filtra por statusIn', async () => {

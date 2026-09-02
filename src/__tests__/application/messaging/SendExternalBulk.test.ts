@@ -1,0 +1,788 @@
+/**
+ * external-bulk-messaging (Batch 3, tasks 3.2-3.3, 3.7) — `SendExternalBulk`.
+ * Matriz spec↔test: cada `describe` mapea a UN requirement (SEND-1..SEND-10,
+ * KS-1) de `openspec/changes/external-bulk-messaging/specs/external-bulk-messaging/spec.md`.
+ *
+ * Adapters SIEMPRE in-memory + `CreateCampaign` REAL (reuso, sin tocar su
+ * spec) + un fake `CampaignStarter` mínimo. JAMÁS se mockea Prisma ni el use
+ * case bajo test.
+ */
+import { SendExternalBulk } from '@application/use-cases/messaging/SendExternalBulk';
+import { CreateCampaign } from '@application/use-cases/messaging/CreateCampaign';
+import { InMemoryExternalBulkPreviewRepository } from '@infrastructure/adapters/in-memory/InMemoryExternalBulkPreviewRepository';
+import { InMemoryExternalBulkMessagingConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryExternalBulkMessagingConfigRepository';
+import { InMemoryCampaignRepository } from '@infrastructure/adapters/in-memory/InMemoryCampaignRepository';
+import { InMemoryTemplateMessagingGateway } from '@infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
+import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
+import { bootstrapApiMessagingUser } from '@infrastructure/bootstrap/bootstrapApiMessagingUser';
+import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
+import { externalBulkPayloadHash } from '@application/use-cases/messaging/externalBulkPayloadHash';
+import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter } from '@domain/ports/CustomerRepository';
+import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
+import type { CampaignStarter } from '@domain/ports/CampaignStarter';
+import type { ExternalBulkPreviewCreateData } from '@domain/ports/ExternalBulkPreviewRepository';
+import {
+  FeatureExternalBulkDisabledError,
+  ExternalBulkValidationError,
+  CapExceededError,
+  ChatwootLabelNotFoundError,
+  PreviewNotFoundError,
+  PreviewExpiredError,
+  PreviewAlreadyConsumedError,
+  PreviewPayloadMismatchError,
+  IdempotencyKeyConflictError,
+  CampaignRunnerBusyError,
+} from '@domain/errors/external-bulk-messaging';
+import { TemplateNotApprovedError, BulkRecipientsNotPermittedError } from '@domain/errors/messaging-bulk';
+import { UniqueConstraintViolationError } from '@domain/errors/persistence';
+import { BULK_NUMBERS_ACTION } from '@domain/services/bulkRecipientAuthorization';
+
+const NOW = new Date('2026-09-02T12:00:00.000Z');
+const FLAG_KEY = 'messaging-external-bulk-enabled';
+
+const TEMPLATE: TemplateDto = {
+  contentSid: 'HXpromo1',
+  friendlyName: 'promo_setiembre',
+  language: 'es',
+  variables: { '1': 'Nombre' },
+  approvalStatus: 'approved',
+  body: 'Hola {{1}}',
+};
+
+function makeCandidate(overrides: Partial<CampaignRecipientCandidate> = {}): CampaignRecipientCandidate {
+  return {
+    clientId: 'c-default',
+    name: 'Cliente Default',
+    phone: '3364000000',
+    balanceDue: 0,
+    whatsappOptOutAt: null,
+    status: 'active',
+    ...overrides,
+  };
+}
+
+function makeSegmentSource(universe: CampaignRecipientCandidate[]): CampaignSegmentSource {
+  return { listSegmentRecipients: async (_s: CampaignSegmentFilter) => universe };
+}
+
+class FakeCampaignStarter implements CampaignStarter {
+  public calls: string[] = [];
+  public accepted = true;
+  async start(campaignId: string): Promise<{ accepted: boolean }> {
+    this.calls.push(campaignId);
+    return { accepted: this.accepted };
+  }
+}
+
+interface Setup {
+  useCase: SendExternalBulk;
+  previewRepo: InMemoryExternalBulkPreviewRepository;
+  configRepo: InMemoryExternalBulkMessagingConfigRepository;
+  campaignRepo: InMemoryCampaignRepository;
+  templatePort: InMemoryTemplateMessagingGateway;
+  chatwootGateway: FakeChatwootGateway;
+  featureFlags: InMemoryFeatureFlagRepository;
+  rbacUserRepo: InMemoryRbacUserRepository;
+  campaignStarter: FakeCampaignStarter;
+  apiMessagingUserId: string;
+}
+
+async function setup(
+  opts: {
+    templates?: TemplateDto[];
+    clients?: CampaignRecipientCandidate[];
+    flagEnabled?: boolean;
+    bootstrapApiMessaging?: boolean;
+    chatwootLabels?: string[];
+  } = {},
+): Promise<Setup> {
+  const previewRepo = new InMemoryExternalBulkPreviewRepository({ now: () => NOW });
+  const configRepo = new InMemoryExternalBulkMessagingConfigRepository({ now: () => NOW });
+  const campaignRepo = new InMemoryCampaignRepository({ now: () => NOW });
+  const templatePort = new InMemoryTemplateMessagingGateway({ templates: opts.templates ?? [TEMPLATE] });
+  const chatwootGateway = new FakeChatwootGateway();
+  chatwootGateway.accountLabelsResult = (opts.chatwootLabels ?? []).map((title) => ({ title, color: 'blue' }));
+  const featureFlags = new InMemoryFeatureFlagRepository();
+  if (opts.flagEnabled !== false) {
+    featureFlags.seed(FLAG_KEY, true);
+  }
+  const rbacUserRepo = new InMemoryRbacUserRepository();
+  let apiMessagingUserId = '';
+  if (opts.bootstrapApiMessaging !== false) {
+    const bootstrap = await bootstrapApiMessagingUser(rbacUserRepo, { passwordHash: 'unusable-hash' });
+    apiMessagingUserId = bootstrap.id;
+  }
+  const segmentSource = makeSegmentSource(opts.clients ?? []);
+  const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort);
+  const campaignStarter = new FakeCampaignStarter();
+
+  const useCase = new SendExternalBulk(
+    previewRepo,
+    configRepo,
+    campaignRepo,
+    templatePort,
+    chatwootGateway,
+    featureFlags,
+    rbacUserRepo,
+    createCampaign,
+    campaignStarter,
+    () => NOW,
+  );
+
+  return {
+    useCase,
+    previewRepo,
+    configRepo,
+    campaignRepo,
+    templatePort,
+    chatwootGateway,
+    featureFlags,
+    rbacUserRepo,
+    campaignStarter,
+    apiMessagingUserId,
+  };
+}
+
+/** Molde ValidateExternalBulk — persiste un preview YA "validado", con payloadHash correcto por default. */
+function buildPreviewData(opts: {
+  templateRef?: string;
+  templateName?: string;
+  variables?: Record<string, string>;
+  chatwootLabel?: string | null;
+  recipients: { phoneE164: string; phoneNormalized?: string; name: string; variables: Record<string, string> }[];
+  invalid?: { input: string; reason: string; missingVariables?: string[] }[];
+  expiresAt?: string;
+  wrongHash?: boolean;
+}): ExternalBulkPreviewCreateData {
+  const templateName = opts.templateName ?? TEMPLATE.friendlyName;
+  const variables = opts.variables ?? {};
+  const chatwootLabel = opts.chatwootLabel ?? null;
+  const recipients = opts.recipients.map((r) => ({
+    phoneE164: r.phoneE164,
+    phoneNormalized: r.phoneNormalized ?? r.phoneE164,
+    name: r.name,
+    variables: r.variables,
+  }));
+  const invalid = opts.invalid ?? [];
+  const payloadHash = opts.wrongHash
+    ? 'deadbeef-wrong-hash'
+    : externalBulkPayloadHash({
+        templateName,
+        variables,
+        chatwootLabel,
+        recipients: [
+          ...recipients.map((r) => ({ phone: r.phoneE164, name: r.name, variables: r.variables })),
+          ...invalid.map((i) => ({ phone: i.input })),
+        ],
+      });
+  return {
+    payloadHash,
+    templateRef: opts.templateRef ?? TEMPLATE.contentSid,
+    templateName,
+    variables,
+    chatwootLabel,
+    recipients,
+    invalid,
+    validCount: recipients.length,
+    invalidCount: invalid.length,
+    expiresAt: opts.expiresAt ?? new Date(NOW.getTime() + 15 * 60 * 1000).toISOString(),
+  };
+}
+
+const ONE_RECIPIENT = [{ phoneE164: '+5491123456789', name: 'Ana', variables: { '1': 'Ana' } }];
+
+describe('SendExternalBulk', () => {
+  describe('SEND-1 — forma del input', () => {
+    it('falta previewId → ExternalBulkValidationError (400)', async () => {
+      const { useCase } = await setup();
+      await expect(useCase.execute({ previewId: '' }, 'key-1')).rejects.toThrow(ExternalBulkValidationError);
+    });
+
+    it('falta Idempotency-Key → ExternalBulkValidationError (400), sin tocar el preview', async () => {
+      const { useCase, previewRepo } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(useCase.execute({ previewId: preview.id }, undefined)).rejects.toThrow(ExternalBulkValidationError);
+
+      expect((await previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+  });
+
+  describe('KS-1 — kill-switch', () => {
+    it('flag OFF → FeatureExternalBulkDisabledError (403), sin crear Campaign ni consumir', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup({ flagEnabled: false });
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(FeatureExternalBulkDisabledError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+      expect((await previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+
+    it('repo de flags lanza → fail-safe a OFF (403)', async () => {
+      const { useCase, previewRepo, featureFlags } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      jest.spyOn(featureFlags, 'get').mockRejectedValue(new Error('db down'));
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(FeatureExternalBulkDisabledError);
+    });
+  });
+
+  describe('GUARD-0 — idempotencia (molde SendTemplateMessage.ts:116)', () => {
+    it('SEND-7: misma key usada por OTRO previewId → IdempotencyKeyConflictError (409), Campaign original intacta, CERO nueva Campaign', async () => {
+      const { useCase, previewRepo, campaignRepo, campaignStarter } = await setup();
+      const previewA = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      const previewB = await previewRepo.create(
+        buildPreviewData({ recipients: [{ phoneE164: '+5491198765432', name: 'Beto', variables: { '1': 'Beto' } }] }),
+      );
+
+      const first = await useCase.execute({ previewId: previewA.id }, 'key-1');
+      expect(first.accepted).toBe(true);
+
+      await expect(useCase.execute({ previewId: previewB.id }, 'key-1')).rejects.toThrow(IdempotencyKeyConflictError);
+
+      expect((await campaignRepo.list({})).total).toBe(1); // ninguna Campaign nueva
+      expect(campaignStarter.calls).toEqual([first.campaignId]); // el runner NUNCA arrancó para B
+    });
+
+    it('SEND-6: MISMA key + MISMO previewId ya consumido → responde con la Campaign YA creada, CERO segunda Campaign', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      const first = await useCase.execute({ previewId: preview.id }, 'key-1');
+      const second = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      expect(second.campaignId).toBe(first.campaignId);
+      expect(second.resumed).toBe(true);
+      expect((await campaignRepo.list({})).total).toBe(1);
+    });
+  });
+
+  describe('SEND-2 — ciclo de vida del preview', () => {
+    it('previewId inexistente → PreviewNotFoundError (404)', async () => {
+      const { useCase } = await setup();
+      await expect(useCase.execute({ previewId: 'nope' }, 'key-1')).rejects.toThrow(PreviewNotFoundError);
+    });
+
+    it('preview vencido y no consumido → PreviewExpiredError (410), sin crear Campaign', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup();
+      const preview = await previewRepo.create(
+        buildPreviewData({ recipients: ONE_RECIPIENT, expiresAt: new Date(NOW.getTime() - 1000).toISOString() }),
+      );
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(PreviewExpiredError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+    });
+
+    it('preview ya consumido por OTRA key → PreviewAlreadyConsumedError (409), sin crear segunda Campaign', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      await previewRepo.markConsumed(preview.id, 'campaign-other');
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-2')).rejects.toThrow(PreviewAlreadyConsumedError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+    });
+  });
+
+  describe('SEND-3 — mismatch de payload', () => {
+    it('hash re-calculado no matchea el guardado (preview mutado en DB) → PreviewPayloadMismatchError (409), sin crear ni consumir', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT, wrongHash: true }));
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(PreviewPayloadMismatchError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+      expect((await previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+  });
+
+  describe('SEND-4 — re-validación completa al momento del send', () => {
+    it('flag pasó a OFF DESPUÉS del validate → FeatureExternalBulkDisabledError (403), sin crear Campaign ni consumir el preview', async () => {
+      const { useCase, previewRepo, campaignRepo, featureFlags } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      featureFlags.seed(FLAG_KEY, false);
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(FeatureExternalBulkDisabledError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+      expect((await previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+
+    it('template pasó a pending/rejected DESPUÉS del validate → TemplateNotApprovedError (422), sin crear Campaign', async () => {
+      const { useCase, previewRepo, templatePort, campaignRepo } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      jest.spyOn(templatePort, 'listTemplates').mockResolvedValue([{ ...TEMPLATE, approvalStatus: 'pending' }]);
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(TemplateNotApprovedError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+    });
+
+    it('label de Chatwoot del preview ya NO existe en el catálogo vivo al momento del send → ChatwootLabelNotFoundError (422)', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup({ chatwootLabels: [] });
+      const preview = await previewRepo.create(
+        buildPreviewData({ chatwootLabel: 'promo-agosto', recipients: ONE_RECIPIENT }),
+      );
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(ChatwootLabelNotFoundError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+    });
+
+    it('cupo diario agotado por OTRA campaña api-messaging desde el validate → CapExceededError (422), sin crear Campaign', async () => {
+      const { useCase, previewRepo, configRepo, campaignRepo, apiMessagingUserId } = await setup();
+      await configRepo.set({ maxPerRequest: 500, maxPerDay: 1 });
+      const other = await campaignRepo.create({
+        name: 'other',
+        templateRef: TEMPLATE.contentSid,
+        segment: { statuses: [] },
+        variableSpec: {},
+        total: 1,
+        createdById: apiMessagingUserId,
+      });
+      const [r] = await campaignRepo.bulkCreateRecipients(other.id, [
+        { clientId: null, contactName: 'X', phoneNormalized: '111', phoneE164: '+549111' },
+      ]);
+      await campaignRepo.updateRecipient(r!.id, { status: 'sent', sentAt: NOW.toISOString() });
+
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(CapExceededError);
+
+      expect((await campaignRepo.list({})).total).toBe(1); // solo "other", ninguna nueva
+    });
+
+    it('recipient opt-out DESPUÉS del validate → excluido de la Campaign creada, no se le envía', async () => {
+      const optedOutClient = makeCandidate({ clientId: 'k1', phone: '3364111111', whatsappOptOutAt: NOW.toISOString() });
+      const { useCase, previewRepo, campaignRepo } = await setup({ clients: [optedOutClient] });
+      const preview = await previewRepo.create(
+        buildPreviewData({
+          recipients: [
+            { phoneE164: '+5493364111111', name: 'Opt-out', variables: { '1': 'X' } },
+            { phoneE164: '+5491123456789', name: 'Sobrevive', variables: { '1': 'Y' } },
+          ],
+        }),
+      );
+
+      const result = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      expect(result.total).toBe(1);
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data).toHaveLength(1);
+      expect(recipients.data[0]!.phoneE164).toBe('+5491123456789');
+    });
+  });
+
+  describe('SEND-5 — creación de la Campaign', () => {
+    it('recipient sin name real (name === phone del preview) → manualContact.name = phone E.164, no vacío', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup();
+      const preview = await previewRepo.create(
+        buildPreviewData({ recipients: [{ phoneE164: '+5491123456789', name: '+5491123456789', variables: { '1': 'Ana' } }] }),
+      );
+
+      const result = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data[0]!.contactName).toBe('+5491123456789');
+    });
+
+    it('chatwootLabel del preview propagado a la Campaign', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup({ chatwootLabels: ['promo-agosto'] });
+      const preview = await previewRepo.create(
+        buildPreviewData({ chatwootLabel: 'promo-agosto', recipients: ONE_RECIPIENT }),
+      );
+
+      const result = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      const campaign = await campaignRepo.findById(result.campaignId);
+      expect(campaign?.chatwootLabel).toBe('promo-agosto');
+    });
+  });
+
+  describe('D8 — orden markConsumed DESPUÉS de CreateCampaign', () => {
+    it('markConsumed pierde la carrera (otro ganó el mismo previewId) → la Campaign recién creada se marca failed, responde 409', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      jest.spyOn(previewRepo, 'markConsumed').mockResolvedValueOnce(false);
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(PreviewAlreadyConsumedError);
+
+      const list = await campaignRepo.list({});
+      expect(list.total).toBe(1); // la Campaign SÍ se creó (antes del markConsumed)
+      expect(list.data[0]!.status).toBe('failed');
+      expect(list.data[0]!.error).toBe('preview consumido por otro request');
+    });
+  });
+
+  describe('SEND-8 — runner ocupado', () => {
+    it('runner ocupado en el PRIMER intento → 409 con campaignId + retryAfterSeconds; retry tras liberarse el lock reanuda la MISMA campaña', async () => {
+      const { useCase, previewRepo, campaignRepo, campaignStarter } = await setup();
+      const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      campaignStarter.accepted = false;
+
+      let firstCampaignId = '';
+      try {
+        await useCase.execute({ previewId: preview.id }, 'key-1');
+        throw new Error('expected CampaignRunnerBusyError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(CampaignRunnerBusyError);
+        const busy = err as InstanceType<typeof CampaignRunnerBusyError>;
+        expect(busy.retryAfterSeconds).toBe(60);
+        expect(busy.campaignId).toBeTruthy();
+        firstCampaignId = busy.campaignId;
+      }
+
+      const consumedPreview = await previewRepo.findById(preview.id);
+      expect(consumedPreview?.consumedAt).not.toBeNull(); // preview quedó consumido igual (D8)
+      expect((await campaignRepo.list({})).total).toBe(1); // UNA sola Campaign
+
+      // libera el lock y reintenta con el MISMO key+preview.
+      campaignStarter.accepted = true;
+      const retry = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      expect(retry.campaignId).toBe(firstCampaignId);
+      expect(retry.resumed).toBe(true);
+      expect((await campaignRepo.list({})).total).toBe(1); // NUNCA una segunda Campaign
+    });
+  });
+
+  describe('SEND-9 — éxito', () => {
+    it('flag ON, topes OK, runner libre → {campaignId, accepted:true, total}', async () => {
+      const { useCase, previewRepo, campaignStarter } = await setup();
+      const preview = await previewRepo.create(
+        buildPreviewData({
+          recipients: [
+            { phoneE164: '+5491123456789', name: 'Ana', variables: { '1': 'Ana' } },
+            { phoneE164: '+5491198765432', name: 'Beto', variables: { '1': 'Beto' } },
+          ],
+        }),
+      );
+
+      const result = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      expect(result.accepted).toBe(true);
+      expect(result.total).toBe(2);
+      expect(result.resumed).toBeUndefined();
+      expect(campaignStarter.calls).toEqual([result.campaignId]);
+      const consumedPreview = await previewRepo.findById(preview.id);
+      expect(consumedPreview?.campaignId).toBe(result.campaignId);
+    });
+  });
+
+  /**
+   * fix wave F1 (finding F10) — SEND-2 fija el orden: VENCIDO (410) ANTES que
+   * CONSUMIDO (409). El codigo chequeaba `consumedAt` primero, asi que un
+   * preview vencido Y consumido devolvia 409 (\"reintentalo con otro preview\")
+   * cuando la verdad util es 410 (\"ese preview ya no existe para nadie\").
+   */
+  describe('fix wave F1 (F10) — orden de los chequeos del ciclo de vida del preview', () => {
+    it('preview VENCIDO y ademas consumido → PREVIEW_EXPIRED (410), no PREVIEW_ALREADY_CONSUMED', async () => {
+      const s = await setup();
+      const preview = await s.previewRepo.create(
+        buildPreviewData({ recipients: ONE_RECIPIENT, expiresAt: new Date(NOW.getTime() - 1000).toISOString() }),
+      );
+      await s.previewRepo.markConsumed(preview.id, 'some-other-campaign');
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-nueva')).rejects.toThrow(PreviewExpiredError);
+    });
+
+    it('preview consumido pero VIGENTE → sigue siendo PREVIEW_ALREADY_CONSUMED (409)', async () => {
+      const s = await setup();
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      await s.previewRepo.markConsumed(preview.id, 'some-other-campaign');
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-nueva')).rejects.toThrow(
+        PreviewAlreadyConsumedError,
+      );
+    });
+  });
+
+  /**
+   * fix wave F1 (finding F3) — el fast-path de GUARD-0 (`replay`) se salteaba
+   * DOS cosas: (a) el kill-switch, que KS-1 no exime en ningun caso, y (b) el
+   * estado de la campana — llamaba `campaignStarter.start()` a ciegas incluso
+   * sobre una campana YA terminada, re-disparandola.
+   */
+  describe('fix wave F1 (F3) — replay: kill-switch fail-closed + estado de la campana', () => {
+    /** Crea la campana via un primer send exitoso y devuelve su id + el previewId. */
+    async function firstSend(s: Setup, key = 'key-1'): Promise<{ campaignId: string; previewId: string }> {
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      const res = await s.useCase.execute({ previewId: preview.id }, key);
+      return { campaignId: res.campaignId, previewId: preview.id };
+    }
+
+    it('(a) flag apagado DESPUES del send → el replay tambien responde FEATURE_DISABLED (KS-1 no tiene excepcion de replay)', async () => {
+      const s = await setup();
+      const { previewId } = await firstSend(s);
+      s.campaignStarter.calls = [];
+      s.featureFlags.seed(FLAG_KEY, false);
+
+      await expect(s.useCase.execute({ previewId }, 'key-1')).rejects.toThrow(FeatureExternalBulkDisabledError);
+      expect(s.campaignStarter.calls).toEqual([]); // ni siquiera intento arrancar
+    });
+
+    it('(b) campana `done` → 200 idempotente {resumed:false, status:"done"}, SIN re-arrancar el runner', async () => {
+      const s = await setup();
+      const { campaignId, previewId } = await firstSend(s);
+      await s.campaignRepo.update(campaignId, { status: 'done' });
+      s.campaignStarter.calls = [];
+
+      const res = await s.useCase.execute({ previewId }, 'key-1');
+
+      expect(res).toMatchObject({ campaignId, accepted: true, resumed: false, status: 'done' });
+      expect(s.campaignStarter.calls).toEqual([]);
+    });
+
+    it('(b) campana `failed` → 200 idempotente {resumed:false, status:"failed"}, SIN re-arrancar el runner', async () => {
+      const s = await setup();
+      const { campaignId, previewId } = await firstSend(s);
+      await s.campaignRepo.update(campaignId, { status: 'failed' });
+      s.campaignStarter.calls = [];
+
+      const res = await s.useCase.execute({ previewId }, 'key-1');
+
+      expect(res).toMatchObject({ campaignId, resumed: false, status: 'failed' });
+      expect(s.campaignStarter.calls).toEqual([]);
+    });
+
+    it('(b) campana `running` → resumed:true SIN llamar start (ya esta corriendo)', async () => {
+      const s = await setup();
+      const { campaignId, previewId } = await firstSend(s);
+      await s.campaignRepo.update(campaignId, { status: 'running' });
+      s.campaignStarter.calls = [];
+
+      const res = await s.useCase.execute({ previewId }, 'key-1');
+
+      expect(res).toMatchObject({ campaignId, resumed: true, status: 'running' });
+      expect(s.campaignStarter.calls).toEqual([]);
+    });
+
+    it('(b) campana `pending` → SI arranca el runner (resume real, SEND-8)', async () => {
+      const s = await setup();
+      const { campaignId, previewId } = await firstSend(s);
+      expect((await s.campaignRepo.findById(campaignId))?.status).toBe('pending');
+      s.campaignStarter.calls = [];
+
+      const res = await s.useCase.execute({ previewId }, 'key-1');
+
+      expect(res).toMatchObject({ campaignId, resumed: true, status: 'pending' });
+      expect(s.campaignStarter.calls).toEqual([campaignId]);
+    });
+
+    it('(b) campana `pending` con el runner ocupado → sigue siendo 409 CAMPAIGN_RUNNER_BUSY', async () => {
+      const s = await setup();
+      const { previewId } = await firstSend(s);
+      s.campaignStarter.accepted = false;
+
+      await expect(s.useCase.execute({ previewId }, 'key-1')).rejects.toThrow(CampaignRunnerBusyError);
+    });
+  });
+
+  /**
+   * fix wave F1 (finding F2) — el cupo diario contaba `status:'sent'`, que va
+   * SIEMPRE por detras del trabajo ya AUTORIZADO: entre el `send` que crea la
+   * campana y el runner que efectivamente envia, `countSent...` devuelve ~0 y
+   * el cap deja pasar lote tras lote. Traza K1/K2/K3 (cap diario = 2, lotes de
+   * 1): con el bug los TRES pasan (3 autorizados > cap 2); con el fix el
+   * tercero rebota con CAP_EXCEEDED. La cuenta pasa a ser "recipients CREADOS
+   * hoy para campanas del creador externo, con status NOT IN (skipped,
+   * opted_out)" — cada intento autorizado quema cupo en el instante en que se
+   * crea la campana, no cuando el mensaje sale.
+   */
+  describe('fix wave F1 (F2) — el cupo diario cuenta lo AUTORIZADO, no lo ya enviado', () => {
+    async function sendOne(
+      s: Setup,
+      phone: string,
+      key: string,
+    ): Promise<{ campaignId: string } | Error> {
+      const preview = await s.previewRepo.create(
+        buildPreviewData({ recipients: [{ phoneE164: phone, name: 'X', variables: { '1': 'X' } }] }),
+      );
+      try {
+        return await s.useCase.execute({ previewId: preview.id }, key);
+      } catch (err) {
+        return err as Error;
+      }
+    }
+
+    it('K1/K2/K3 con maxPerDay=2 y lotes de 1: el TERCER send rebota con CAP_EXCEEDED aunque nada se haya enviado todavia', async () => {
+      const s = await setup();
+      await s.configRepo.set({ maxPerRequest: 500, maxPerDay: 2 });
+
+      const k1 = await sendOne(s, '+5491123456701', 'K1');
+      const k2 = await sendOne(s, '+5491123456702', 'K2');
+      const k3 = await sendOne(s, '+5491123456703', 'K3');
+
+      expect(k1).not.toBeInstanceOf(Error);
+      expect(k2).not.toBeInstanceOf(Error);
+      // Ningun recipient llego a `sent` (el runner es un fake que no envia nada):
+      // el cap NO puede apoyarse en `sent` o esto pasa para siempre.
+      expect(k3).toBeInstanceOf(CapExceededError);
+      expect((k3 as CapExceededError).limit).toBe('perDay');
+      expect((await s.campaignRepo.list({})).total).toBe(2); // K3 no creo campana
+    });
+
+    it('un recipient `delivered` sigue contando contra el cupo (no desaparece al avanzar de estado)', async () => {
+      const s = await setup();
+      await s.configRepo.set({ maxPerRequest: 500, maxPerDay: 1 });
+      const first = await sendOne(s, '+5491123456711', 'K1');
+      expect(first).not.toBeInstanceOf(Error);
+      const [r] = (await s.campaignRepo.listRecipients((first as { campaignId: string }).campaignId)).data;
+      await s.campaignRepo.updateRecipient(r!.id, { status: 'delivered' });
+
+      const second = await sendOne(s, '+5491123456712', 'K2');
+
+      expect(second).toBeInstanceOf(CapExceededError);
+    });
+
+    it('un recipient `skipped`/`opted_out` NO quema cupo (nunca se le autorizo un mensaje)', async () => {
+      const s = await setup();
+      await s.configRepo.set({ maxPerRequest: 500, maxPerDay: 1 });
+      const first = await sendOne(s, '+5491123456721', 'K1');
+      const [r] = (await s.campaignRepo.listRecipients((first as { campaignId: string }).campaignId)).data;
+      await s.campaignRepo.updateRecipient(r!.id, { status: 'opted_out' });
+
+      const second = await sendOne(s, '+5491123456722', 'K2');
+
+      expect(second).not.toBeInstanceOf(Error);
+    });
+  });
+
+  /**
+   * fix wave F1 (findings F5, F9, F12, F13) — el resto de la ola sobre el
+   * camino de `send`.
+   */
+  describe('fix wave F1 — send: backstop de carrera, allowlist, variables y destino', () => {
+    /** (F9) El input que `SendExternalBulk` le arma a `CreateCampaign`. */
+    it('F9 — el input a CreateCampaign lleva SOLO manualContacts + un allowlist EXPLICITO (nunca undefined)', async () => {
+      const s = await setup();
+      const spy = jest.spyOn(
+        (s.useCase as unknown as { createCampaign: CreateCampaign }).createCampaign,
+        'execute',
+      );
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+      const input = spy.mock.calls[0]![0] as unknown as Record<string, unknown>;
+      // Estructural: la ruta externa NO puede expresar destinatarios que no sean
+      // numeros sueltos — ni segmento con criterio, ni ids de clientes, ni tareas.
+      expect(input['manualContacts']).toHaveLength(1);
+      expect(input['manualClientIds']).toBeUndefined();
+      expect(input['taskStageIds']).toBeUndefined();
+      expect(input['segment']).toEqual({ statuses: [] });
+      // El gate de `forbiddenBulkTargets` CORRE (antes llegaba `undefined` = sin enforcement).
+      expect(input['allowedBulkActions']).toBeDefined();
+      const allowed = new Set(input['allowedBulkActions'] as string[]);
+      expect(allowed.has(BULK_NUMBERS_ACTION)).toBe(true);
+      expect(allowed.has('*')).toBe(false); // jamas el sentinel de super_admin
+    });
+
+    it('F9 — un estado de cliente DESCONOCIDO (no mapeado en BULK_STATUS_ACTION) bloquea la campana en vez de enviarla', async () => {
+      // El E.164 del preview (+5491123456789) normaliza a `1123456789`: este Client vincula EXACTO.
+      const raro = makeCandidate({ clientId: 'c-raro', phone: '+54 9 11 2345-6789', status: 'estado_futuro_sin_permiso' });
+      const s = await setup({ clients: [raro] });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(
+        BulkRecipientsNotPermittedError,
+      );
+    });
+
+    it('F12 — una variable NO declarada que quedo en el preview no llega a CampaignRecipient.variables', async () => {
+      const s = await setup();
+      const preview = await s.previewRepo.create(
+        buildPreviewData({
+          recipients: [{ phoneE164: '+5491123456789', name: 'Ana', variables: { '1': 'Ana', '99': 'basura' } }],
+        }),
+      );
+
+      const res = await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+      const recipients = await s.campaignRepo.listRecipients(res.campaignId);
+      expect(recipients.data[0]!.variables).toEqual({ '1': 'Ana' });
+    });
+
+    it('F13 — el destino persistido es el E.164 del preview, aunque el numero vincule a un Client', async () => {
+      // Mismo numero, otro formato guardado en el Client (match EXACTO por normalizePhone).
+      const client = makeCandidate({ clientId: 'c1', name: 'Juan Cliente', phone: '+54 11 15-2345-6789' });
+      const s = await setup({ clients: [client] });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      const res = await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+      const recipients = await s.campaignRepo.listRecipients(res.campaignId);
+      expect(recipients.data).toHaveLength(1);
+      expect(recipients.data[0]!.phoneE164).toBe('+5491123456789');
+    });
+
+    it('F5 — dos `send` concurrentes con la MISMA key: el perdedor (violacion de unique REAL del InMemory) recibe la campana GANADORA, no un 500', async () => {
+      const s = await setup();
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      // Simula la carrera: AMBOS pasaron el guard-0 (findByExternalIdempotencyKey
+      // devolvio null) — la campana ganadora YA existe en el repo (el otro
+      // request le gano la carrera), pero ESTE request todavia no la vio.
+      const winner = await s.campaignRepo.create({
+        name: 'ganadora',
+        templateRef: TEMPLATE.contentSid,
+        segment: { statuses: [] },
+        variableSpec: {},
+        total: 1,
+        createdById: s.apiMessagingUserId,
+        externalIdempotencyKey: 'key-race',
+      });
+      // El guard-0 falla UNA vez (el ganador todavia no estaba cuando este
+      // request lo miro) y recien el `create` REAL choca contra el
+      // `@@unique([externalIdempotencyKey])` que ahora hace cumplir el
+      // InMemory (fix wave F2, NEW-1) — la carrera REAL, sin espiar `create`
+      // ni pre-construir el error a mano.
+      const realLookup = s.campaignRepo.findByExternalIdempotencyKey.bind(s.campaignRepo);
+      jest
+        .spyOn(s.campaignRepo, 'findByExternalIdempotencyKey')
+        .mockImplementationOnce(async () => null)
+        .mockImplementation(realLookup);
+
+      const res = await s.useCase.execute({ previewId: preview.id }, 'key-race');
+
+      expect(res.campaignId).toBe(winner.id);
+      expect(res.accepted).toBe(true);
+    });
+
+    it('fix wave F2 (NEW-1) — un UniqueConstraintViolationError de OTRO field (no externalIdempotencyKey) NO se confunde con la carrera de idempotencia: sube tal cual', async () => {
+      const s = await setup();
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      const boom = new UniqueConstraintViolationError('Campaign', 'someOtherField');
+      jest.spyOn(s.campaignRepo, 'create').mockRejectedValueOnce(boom);
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toBe(boom);
+    });
+  });
+
+  describe('SEND-10 / task 3.7 — variableSpec baseline no dispara CAMP-3', () => {
+    it("una key SOLO aportada por recipients (ausente en el global) → variableSpec la cubre con '' de baseline, el mensaje real usa el valor del recipient", async () => {
+      const TEMPLATE_2VARS: TemplateDto = { ...TEMPLATE, variables: { '1': 'Nombre', '2': 'Extra' } };
+      const { useCase, previewRepo, campaignRepo } = await setup({ templates: [TEMPLATE_2VARS] });
+      const preview = await previewRepo.create(
+        buildPreviewData({
+          templateRef: TEMPLATE_2VARS.contentSid,
+          variables: { '1': 'GlobalUno' }, // NO trae '2' — solo la trae el merge por-recipient
+          recipients: [{ phoneE164: '+5491123456789', name: 'Ana', variables: { '1': 'Ana', '2': 'ValorRecipient' } }],
+        }),
+      );
+
+      const result = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      const campaign = await campaignRepo.findById(result.campaignId);
+      expect(campaign?.variableSpec).toEqual({
+        '1': { source: 'literal', value: 'GlobalUno' },
+        '2': { source: 'literal', value: '' }, // baseline auditable, NUNCA llega al mensaje real
+      });
+      const recipients = await campaignRepo.listRecipients(result.campaignId);
+      expect(recipients.data[0]!.variables).toEqual({ '1': 'Ana', '2': 'ValorRecipient' });
+    });
+  });
+});

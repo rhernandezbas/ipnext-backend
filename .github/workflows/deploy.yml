@@ -117,6 +117,7 @@ jobs:
             -e AIROS_SSH_USER="ubnt" \
             -e AIROS_SSH_PASSWORDS="${{ secrets.AIROS_SSH_PASSWORDS }}" \
             -e EXTERNAL_API_KEY="${{ secrets.EXTERNAL_API_KEY }}" \
+            -e EXTERNAL_MESSAGING_API_KEY="${{ secrets.EXTERNAL_MESSAGING_API_KEY }}" \
             -e GRAFANA_INGEST_KEY="${{ secrets.GRAFANA_INGEST_KEY }}" \
             -e FIBER_INGEST_KEY="${{ secrets.FIBER_INGEST_KEY }}" \
             -e ALERTS_INGEST_RATE_LIMIT="${{ secrets.ALERTS_INGEST_RATE_LIMIT }}" \

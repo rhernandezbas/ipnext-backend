@@ -81,6 +81,12 @@ class UnstableOrderCampaignRepository implements CampaignRepository {
   findById(id: string): Promise<Campaign | null> {
     return this.inner.findById(id);
   }
+  findByExternalIdempotencyKey(key: string): Promise<Campaign | null> {
+    return this.inner.findByExternalIdempotencyKey(key);
+  }
+  countAuthorizedRecipientsByCreatorSince(createdById: string, since: Date): Promise<number> {
+    return this.inner.countAuthorizedRecipientsByCreatorSince(createdById, since);
+  }
   update(id: string, patch: CampaignPatch): Promise<Campaign> {
     return this.inner.update(id, patch);
   }
@@ -134,6 +140,12 @@ class SmallKeysetCampaignRepository implements CampaignRepository {
   findById(id: string): Promise<Campaign | null> {
     return this.inner.findById(id);
   }
+  findByExternalIdempotencyKey(key: string): Promise<Campaign | null> {
+    return this.inner.findByExternalIdempotencyKey(key);
+  }
+  countAuthorizedRecipientsByCreatorSince(createdById: string, since: Date): Promise<number> {
+    return this.inner.countAuthorizedRecipientsByCreatorSince(createdById, since);
+  }
   update(id: string, patch: CampaignPatch): Promise<Campaign> {
     return this.inner.update(id, patch);
   }
@@ -171,6 +183,12 @@ class FailingSentPersistRepository implements CampaignRepository {
   }
   findById(id: string): Promise<Campaign | null> {
     return this.inner.findById(id);
+  }
+  findByExternalIdempotencyKey(key: string): Promise<Campaign | null> {
+    return this.inner.findByExternalIdempotencyKey(key);
+  }
+  countAuthorizedRecipientsByCreatorSince(createdById: string, since: Date): Promise<number> {
+    return this.inner.countAuthorizedRecipientsByCreatorSince(createdById, since);
   }
   update(id: string, patch: CampaignPatch): Promise<Campaign> {
     return this.inner.update(id, patch);
@@ -213,6 +231,12 @@ class KeysetRecordingRepository implements CampaignRepository {
   }
   findById(id: string): Promise<Campaign | null> {
     return this.inner.findById(id);
+  }
+  findByExternalIdempotencyKey(key: string): Promise<Campaign | null> {
+    return this.inner.findByExternalIdempotencyKey(key);
+  }
+  countAuthorizedRecipientsByCreatorSince(createdById: string, since: Date): Promise<number> {
+    return this.inner.countAuthorizedRecipientsByCreatorSince(createdById, since);
   }
   update(id: string, patch: CampaignPatch): Promise<Campaign> {
     return this.inner.update(id, patch);
@@ -280,6 +304,9 @@ async function seedCampaign(
       taskId?: string | null;
       taskFromStageId?: string | null;
       taskResultingStageId?: string | null;
+      // external-bulk-messaging (SEND-10) — literal POR-RECIPIENT, opcional
+      // (ausente en TODO otro dominio, no-regresión).
+      variables?: Record<string, string> | null;
     }[];
   },
 ) {
@@ -1849,5 +1876,150 @@ describe('SendCampaign — transición de tarea (bulk-task-stage-transition, TRA
 
     const result = await uc.execute({ campaignId: campaign.id });
     expect(result.sentCount).toBe(1);
+  });
+});
+
+// external-bulk-messaging (D4.e punto 8, SEND-10) — override POR-RECIPIENT en
+// SendCampaign.ts:231. NO se toca `resolveCampaignVariables`/`renderTemplateBody`
+// (siguen puras); el override se prueba desde AFUERA, sobre el use case real.
+describe('SendCampaign — override de variables por-recipient (external-bulk-messaging, SEND-10)', () => {
+  it('SEND-10: recipient.variables pisa (por KEY) lo resuelto por resolveCampaignVariables — llega a sendTemplate (Twilio)', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Juan Pérez', balanceDue: 50000 })]);
+    const templatePort = new InMemoryTemplateMessagingGateway();
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+    const { campaign } = await seedCampaign(campaignRepo, {
+      variableSpec: { '1': { source: 'name' }, '2': { source: 'balanceDue' }, '3': { source: 'literal', value: 'fijo' } },
+      recipients: [
+        {
+          clientId: 'c1',
+          phoneNormalized: '3364000001',
+          phoneE164: '+5493364000001',
+          // pisa '1' (que resolvería a "Juan Pérez"); '2'/'3' SOBREVIVEN sin tocar.
+          variables: { '1': 'Ana' },
+        },
+      ],
+    });
+
+    await uc.execute({ campaignId: campaign.id });
+
+    expect(templatePort.calls).toHaveLength(1);
+    expect(templatePort.calls[0]!.variables).toEqual({ '1': 'Ana', '2': '$50.000', '3': 'fijo' });
+  });
+
+  it('SEND-10: el override GANA sobre source:name de un recipient VINCULADO a un Client', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Juan' })]);
+    const templatePort = new InMemoryTemplateMessagingGateway();
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+    const { campaign } = await seedCampaign(campaignRepo, {
+      variableSpec: { '1': { source: 'name' } },
+      recipients: [
+        { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001', variables: { '1': 'Ana' } },
+      ],
+    });
+
+    await uc.execute({ campaignId: campaign.id });
+
+    expect(templatePort.calls[0]!.variables).toEqual({ '1': 'Ana' }); // NO "Juan"
+  });
+
+  it('SEND-10: cada destinatario recibe SU mensaje — dos recipients, dos overrides distintos, sin colisión', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1' }), makeCandidate({ clientId: 'c2' })]);
+    const templatePort = new InMemoryTemplateMessagingGateway();
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+    const { campaign } = await seedCampaign(campaignRepo, {
+      variableSpec: { '1': { source: 'literal', value: '' } },
+      recipients: [
+        { clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001', variables: { '1': 'Ana' } },
+        { clientId: 'c2', phoneNormalized: '3364000002', phoneE164: '+5493364000002', variables: { '1': 'Beto' } },
+      ],
+    });
+
+    await uc.execute({ campaignId: campaign.id });
+
+    const byPhone = new Map(templatePort.calls.map((c) => [c.to, c.variables]));
+    expect(byPhone.get('+5493364000001')).toEqual({ '1': 'Ana' });
+    expect(byPhone.get('+5493364000002')).toEqual({ '1': 'Beto' });
+  });
+
+  it('SEND-10: el override llega a los TRES consumos (Twilio/Chatwoot/inbox) — path Chatwoot ON', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Cliente Real' })]);
+    const TEMPLATE_DESCRIPTOR: TemplateDto = {
+      contentSid: 'HXtest',
+      friendlyName: 'Recordatorio',
+      language: 'es',
+      variables: {},
+      approvalStatus: 'approved',
+      body: 'irrelevante',
+    };
+    const templatePort = new InMemoryTemplateMessagingGateway({ templates: [TEMPLATE_DESCRIPTOR] });
+    const chatwootGateway = new FakeChatwootGateway();
+    chatwootGateway.createConversationWithTemplateResult = { chatwootConversationId: 700, chatwootMessageId: 7000 };
+    const featureFlags = new InMemoryFeatureFlagRepository();
+    featureFlags.seed('messaging-send-via-chatwoot', true);
+    const projector = new FakeCampaignInboxProjector();
+    const uc = new SendCampaign(
+      campaignRepo,
+      lookup,
+      templatePort,
+      new ImmediateRateLimiter(),
+      projector,
+      undefined,
+      chatwootGateway,
+      featureFlags,
+    );
+
+    const { campaign } = await seedCampaign(campaignRepo, {
+      templateRef: 'HXtest',
+      templateBody: 'Hola {{1}}',
+      variableSpec: { '1': { source: 'name' } },
+      recipients: [
+        {
+          clientId: 'c1',
+          phoneNormalized: '3364000001',
+          phoneE164: '+5493364000001',
+          variables: { '1': 'Ana' }, // pisa "Cliente Real"
+        },
+      ],
+    });
+
+    const result = await uc.execute({ campaignId: campaign.id });
+
+    expect(result.sentCount).toBe(1);
+    // 1) Twilio directo — CERO llamadas (flag ON, path Chatwoot).
+    expect(templatePort.calls).toHaveLength(0);
+    // 2) processedParams/content del path Chatwoot.
+    expect(chatwootGateway.createConversationWithTemplateCalls[0]!.processedParams).toEqual({ '1': 'Ana' });
+    expect(chatwootGateway.createConversationWithTemplateCalls[0]!.content).toBe('Hola Ana');
+    // 3) renderedBody proyectado al inbox — MISMO mapa, no un segundo cálculo.
+    expect(projector.projectChatwootTemplateSendCalls).toHaveLength(1);
+    expect(projector.projectChatwootTemplateSendCalls[0]!.renderedBody).toBe('Hola Ana');
+  });
+
+  it('SEND-10 no-regresión (OBLIGATORIA): recipient.variables = null → mapa enviado IDÉNTICO al de resolveCampaignVariables', async () => {
+    const campaignRepo = new InMemoryCampaignRepository();
+    const lookup = makeLookup([makeCandidate({ clientId: 'c1', name: 'Juan Pérez', balanceDue: 50000 })]);
+    const templatePort = new InMemoryTemplateMessagingGateway();
+    const uc = new SendCampaign(campaignRepo, lookup, templatePort, new ImmediateRateLimiter());
+
+    const variableSpec = { '1': { source: 'name' as const }, '2': { source: 'balanceDue' as const } };
+    const { campaign } = await seedCampaign(campaignRepo, {
+      variableSpec,
+      // `variables` NI SIQUIERA se pasa — molde EXACTO de toda campaña de la UI
+      // admin (segment/manual/csv/task), donde `bulkCreateRecipients` persiste `null`.
+      recipients: [{ clientId: 'c1', phoneNormalized: '3364000001', phoneE164: '+5493364000001' }],
+    });
+
+    await uc.execute({ campaignId: campaign.id });
+
+    const candidate = { clientId: 'c1', name: 'Juan Pérez', phone: '3364000000', balanceDue: 50000, whatsappOptOutAt: null };
+    expect(templatePort.calls[0]!.variables).toEqual(resolveCampaignVariables(campaign.variableSpec, candidate));
+    expect(templatePort.calls[0]!.variables).toEqual({ '1': 'Juan Pérez', '2': '$50.000' });
   });
 });

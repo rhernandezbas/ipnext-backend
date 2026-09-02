@@ -513,6 +513,18 @@ export const config = {
   },
 
   /**
+   * external-bulk-messaging (D10) — key DEDICADA e INDEPENDIENTE de
+   * `externalApi.apiKey` para el router de envío masivo WhatsApp M2M
+   * (`/api/external/v1/messaging/bulk/*`). Opt-in (NO fail-fast at boot),
+   * MISMO patrón que `externalApi.apiKey` — key vacía ⇒ `createApiKeyMiddleware`
+   * responde 401 a TODO (fail-closed al request, nunca al boot). Deliberadamente
+   * NO reutiliza `EXTERNAL_API_KEY`: rotar una nunca debe afectar a la otra.
+   */
+  externalMessaging: {
+    apiKey: process.env.EXTERNAL_MESSAGING_API_KEY ?? '',
+  },
+
+  /**
    * NOC Alerts Hub (noc-alerts-hub, Fase A) — machine-to-machine ingest keys,
    * ONE per fuente (Grafana webhook / colector fibra Rust), so rotating one
    * never forces rotating the other (design.md "POST /api/alerts/ingest canónico
