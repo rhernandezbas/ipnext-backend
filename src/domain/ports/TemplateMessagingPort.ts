@@ -25,6 +25,32 @@ export interface TemplateDto {
   /** MARKETING | UTILITY | AUTHENTICATION. */
   category?: string;
   /**
+   * S4 fix (getTemplate approval status) — motivo de rechazo de Meta (ej.
+   * `Tag_Content_Mismatch`), SOLO significativo cuando `approvalStatus ===
+   * 'rejected'`. Additivo — viene de `approval_requests.rejection_reason`
+   * (`listTemplates`) o de `GET /v1/Content/{sid}/ApprovalRequests`
+   * (`getTemplate`, que la Content API sola no expone). `undefined` cuando el
+   * proveedor no lo informa.
+   */
+  rejectionReason?: string | null;
+  /**
+   * S4 fix — categoría MARKETING/UTILITY/AUTHENTICATION tal como la devuelve
+   * el endpoint dedicado de aprobación (`ApprovalRequests`) en `getTemplate`.
+   * Additivo, distinto de `category` en que solo se completa cuando el
+   * merge con `ApprovalRequests` corrió (no en `listTemplates`/`createTemplate`).
+   */
+  approvalCategory?: string | null;
+  /**
+   * fix wave F5 (LOW) — status CRUDO tal como lo informa el proveedor (ej. `paused`, `disabled`),
+   * SIN normalizar. Additivo — existe porque `normalizeApprovalStatus` colapsa cualquier valor
+   * fuera del union (`approved|pending|rejected|unsubmitted`) a `'unsubmitted'`: un template
+   * `paused` (ya aprobado, pausado por el operador) o `disabled` (desactivado por Meta) se ve
+   * IDÉNTICO a "nunca sometido" para el FE (mismo union, D12) salvo que se mire este campo.
+   * `undefined` cuando el proveedor no informó ningún status (ni en `approval_requests` ni en el
+   * merge de `ApprovalRequests`).
+   */
+  providerStatus?: string;
+  /**
    * messaging-bulk v1.1 (preview modal) — texto plano del template (el `body`
    * del tipo `twilio/text` u equivalente dentro de `content_templates`), para
    * que el FE muestre el mensaje real en vez de solo los placeholders

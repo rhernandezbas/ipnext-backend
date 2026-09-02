@@ -844,3 +844,287 @@ que amendarla es correcto (no hay una segunda migración para el índice nuevo).
   `CampaignCreateData` widena `source` a `string` y `tsc`/`ts-jest` lo rechaza contra
   `CampaignVariableSource` (`'name'|'balanceDue'|'literal'`); `makeCreateData()` en el test de
   InMemory ya lo evitaba con el return-type de la función, un `const` suelto no.
+
+---
+
+# Fix wave F3 (3 findings, smoke en vivo contra prod) — 2026-09-02
+
+Tercera ola — NO viene de review adversarial de código, viene de un **smoke test en vivo** contra
+prod con requests reales al endpoint desplegado. TDD estricto: red real (`npx jest`) antes de cada
+fix, verde después.
+
+## Gate final
+
+- `npx jest` focalizado sobre los 3 archivos tocados/agregados (`ValidateExternalBulk.test.ts`,
+  `external-messaging.routes.test.ts`, `external-messaging-templates.routes.test.ts`) →
+  **108 passed** (0 failed).
+- Suites vecinas no tocadas pero relacionadas (`messaging-bulk-composition`, `messaging-composition`,
+  `messagingBulk.routes`, `messagingBulk.dualParser.e2e`, `GetTemplate.test`,
+  `external-bulk-messaging-composition`) → **169 passed** (0 failed) — confirma que el catch-all
+  nuevo y el `name` opcional no rompen nada vecino (orden de mounts COMP-1 intacto).
+- `npx tsc --noEmit` → limpio (exit 0).
+- `git status --short` → solo archivos de este fix wave (ver abajo). Suite COMPLETA (`npm test`) NO
+  se corrió en esta ola — la corre el orquestador aparte.
+
+## Los 3 findings
+
+| # | Sev | Qué estaba mal (LIVE) | Fix |
+|---|-----|------------------------|-----|
+| S1 | HIGH (usabilidad) | `{"phone":"1178547218"}` (10 dígitos, forma canónica AR) → `classifyArPhone` lo clasificaba `non_mobile` → excluido → 422 `EMPTY_RECIPIENTS`, aunque `toWhatsAppE164` (el MISMO motor que usa `send`) SIEMPRE lo reconstruye como `+5491178547218` — `validate` rechazaba lo que `send` hubiera aceptado igual | `classifyArPhone` (`ValidateExternalBulk.ts`) pasa a wrapper FINO y CONSISTENTE con `toWhatsAppE164`: `mobile` ssi (a) no es extranjero explícito (`+`/`00` + país≠54 → `invalid`, regla F11 intacta) y (b) `toWhatsAppE164(raw)` no da `null`. Ya no hay tercer resultado — la función devuelve `boolean`, no un union de 3. `hasLocal15`/`ArPhoneKind` (dead code) eliminados. El literal `'non_mobile'` se MANTIENE en `ExternalBulkInvalidReason` (D12) por estabilidad de wire, pero el use case ya NO lo emite |
+| S2 | MEDIUM | `DELETE /templates/:sid` y `GET /campaigns/` (id vacío) — rutas no registradas en el router dedicado — devolvían 401 `UNAUTHORIZED` en vez de 404: sin catch-all propio, Express seguía buscando match y caía en el mount GLOBAL de `app.ts` (`/api/external/v1`, key global sin la dedicada) | `createExternalMessagingRouter` termina con `router.use((_req,res) => res.status(404).json({error:'Not found', code:'NOT_FOUND'}))` como ÚLTIMO handler — mismo shape del 404 global de `app.ts:4326` — sellando el prefijo entero ANTES de que Express siga buscando afuera |
+| S3 | LOW (DX) | `POST /templates/:sid/submit` con `{"category":"UTILITY"}` (sin `name`) → 400 "name" required — fricción innecesaria para el caller AI, el template YA tiene un `friendlyName` | `name` pasa a OPCIONAL en `SubmitTemplateBodySchema` (zod). En el handler, si `name` está ausente se resuelve vía `GetTemplate.execute(sid)` (ya inyectado, D4.f — cero use case nuevo) y su `friendlyName`; `sid` inexistente 404-ea vía `GetTemplate` ANTES de tocar `submitTemplate`. `name` explícito sigue ganando |
+
+## Contrafácticos corridos (revert-probe)
+
+- **S1**: con el `classifyArPhone` viejo (regla `digits.length===10 → 'non_mobile'`), los 8 tests
+  nuevos/actualizados (matriz de formatos + extranjeros + duplicado + garbage) fallan — confirmado
+  RED real antes del fix (8 failed / 46 passed).
+- **S2**: sin el `router.use` catch-all, los 2 tests nuevos (`DELETE /templates/:sid`,
+  `GET /campaigns/` vacío contra un stub que simula el mount global) devuelven 401 en vez de 404 —
+  confirmado RED real (2 failed) reproduciendo EXACTO el síntoma del smoke en vivo.
+- **S3**: con `name: z.string()` (no opcional), los 3 tests nuevos fallan — 2 esperaban 202/404 y
+  recibían 400 `VALIDATION_ERROR` (name faltante bloqueaba ANTES de llegar al handler) — confirmado
+  RED real (3 failed / 17 skipped).
+
+## Archivos tocados
+
+**Modificados (código)**
+- `src/application/use-cases/messaging/ValidateExternalBulk.ts` — S1, `classifyArPhone` reescrito
+  como wrapper de `toWhatsAppE164` (`boolean`, no union de 3); `hasLocal15`/`ArPhoneKind` eliminados;
+  comentarios de VAL-2/D5 actualizados.
+- `src/application/dto/external-bulk-messaging.dto.ts` — S1, comentario en `ExternalBulkInvalidReason`
+  documentando que `'non_mobile'` queda por estabilidad de contrato, ya no se emite.
+- `src/infrastructure/http/routes/external-messaging.routes.ts` — S2, catch-all 404 al final del
+  router; S3, `SubmitTemplateBodySchema.name` opcional + resolución vía `GetTemplate` en el handler.
+
+**Modificados (tests)**
+- `src/__tests__/application/messaging/ValidateExternalBulk.test.ts` — S1: test viejo de
+  `non_mobile` reescrito a `mobile` (con MOBILE_B como compañero, MOBILE_A colisionaba en E.164 con
+  el caso bajo test) + describe nuevo `fix wave F3 (S1)` con matriz `it.each` de 5 formatos AR
+  equivalentes, 3 extranjeros (Brasil/USA/España), duplicado cross-formato y garbage no-dígito.
+- `src/__tests__/infrastructure/external-messaging.routes.test.ts` — S2: describe nuevo con
+  `buildSealedApp()` (router dedicado + stub 401 montado DESPUÉS, molde real de `app.ts`) y 2 tests.
+- `src/__tests__/infrastructure/external-messaging-templates.routes.test.ts` — S3: describe nuevo
+  con 3 tests (sin `name` → 202 con friendlyName; `name` explícito gana; sid inexistente → 404 sin
+  invocar `submitTemplate`).
+
+## Cambios de contrato (leer antes de tocar el consumidor)
+
+- **D12 — `ExternalBulkInvalidReason`**: `'non_mobile'` deja de aparecer en las respuestas reales de
+  `validate`. Un consumidor M2M que dependiera de ver ese reason para un NSN AR de 10 dígitos limpio
+  ahora lo va a ver en `valid`, no en `invalid`.
+- **D12 — `POST /templates/:sid/submit`**: el body pasa de `{name, category}` a `{category, name?}`.
+  Retrocompatible (un `name` explícito sigue funcionando idéntico); el caso nuevo es la OMISIÓN.
+- **D7.d — `DELETE /templates/:sid`**: el 404 ahora es EXPLÍCITO (`{error:'Not found',
+  code:'NOT_FOUND'}`) del router propio, no el 404 default de Express (sin body) ni el 401 del mount
+  global. Cualquier ruta mal tipeada bajo el prefijo dedicado da el mismo 404, nunca 401.
+
+## Gotchas descubiertos en esta ola
+
+- **Un smoke en vivo contra prod encontró 3 findings que el review adversarial (F1/F2, 2 rondas, 3
+  revisores) NO cazó** — F1/F2 revisaron el CÓDIGO contra la spec; S1/S2/S3 son gaps entre la spec
+  MISMA y el comportamiento REAL esperado por un caller externo (la spec decía "non_mobile" pero
+  nunca se comparó contra lo que `toWhatsAppE164` realmente hace con el mismo crudo; el catch-all de
+  router nunca se probó con supertest CONTRA un segundo mount; `name` requerido nunca se cuestionó
+  frente al caso de uso real del caller AI). Lección: un smoke con requests reales post-deploy cubre
+  una clase de bug distinta a un review de código, aunque el código esté "verde" y revisado.
+- **Dos fixtures de test que "se ven distintas" pueden ser el MISMO número**: `MOBILE_A = '011
+  15-2345-6789'` y el candidato de test `'1123456789'` reconstruyen AMBOS a `+5491123456789` — al
+  cambiar la clasificación de `1123456789` de `non_mobile` a `mobile`, emparejarlo con `MOBILE_A`
+  como "recipient válido de relleno" convierte el test en un caso de `duplicado`, no en el caso que
+  se quería probar. Hubo que cambiar el compañero a `MOBILE_B` (E.164 distinto) para aislar la
+  clasificación real.
+- **`normalizeTemplateName` no es ASCII-safe**: `'Nombre Explícito'` normaliza a `'nombre_expl_cito'`
+  (la `í` con tilde cae en `replace(/[^a-z0-9]+/g,'_')`, NO se transliteral a `i`) — un test que
+  asumía `'nombre_explicito'` como resultado de un input con tilde fallaba por un bug del TEST, no
+  del código bajo prueba; hubo que usar un input sin diacríticos para pinear la intención real
+  (name explícito gana sobre friendlyName).
+
+---
+
+# Fix wave F4 (S4, review adversarial en vivo) — 2026-09-02
+
+Cuarta ola — 1 finding HIGH del uso real de la API externa ("check Meta status" contra un `sid`
+puntual). Scope acotado, exclusivo del adapter Twilio: `ValidateExternalBulk.ts`,
+`external-messaging.routes.ts` y sus tests estaban bajo review adversarial en paralelo — NO
+tocados en esta ola.
+
+## Gate final
+
+- `npx jest src/__tests__/infrastructure/adapters/twilio` → **35 passed** (0 failed): 28 baseline +
+  7 nuevos (6 `getTemplate` merge + 1 `listTemplates` rejectionReason).
+- `npx jest` (suite completa) → **1254 suites / 13053 tests passed**, 88 skipped (pre-existentes,
+  no relacionados). Ruido de Prisma post-teardown (`Cannot log after tests are done` en
+  `PrismaAuditEventRepository`) ya flagueado en F1 — no introducido acá.
+- `npx tsc --noEmit` → limpio (exit 0).
+- `git status --short` → solo los archivos listados abajo.
+
+## El finding
+
+| # | Sev | Qué estaba mal | Fix |
+|---|-----|-----------------|-----|
+| S4 | HIGH (uso real: "check Meta status") | `GET /templates/:sid` → `TwilioContentGateway.getTemplate()` pega SOLO a `GET /v1/Content/{sid}`, cuyo payload NO trae `approval_requests` (a diferencia de `GET /v1/ContentAndApprovals`, que usa el listado). Resultado: `approvalStatus` quedaba SIEMPRE `'unsubmitted'` para la ficha de UN template, aunque el listado mostrara el estado real (`rejected`/`approved`/`pending`) — verificado en vivo: listado decía `rejected` para `HXe05616284ec931e7ec77128457cd6d8c`, la ficha decía `unsubmitted`. Bug preexistente del `GetTemplate` de admin, expuesto ahora en la API externa cuyo propósito explícito es consultar el estado en Meta | `getTemplate()` agrega un segundo GET a `/v1/Content/{sid}/ApprovalRequests` y mergea `status`/`category`/`rejection_reason` sobre el mapeo content-only. Si ese segundo GET falla (404 = nunca sometido a aprobación, timeout, 5xx) degrada a `'unsubmitted'` SIN tirar — dato secundario, no debe convertir una ficha válida en 503. `listTemplates()` también mapea `rejectionReason` (additivo, mismo `ContentAndApprovals` de siempre, sin segundo GET) |
+
+## Contrafácticos corridos (revert-probe)
+
+- **S4**: con `getTemplate()` revertido a `toTemplateDto(item)` (sin el merge, GET de
+  ApprovalRequests ignorado), los 3 tests `S4: ApprovalRequests status=rejected/approved/pending`
+  fallan — `approvalStatus` recibido `'unsubmitted'` contra el esperado `'rejected'`/`'approved'`/
+  `'pending'` — confirmado RED real (3 failed / 15 passed) reproduciendo EXACTO el síntoma en vivo.
+
+## Archivos tocados
+
+**Modificados (código — solo adapter/port, scope de esta ola)**
+- `src/infrastructure/adapters/twilio/TwilioContentGateway.ts` — `getTemplate()` ahora hace 2 GET
+  (Content + ApprovalRequests) y mergea; nuevo método privado `fetchApprovalRequest()` (traga
+  cualquier falla, nunca propaga); `toTemplateDto()` toma un 2do parámetro opcional
+  (`approvalOverride`); interfaces nuevas `TwilioWhatsappApproval`/`TwilioApprovalRequestsResponse`;
+  `TwilioContentItem.approval_requests` gana `rejection_reason?: string`.
+- `src/domain/ports/TemplateMessagingPort.ts` — `TemplateDto` gana `rejectionReason?: string | null`
+  y `approvalCategory?: string | null` (ambos opcionales, additivos — NO rompe ningún consumidor
+  existente, incluido el admin `GET /api/templates/:sid` que reusa el mismo DTO).
+
+**Modificados (tests)**
+- `src/__tests__/infrastructure/adapters/twilio/TwilioContentGateway.admin.test.ts` — 6 tests
+  nuevos en `describe('getTemplate')`: rejected+reason+category, approved, pending, ApprovalRequests
+  sin `whatsapp`, ApprovalRequests 404, ApprovalRequests timeout/red — los últimos 2 confirman
+  degradación sin throw.
+- `src/__tests__/infrastructure/adapters/twilio/TwilioContentGateway.test.ts` — 1 test nuevo en
+  `describe('listTemplates')`: `approval_requests.rejection_reason` se mapea a `template.rejectionReason`.
+
+**NO tocados (bajo review adversarial en paralelo, exclusión explícita del prompt)**
+- `src/application/use-cases/messaging/ValidateExternalBulk.ts`,
+  `src/infrastructure/http/routes/external-messaging.routes.ts`, y los tests
+  `external-messaging.routes.test.ts` / `external-messaging-templates.routes.test.ts` /
+  `ValidateExternalBulk.test.ts` / `external-bulk-messaging-composition.test.ts`.
+
+## Cambios de contrato (leer antes de tocar el consumidor)
+
+- **D12 — `TemplateDetailDto`**: gana `rejectionReason?: string | null` y
+  `approvalCategory?: string | null`, ambos additivos. `approvalCategory` SOLO se completa en
+  `GET .../templates/:sid` (viene del merge con `ApprovalRequests`); en el listado
+  (`GET .../templates`) queda `undefined`. `rejectionReason` puede venir poblado en AMBOS endpoints
+  cuando el proveedor lo informa. Mismo DTO que consume el admin `GET /api/templates/:sid` — sin
+  breaking change para ningún consumidor existente (campos opcionales nuevos, nadie los leía antes).
+
+## Gotchas descubiertos en esta ola
+
+- **Dos endpoints de Twilio con el MISMO recurso lógico, payloads DISTINTOS**: `GET
+  /v1/ContentAndApprovals` (listado) SÍ trae `approval_requests` embebido; `GET /v1/Content/{sid}`
+  (ficha individual) NO — hay que pedirlo aparte a `/v1/Content/{sid}/ApprovalRequests`. Un test que
+  solo ejercita el listado (como el `TwilioContentGateway.test.ts` original) nunca hubiera cazado
+  este bug — el finding vino de comparar la MISMA API contra sí misma en dos rutas distintas
+  (premisa verificada contra la llamada real, no contra la doc).
+- **El fake existente (`get.mock.calls[0]`) sigue pasando SIN tocarlo** al agregar un segundo GET:
+  el test viejo de `getTemplate` (`GET /v1/Content/:sid → DTO; Basic auth`) solo encolaba UN
+  `mockResolvedValueOnce`; el segundo `get()` (ApprovalRequests) devuelve `undefined` por defecto de
+  jest, lo que rompe al acceder `.data` — pero como `fetchApprovalRequest()` traga CUALQUIER error,
+  degrada a `'unsubmitted'` silenciosamente y el test viejo (que esperaba justamente
+  `'unsubmitted'`) sigue en verde sin que nadie lo haya tocado. Ojo: esto significa que un mock mal
+  armado (sin querer) también degradaría en silencio — el contrafáctico de arriba es la única señal
+  dura de que el merge realmente corre.
+
+# Fix wave F5 — 2026-09-02
+
+Quinta ola — 2 findings sobre el mismo wire de templates (HIGH + LOW), ambos sobre el mapper
+`application/dto`, NO sobre el adapter (que F4/S4 ya había arreglado).
+
+## Gate final
+
+- `npx jest src/__tests__/infrastructure/adapters/twilio
+  src/__tests__/infrastructure/external-messaging-templates.routes.test.ts
+  src/__tests__/infrastructure/external-messaging.routes.test.ts` → **94 passed** (0 failed): 2 tests
+  RED nuevos en el adapter (`providerStatus` paused/disabled) + 3 tests RED nuevos a nivel ruta
+  (rejectionReason/approvalCategory en la ficha, rejectionReason en el listado, providerStatus en
+  la ficha) + 1 test preexistente (`listTemplates` — mapeo 1 página) ajustado para incluir el campo
+  additivo `providerStatus` que ahora sale siempre que el proveedor informa `status`.
+- `npx jest src/__tests__/application/messaging src/__tests__/infrastructure/messaging.routes.test.ts
+  src/__tests__/infrastructure/messagingBulk.routes.test.ts src/__tests__/infrastructure/templates.routes.test.ts
+  src/__tests__/infrastructure/external-bulk-messaging-composition.test.ts
+  src/__tests__/infrastructure/adapters/in-memory` → **1658 passed** (0 failed) — barrido más amplio
+  de todo lo que toca templates/messaging, sin romper nada aguas abajo (`templates.routes.ts` admin,
+  `messagingBulk.routes.ts`, `ListTemplates`/`GetTemplate` use cases, fakes in-memory).
+- `npx tsc --noEmit` → limpio (exit 0).
+- Suite completa NO corrida en esta ola (la corre el orquestador).
+
+## Los findings
+
+| # | Sev | Qué estaba mal | Fix |
+|---|-----|-----------------|-----|
+| 1 | HIGH | F4 (S4) le agregó `rejectionReason`/`approvalCategory` a `TemplateDto` (dominio) y el adapter (`TwilioContentGateway`) YA los completaba — pero el mapper de aplicación (`toTemplateDetailDto` en `messaging-templates.dto.ts`, y el análogo `ListTemplates.execute` sobre `TemplateSummaryDto` en `messaging-bulk.dto.ts`) nunca los copiaba al DTO curado. Los campos morían ANTES del wire: `GET .../templates/:sid` y `GET .../templates` respondían 200 SIN esos campos aunque el proveedor los hubiera informado (bug clásico "el dato llega al mapper y el mapper lo tira" — F4 arregló el ADAPTER, dejó el MAPPER sin tocar) | `TemplateDetailDto` gana `rejectionReason?: string \| null` y `approvalCategory?: string \| null` (additivos, ya documentados en D12 desde F4 pero nunca mapeados); `toTemplateDetailDto` los copia. `TemplateSummaryDto` (listado) gana `rejectionReason?: string \| null`; `ListTemplates.execute` lo copia — `approvalCategory` NO se agrega ahí a propósito (D12: solo se completa en la ficha, vía el merge con `ApprovalRequests`; el listado nunca lo tiene) |
+| 2 | LOW | Twilio informa `status:'paused'`/`'disabled'` para templates YA aprobados (pausados por el operador o desactivados por Meta) — estados legítimos, fuera del union `TemplateDto['approvalStatus']` (`approved\|pending\|rejected\|unsubmitted`, fijo porque el FE lo espejea). `normalizeApprovalStatus` los colapsa al `default: 'unsubmitted'`, indistinguible de "nunca sometido a aprobación" — un operador o una IA consultando la ficha ve el mismo estado para dos situaciones completamente distintas | Campo ADITIVO `providerStatus?: string` en `TemplateDto` (dominio, string suelto, SIN validar contra ningún enum) y en `TemplateDetailDto` (aplicación) — el string CRUDO tal cual lo informa el proveedor, sin normalizar. `TwilioContentGateway.toTemplateDto` lo setea con el mismo `status` ya resuelto (merge de `getTemplate` > content-only de `listTemplates`/`createTemplate`) — cubre AMBOS paths sin lógica nueva. El union `approvalStatus` NO cambia — decisión explícita: no forzar al FE a manejar 2 estados más que no puede accionar distinto |
+
+## Contrafácticos corridos (revert-probe)
+
+- **Finding 1**: con `toTemplateDetailDto`/`ListTemplates.execute` revertidos (sin copiar
+  `rejectionReason`/`approvalCategory`), los 3 tests de ruta nuevos (`rejectionReason/approvalCategory
+  llegan al wire`, `el listado trae rejectionReason`) fallan — `res.body.rejectionReason` /
+  `res.body.approvalCategory` vienen `undefined` contra el esperado `'Tag_Content_Mismatch'`/`'UTILITY'`
+  — confirmado RED real (falla de compilación TS primero, porque los fixtures del test usan las
+  properties nuevas del `TemplateDto`; con el `TemplateDto` del port YA existente desde F4, el RED
+  real es el `expect` fallando en runtime, no en tsc).
+- **Finding 2**: con `TwilioContentGateway.toTemplateDto` sin la línea `if (status !== undefined)
+  dto.providerStatus = status`, los 2 tests nuevos de adapter (`paused`/`disabled`) fallan primero en
+  TS (`providerStatus` no existe en `TemplateDto`) y, agregando solo el campo al port sin la línea del
+  adapter, fallan en runtime (`dto.providerStatus` `undefined` contra `'paused'`/`'disabled'`
+  esperado).
+
+## Archivos tocados
+
+**Modificados (código)**
+- `src/domain/ports/TemplateMessagingPort.ts` — `TemplateDto` gana `providerStatus?: string`
+  (additivo, docstring explica el gap con `normalizeApprovalStatus`).
+- `src/infrastructure/adapters/twilio/TwilioContentGateway.ts` — `toTemplateDto` setea
+  `dto.providerStatus = status` cuando `status !== undefined` (mismo `status` ya resuelto, cubre
+  `listTemplates`/`createTemplate`/`getTemplate`).
+- `src/application/dto/messaging-templates.dto.ts` — `TemplateDetailDto` gana `rejectionReason?:
+  string | null`, `approvalCategory?: string | null`, `providerStatus?: string`; `toTemplateDetailDto`
+  los copia los 3.
+- `src/application/dto/messaging-bulk.dto.ts` — `TemplateSummaryDto` gana `rejectionReason?: string |
+  null` (additivo, solo este campo — ver Finding 1).
+- `src/application/use-cases/messaging/ListTemplates.ts` — copia `rejectionReason: t.rejectionReason`
+  en el `.map()`.
+
+**Modificados (tests)**
+- `src/__tests__/infrastructure/adapters/twilio/TwilioContentGateway.test.ts` — 1 test nuevo
+  (`listTemplates` con `approval_requests.status:'paused'` → `providerStatus:'paused'`) + el test
+  preexistente de mapeo (1 página) ajustado para incluir `providerStatus` (additivo, ahora sale
+  siempre que `approval_requests.status` viene definido).
+- `src/__tests__/infrastructure/adapters/twilio/TwilioContentGateway.admin.test.ts` — 1 test nuevo
+  (`getTemplate` con `ApprovalRequests.status:'disabled'` → `providerStatus:'disabled'`).
+- `src/__tests__/infrastructure/external-messaging-templates.routes.test.ts` — 2 fixtures nuevos
+  (`REJECTED_TEMPLATE`, `PAUSED_TEMPLATE`) + 3 tests: rejectionReason/approvalCategory en la ficha,
+  rejectionReason en el listado, providerStatus en la ficha.
+
+## Cambios de contrato (leer antes de tocar el consumidor)
+
+- **D12 — `TemplateDetailDto`**: `rejectionReason`/`approvalCategory` (F4) AHORA sí llegan al wire —
+  eran additivos en el shape desde F4 pero el mapper los descartaba; el shape del DTO no cambia,
+  solo el comportamiento del mapper. Gana `providerStatus?: string` (nuevo campo F5, additivo,
+  string suelto — NO forma parte de ningún enum). El admin `GET /api/templates/:sid`
+  (`templates.routes.ts`) reusa el MISMO `toTemplateDetailDto` — gana los 3 campos automáticamente,
+  sin cambio de código en ese router.
+- **D12 — listado (`GET .../templates`, `TemplateSummaryDto`)**: gana `rejectionReason?: string |
+  null` (additivo). NO gana `approvalCategory` ni `providerStatus` en el listado — `approvalCategory`
+  porque el listado nunca lo tuvo (solo la ficha, vía el merge con `ApprovalRequests`, decisión F4);
+  `providerStatus` se podría agregar ahí también (el `TemplateDto` de `listTemplates()` YA lo trae)
+  pero quedó fuera de scope — el finding 2 solo pedía verlo en el consumo "check Meta status"
+  (la ficha), no en el listado. Si un consumidor lo necesita en el listado, es una ola additiva más,
+  no un cambio de shape.
+
+## Gotchas descubiertos en esta ola
+
+- **El bug vivía en el mapper, no en el adapter** — F4 hizo el trabajo difícil (2 GET + merge en
+  Twilio) y lo dejó bien probado a nivel adapter (`TwilioContentGateway.admin.test.ts`), pero nadie
+  verificó que el campo sobreviviera el siguiente salto (`TemplateDto` → `TemplateDetailDto`). Un
+  test de adapter en verde NO prueba que el dato llegue al HTTP response — hace falta el test de
+  ruta (supertest) para cazar esto; es la misma lección que "la función que decide no es la que se
+  testea", aplicada a un mapper en vez de a un flag.
+- **`toEqual` estricto sobre una lista rompe con cualquier campo additivo nuevo** — el test
+  preexistente `TwilioContentGateway.test.ts` (`1 página → mapea...`) usaba `toEqual` con un array de
+  objetos LITERALES completos; agregar `providerStatus` (poblado porque los fixtures YA traían
+  `approval_requests.status`) lo rompió aunque el comportamiento nuevo sea correcto y deseado — hubo
+  que actualizar el fixture esperado, no revertir el fix. Ojo la próxima vez que se toque
+  `toTemplateDto`: cualquier campo nuevo poblado por default en los fixtures existentes rompe estos
+  `toEqual` exactos, a diferencia de los `toMatchObject`/asserts puntuales que dominan el resto de la
+  suite.

@@ -62,6 +62,34 @@ const PENDING_TEMPLATE: TemplateDto = {
   body: 'Recordatorio',
 };
 
+// fix wave F5 (HIGH) — `rejectionReason`/`approvalCategory` YA vienen del adapter (F4, S4) pero
+// morían en `toTemplateDetailDto`/`TemplateSummaryDto` (nunca mapeados al DTO curado). Estos
+// fixtures ejercitan que lleguen al wire en AMBOS endpoints (TPL-1 listado, TPL-2 ficha).
+const REJECTED_TEMPLATE: TemplateDto = {
+  contentSid: 'HXrejected1',
+  friendlyName: 'promo_rechazada',
+  language: 'es',
+  variables: {},
+  approvalStatus: 'rejected',
+  category: 'UTILITY',
+  body: 'Rechazado',
+  rejectionReason: 'Tag_Content_Mismatch',
+  approvalCategory: 'UTILITY',
+};
+
+// fix wave F5 (LOW) — Twilio informa 'paused' (template YA aprobado, pausado por el operador);
+// `normalizeApprovalStatus` lo colapsa a 'unsubmitted' (no cambia el union del FE) pero
+// `providerStatus` preserva el string crudo para que un operador/AI vea el estado real.
+const PAUSED_TEMPLATE: TemplateDto = {
+  contentSid: 'HXpaused1',
+  friendlyName: 'promo_pausada',
+  language: 'es',
+  variables: {},
+  approvalStatus: 'unsubmitted',
+  body: 'Pausado',
+  providerStatus: 'paused',
+};
+
 function makeSegmentSource(): CampaignSegmentSource {
   return { listSegmentRecipients: async (_s: CampaignSegmentFilter) => [] };
 }
@@ -128,6 +156,14 @@ describe('GET /templates (TPL-1)', () => {
     expect(approved.body).toBe('Hola {{1}}');
     expect(pending.sendable).toBe(false);
   });
+
+  it('fix wave F5 (HIGH) — el listado trae rejectionReason cuando el proveedor lo informa', async () => {
+    const { app } = buildApp({ templates: [APPROVED_TEMPLATE, REJECTED_TEMPLATE] });
+    const res = await request(app).get(`${BASE}/templates`).set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(200);
+    const rejected = res.body.data.find((t: { contentSid: string }) => t.contentSid === 'HXrejected1');
+    expect(rejected.rejectionReason).toBe('Tag_Content_Mismatch');
+  });
 });
 
 describe('GET /templates/:sid (TPL-2)', () => {
@@ -144,6 +180,23 @@ describe('GET /templates/:sid (TPL-2)', () => {
     const res = await request(app).get(`${BASE}/templates/HXnope`).set('X-Api-Key', DEDICATED_KEY);
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
+  });
+
+  it('fix wave F5 (HIGH) — rejectionReason/approvalCategory llegan al wire (antes morían en el DTO curado)', async () => {
+    const { app } = buildApp({ templates: [REJECTED_TEMPLATE] });
+    const res = await request(app).get(`${BASE}/templates/HXrejected1`).set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body.approvalStatus).toBe('rejected');
+    expect(res.body.rejectionReason).toBe('Tag_Content_Mismatch');
+    expect(res.body.approvalCategory).toBe('UTILITY');
+  });
+
+  it('fix wave F5 (LOW) — providerStatus expone el status crudo del proveedor (paused)', async () => {
+    const { app } = buildApp({ templates: [PAUSED_TEMPLATE] });
+    const res = await request(app).get(`${BASE}/templates/HXpaused1`).set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body.approvalStatus).toBe('unsubmitted');
+    expect(res.body.providerStatus).toBe('paused');
   });
 });
 
@@ -238,6 +291,57 @@ describe('POST /templates/:sid/submit (TPL-4)', () => {
       .send({ name: 'ok', category: 'MARKETING' });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
+  });
+
+  // ─── fix wave F3 (S3, smoke en vivo) ───────────────────────────────────────
+  // LIVE: `{"category":"UTILITY"}` (sin `name`) → 400 "name" required. Para el
+  // caller AI, exigir `name` es fricción innecesaria — el template YA tiene un
+  // `friendlyName`. `name` pasa a ser OPCIONAL: si no vino, se resuelve del
+  // propio template vía `GetTemplate` (ya inyectado, D4.f: cero use case
+  // nuevo); si vino explícito, gana igual (no se pisa).
+  describe('fix wave F3 (S3) — `name` es opcional, default al friendlyName del template', () => {
+    it('sin `name` en el body → 202, el port recibe el friendlyName normalizado', async () => {
+      const { app, templatePort } = buildApp();
+      const res = await request(app)
+        .post(`${BASE}/templates/HXpending1/submit`)
+        .set('X-Api-Key', DEDICATED_KEY)
+        .send({ category: 'UTILITY' });
+
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ contentSid: 'HXpending1', submitted: true });
+      // PENDING_TEMPLATE.friendlyName === 'recordatorio_deuda' (ya normalizado).
+      expect(templatePort.submitCalls[0]).toMatchObject({
+        contentSid: 'HXpending1',
+        name: 'recordatorio_deuda',
+        category: 'UTILITY',
+      });
+    });
+
+    it('con `name` explícito → gana sobre el friendlyName (no se pisa)', async () => {
+      const { app, templatePort } = buildApp();
+      const res = await request(app)
+        .post(`${BASE}/templates/HXpending1/submit`)
+        .set('X-Api-Key', DEDICATED_KEY)
+        .send({ name: 'Nombre Explicito', category: 'UTILITY' });
+
+      expect(res.status).toBe(202);
+      expect(templatePort.submitCalls[0]).toMatchObject({
+        contentSid: 'HXpending1',
+        name: 'nombre_explicito',
+      });
+    });
+
+    it('sin `name` y sid inexistente → 404 TEMPLATE_NOT_FOUND (no un 400 por name faltante)', async () => {
+      const { app, templatePort } = buildApp();
+      const res = await request(app)
+        .post(`${BASE}/templates/HXnope/submit`)
+        .set('X-Api-Key', DEDICATED_KEY)
+        .send({ category: 'UTILITY' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
+      expect(templatePort.submitCalls).toHaveLength(0);
+    });
   });
 });
 

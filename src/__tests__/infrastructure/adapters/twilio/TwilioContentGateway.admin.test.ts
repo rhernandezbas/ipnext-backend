@@ -116,6 +116,121 @@ describe('TwilioContentGateway — getTemplate (T2)', () => {
 
     await expect(gateway.getTemplate('HX')).rejects.toBeInstanceOf(TemplateProviderUnavailableError);
   });
+
+  // ── S4 fix — GET /v1/Content/{sid} NO trae approval_requests; getTemplate
+  // debe pegarle también a GET /v1/Content/{sid}/ApprovalRequests y mergear. ──
+  it('S4: ApprovalRequests status=rejected + rejection_reason → DTO rejected + rejectionReason + approvalCategory', async () => {
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { sid: 'HXr', friendly_name: 'r', language: 'es', variables: {}, types: {} } })
+      .mockResolvedValueOnce({
+        data: {
+          whatsapp: {
+            type: 'whatsapp',
+            name: 'r',
+            category: 'UTILITY',
+            content_type: 'twilio/text',
+            status: 'rejected',
+            rejection_reason: 'Tag_Content_Mismatch',
+            allow_category_change: true,
+          },
+          url: 'https://content.twilio.com/v1/Content/HXr/ApprovalRequests',
+        },
+      });
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXr');
+
+    expect(dto.approvalStatus).toBe('rejected');
+    expect(dto.rejectionReason).toBe('Tag_Content_Mismatch');
+    expect(dto.approvalCategory).toBe('UTILITY');
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get.mock.calls[1][0]).toBe('https://content.twilio.com/v1/Content/HXr/ApprovalRequests');
+    expect((get.mock.calls[1][1] as { auth: { username: string; password: string } }).auth).toEqual({
+      username: 'ACtest',
+      password: 'secret',
+    });
+  });
+
+  it('S4: ApprovalRequests status=approved → DTO approved, sin rejectionReason', async () => {
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { sid: 'HXa', friendly_name: 'a', language: 'es', variables: {}, types: {} } })
+      .mockResolvedValueOnce({ data: { whatsapp: { status: 'approved', category: 'MARKETING' } } });
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXa');
+
+    expect(dto.approvalStatus).toBe('approved');
+    expect(dto.rejectionReason).toBeUndefined();
+    expect(dto.approvalCategory).toBe('MARKETING');
+  });
+
+  it('S4: ApprovalRequests status=pending → DTO pending', async () => {
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { sid: 'HXp', friendly_name: 'p', language: 'es', variables: {}, types: {} } })
+      .mockResolvedValueOnce({ data: { whatsapp: { status: 'pending' } } });
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXp');
+
+    expect(dto.approvalStatus).toBe('pending');
+  });
+
+  // fix wave F5 (LOW) — Twilio informa 'paused'/'disabled' como estados legítimos de un template YA
+  // aprobado (pausado por el operador o desactivado por Meta), pero `normalizeApprovalStatus` los
+  // colapsa a 'unsubmitted' (no están en el union `TemplateDto['approvalStatus']`, D12/FE). Se
+  // preserva el string CRUDO en `providerStatus` para que un operador/AI no confunda "nunca
+  // submitido" con "aprobado y luego pausado" — sin tocar el union existente (el FE lo espejea).
+  it('fix wave F5: ApprovalRequests status=disabled (Twilio-only) → approvalStatus unsubmitted + providerStatus crudo', async () => {
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { sid: 'HXd', friendly_name: 'd', language: 'es', variables: {}, types: {} } })
+      .mockResolvedValueOnce({ data: { whatsapp: { status: 'disabled', category: 'MARKETING' } } });
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXd');
+
+    expect(dto.approvalStatus).toBe('unsubmitted');
+    expect(dto.providerStatus).toBe('disabled');
+  });
+
+  it('S4: ApprovalRequests sin la key `whatsapp` (nunca sometido a aprobación) → unsubmitted', async () => {
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { sid: 'HXu', friendly_name: 'u', language: 'es', variables: {}, types: {} } })
+      .mockResolvedValueOnce({ data: {} });
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXu');
+
+    expect(dto.approvalStatus).toBe('unsubmitted');
+  });
+
+  it('S4: ApprovalRequests responde 404 → degrada a unsubmitted SIN tirar (getTemplate no debe romperse por este dato secundario)', async () => {
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { sid: 'HX404', friendly_name: 'x', language: 'es', variables: {}, types: {} } })
+      .mockRejectedValueOnce(axiosErr(404));
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HX404');
+
+    expect(dto.approvalStatus).toBe('unsubmitted');
+  });
+
+  it('S4: ApprovalRequests responde timeout/red → degrada a unsubmitted SIN tirar', async () => {
+    const get = jest
+      .fn()
+      .mockResolvedValueOnce({ data: { sid: 'HXt', friendly_name: 'x', language: 'es', variables: {}, types: {} } })
+      .mockRejectedValueOnce(axiosErr(undefined, { code: 'ECONNABORTED' }));
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXt');
+
+    expect(dto.approvalStatus).toBe('unsubmitted');
+  });
 });
 
 describe('TwilioContentGateway — deleteTemplate (T2)', () => {

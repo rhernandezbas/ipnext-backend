@@ -40,6 +40,13 @@ export type ExternalBulkInvalidReason =
   | 'telefono_invalido'
   | 'opt_out'
   | 'duplicado'
+  /**
+   * fix wave F3 (S1, smoke en vivo) — YA NO SE EMITE. `ValidateExternalBulk`
+   * ahora clasifica un NSN AR de 10 dígitos limpio como `mobile` (consistente
+   * con `toWhatsAppE164`, el mismo motor que usa `send`), no como línea fija.
+   * El literal se mantiene en la union por estabilidad de contrato de wire
+   * (un consumer externo puede tener un `switch` exhaustivo sobre esto).
+   */
   | 'non_mobile'
   | 'variables_faltantes';
 

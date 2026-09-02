@@ -199,14 +199,27 @@ describe('ValidateExternalBulk', () => {
       expect(result.invalid).toContainEqual({ input: '123', reason: 'telefono_invalido' });
     });
 
-    it('línea fija válida pero no-móvil (NSN limpio, sin marcador) → invalid con reason non_mobile', async () => {
+    // fix wave F3 (S1) — un NSN limpio de 10 dígitos ES la forma CANÓNICA del
+    // móvil AR (el "9"/"15" son artefactos de discado): antes se descartaba
+    // como `non_mobile`, pero el motor de envío (`toWhatsAppE164`) SIEMPRE lo
+    // trató como móvil (`+549<nsn>`) — validate rechazaba lo que send hubiera
+    // aceptado. Ya NO es `non_mobile`, es `mobile` (ver describe dedicado F3
+    // más abajo para la matriz completa).
+    it('NSN limpio de 10 dígitos, sin marcador ("9"/"15") → ahora es MÓVIL válido, no ya non_mobile', async () => {
       const { useCase } = await setup();
 
+      // Compañero MOBILE_B (no MOBILE_A): MOBILE_A ("011 15-2345-6789") YA
+      // reconstruye al MISMO E.164 que "1123456789" (mismo NSN "1123456789"
+      // con y sin "15" embebido) — juntarlos daría `duplicado`, no probaría
+      // la clasificación en sí.
       const result = await useCase.execute(
-        baseInput({ recipients: [{ phone: MOBILE_A }, { phone: '1123456789' }] }),
+        baseInput({ recipients: [{ phone: MOBILE_B }, { phone: '1123456789' }] }),
       );
 
-      expect(result.invalid).toContainEqual({ input: '1123456789', reason: 'non_mobile' });
+      expect(result.valid.map((v) => v.phone)).toEqual(
+        expect.arrayContaining(['+5491198765432', '+5491123456789']),
+      );
+      expect(result.invalid).not.toContainEqual(expect.objectContaining({ input: '1123456789' }));
     });
 
     it('duplicado dentro del batch (mismo E.164, formato distinto) → el 2do cae invalid con reason duplicado', async () => {
@@ -245,6 +258,90 @@ describe('ValidateExternalBulk', () => {
       );
 
       expect(result.invalid).toContainEqual({ input: '336415123456', reason: 'opt_out' });
+    });
+  });
+
+  /**
+   * fix wave F3 (S1, smoke en vivo) — LIVE: `{"phone":"1178547218"}` → excluido
+   * como `non_mobile` → 422 EMPTY_RECIPIENTS, aunque el `send` (`toWhatsAppE164`)
+   * SIEMPRE reconstruye ese mismo crudo como `+5491178547218`. `classifyArPhone`
+   * pasa a ser un wrapper CONSISTENTE con `toWhatsAppE164`: mobile ssi (a) no es
+   * un extranjero explícito (`+`/`00` + país≠54 → invalid, intacto) y (b)
+   * `toWhatsAppE164(raw)` no da `null`. `non_mobile` deja de emitirse (el
+   * literal sigue en `ExternalBulkInvalidReason` por estabilidad de contrato).
+   */
+  describe('fix wave F3 (S1) — classifyArPhone consistente con toWhatsAppE164 (10 dígitos = móvil AR)', () => {
+    const CANONICAL_E164 = '+5491178547218';
+
+    it.each([
+      ['1178547218', '10 dígitos limpio (LIVE, el caso reportado)'],
+      ['11 7854-7218', '10 dígitos con espacios/guión'],
+      ['011 15 7854 7218', 'discado nacional [área][15][abonado]'],
+      ['+54 9 11 7854 7218', 'E.164 explícito con "9"'],
+      ['549 11 7854 7218', 'country-code + "9" sin "+"'],
+    ])('%s (%s) → valid, mismo E.164 canónico', async (raw) => {
+      const { useCase } = await setup();
+
+      const result = await useCase.execute(baseInput({ recipients: [{ phone: raw }] }));
+
+      expect(result.valid).toHaveLength(1);
+      expect(result.valid[0]?.phone).toBe(CANONICAL_E164);
+      expect(result.invalid).toEqual([]);
+    });
+
+    it('extranjero de 12 dígitos con "+" (Brasil) → invalid, NUNCA reconstruido como +549…', async () => {
+      const { useCase } = await setup();
+
+      const result = await useCase.execute(
+        baseInput({ recipients: [{ phone: MOBILE_A }, { phone: '+5511999999999' }] }),
+      );
+
+      expect(result.invalid).toContainEqual({ input: '+5511999999999', reason: 'telefono_invalido' });
+    });
+
+    it('extranjero corto con "+" (USA) → invalid', async () => {
+      const { useCase } = await setup();
+
+      const result = await useCase.execute(
+        baseInput({ recipients: [{ phone: MOBILE_A }, { phone: '+1 555 123 4567' }] }),
+      );
+
+      expect(result.invalid).toContainEqual({ input: '+1 555 123 4567', reason: 'telefono_invalido' });
+    });
+
+    it('extranjero con prefijo de acceso "00" (España) → invalid', async () => {
+      const { useCase } = await setup();
+
+      const result = await useCase.execute(
+        baseInput({ recipients: [{ phone: MOBILE_A }, { phone: '0034911223344' }] }),
+      );
+
+      expect(result.invalid).toContainEqual({ input: '0034911223344', reason: 'telefono_invalido' });
+    });
+
+    it('mismo número en 2 formatos → el 2do cae duplicado (mismo E.164)', async () => {
+      const { useCase } = await setup();
+
+      const result = await useCase.execute(
+        baseInput({ recipients: [{ phone: '1178547218' }, { phone: '011 15 7854 7218' }] }),
+      );
+
+      expect(result.valid).toHaveLength(1);
+      expect(result.invalid).toEqual([{ input: '011 15 7854 7218', reason: 'duplicado' }]);
+    });
+
+    // Pin: los no-dígitos se stripean IGUAL que en `toWhatsAppE164` — un sufijo
+    // de basura ("x") no cambia el E.164 reconstruido, así que colisiona con el
+    // mismo número ya visto → `duplicado`, NO un móvil "distinto".
+    it('garbage no-dígito pegado al mismo número → duplicado (mismos dígitos tras el strip)', async () => {
+      const { useCase } = await setup();
+
+      const result = await useCase.execute(
+        baseInput({ recipients: [{ phone: '1178547218' }, { phone: '1178547218x' }] }),
+      );
+
+      expect(result.valid).toHaveLength(1);
+      expect(result.invalid).toEqual([{ input: '1178547218x', reason: 'duplicado' }]);
     });
   });
 

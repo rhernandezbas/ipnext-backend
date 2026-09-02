@@ -665,6 +665,46 @@ describe('fix wave F1 (F7) — el rate limiter de escritura NO toca los GET', ()
   });
 });
 
+/**
+ * S2 (smoke en vivo) — LIVE: `DELETE /templates/:sid` → 401 UNAUTHORIZED,
+ * `GET /campaigns/` (id vacío) → 401. Ninguna de las 2 rutas está registrada
+ * en `createExternalMessagingRouter`, así que Express seguía buscando un
+ * match y caía en el mount GLOBAL de `app.ts` (`/api/external/v1`, key
+ * GLOBAL sin la key dedicada) — el 401 venía de AHÍ, no de negar la ruta. El
+ * router dedicado ahora termina en un catch-all propio (`router.use`) que
+ * SELLA el prefijo: nada se escapa. Acá se monta un stub que simula el mount
+ * global (401 fijo) DESPUÉS del router dedicado — molde real de `app.ts`
+ * (COMP-1: el dedicado se registra ANTES) — para probar que el catch-all
+ * intercepta antes de que Express siga cayendo al stub.
+ */
+describe('fix wave F3 (S2) — el router dedicado queda SELLADO, nada se escapa al mount GLOBAL', () => {
+  function buildSealedApp() {
+    const built = buildApp();
+    built.app.use('/api/external/v1', (_req, res) => {
+      res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+    });
+    return built;
+  }
+
+  it('DELETE /templates/:sid (no registrada) → 404 NOT_FOUND, NUNCA el 401 del stub global', async () => {
+    const { app } = buildSealedApp();
+    const res = await request(app)
+      .delete('/api/external/v1/messaging/bulk/templates/HXpending1')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+  });
+
+  it('GET /campaigns/ (id vacío) → 404 NOT_FOUND, NUNCA el 401 del stub global', async () => {
+    const { app } = buildSealedApp();
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/campaigns/')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+  });
+});
+
 /** SEND-6 exige 200 en el REPLAY; 202 queda solo para el `send` que ACEPTA recien. */
 describe('fix wave F1 (F3) — codigo HTTP del replay', () => {
   it('replay (misma key + mismo preview) → 200 con {resumed, status}; el primer send seguia siendo 202', async () => {

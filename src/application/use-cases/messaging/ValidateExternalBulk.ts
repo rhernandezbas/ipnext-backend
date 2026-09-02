@@ -103,7 +103,7 @@ export class ValidateExternalBulk {
       throw new TemplateNotApprovedError(input.templateRef ?? input.templateName ?? '');
     }
 
-    // 5 — VAL-2 — formato/opt-out/link + non_mobile + dedup intra-batch.
+    // 5 — VAL-2 — formato (E.164 AR via toWhatsAppE164, extranjero explicito = invalido) / opt-out / link + dedup intra-batch.
     const { candidates, invalid: invalidFromMatch } = await this.classifyRecipients(input.recipients);
 
     // 6 — VAL-5 — label de Chatwoot (si vino) contra el catálogo VIVO.
@@ -250,9 +250,10 @@ export class ValidateExternalBulk {
 
   /**
    * VAL-2 — clasifica CADA recipient del wire: sin_telefono / telefono_invalido /
-   * non_mobile / opt_out (exacto vía `matchManualContacts` O por sufijo) /
-   * duplicado (intra-batch, por E.164), o un candidato sobreviviente para el
-   * merge de variables (paso 7).
+   * opt_out (exacto vía `matchManualContacts` O por sufijo) / duplicado
+   * (intra-batch, por E.164), o un candidato sobreviviente para el merge de
+   * variables (paso 7). `non_mobile` YA NO se emite (fix wave F3, S1) — un
+   * NSN AR de 10 dígitos limpio es móvil, no fijo (ver `classifyArPhone`).
    */
   private async classifyRecipients(recipients: ValidateExternalBulkInput['recipients']): Promise<{
     candidates: Array<{
@@ -329,13 +330,14 @@ export class ValidateExternalBulk {
       // El marcador de móvil se juzga sobre lo que el CALLER tipeó (D4.b),
       // no sobre `Client.phone` — un `linked` matchea por clave normalizada
       // (lossy), pero lo que decide "¿esto es un móvil?" es el crudo recibido.
-      // fix wave F1 (F11) — tres resultados, no dos: un extranjero (o un crudo
-      // que no reconstruye un NSN AR) es `telefono_invalido`, NO `non_mobile`
-      // — decir "es un fijo" de un celular brasileño es mentira, y el estado
-      // anterior lo dejaba pasar como móvil AR reconstruido a otro número.
-      const kind = classifyArPhone(original.phone);
-      if (kind !== 'mobile') {
-        invalid.push({ input: original.phone, reason: kind === 'non_mobile' ? 'non_mobile' : 'telefono_invalido' });
+      // fix wave F1 (F11) — un extranjero (o un crudo que no reconstruye un NSN
+      // AR) es `telefono_invalido` — decir "es un fijo" de un celular
+      // brasileño es mentira, y el estado anterior lo dejaba pasar como móvil
+      // AR reconstruido a otro número.
+      // fix wave F3 (S1, smoke en vivo) — ya NO hay tercer resultado
+      // `non_mobile`: `classifyArPhone` es `mobile` o `invalid`, punto.
+      if (!classifyArPhone(original.phone)) {
+        invalid.push({ input: original.phone, reason: 'telefono_invalido' });
         return;
       }
 
@@ -422,10 +424,8 @@ function pickDeclared(merged: Record<string, string>, declaredKeys: string[]): R
 }
 
 /**
- * VAL-2 — clasifica el crudo que TIPEÓ el caller en `mobile` (móvil AR
- * enviable) / `non_mobile` (línea fija AR) / `invalid` (no es un número AR
- * reconstruible). Mismo algoritmo de reconstrucción que `toWhatsAppE164` (D5).
- * Pura, total — nunca throws.
+ * VAL-2 — clasifica el crudo que TIPEÓ el caller: `true` (móvil AR enviable) /
+ * `false` (no es un número AR reconstruible). Pura, total — nunca throws.
  *
  * ── fix wave F1 (finding F11): NÚMERO EQUIVOCADO ────────────────────────────
  * La versión anterior (`hasArMobileMarker`) devolvía `true` para CUALQUIER
@@ -442,56 +442,35 @@ function pickDeclared(merged: Record<string, string>, declaredKeys: string[]): R
  * acceso `00`), el país DEBE ser 54 — cualquier otro es `invalid`, jamás se
  * cae al `+549`. Sin marca internacional se aplican las reglas del discado
  * NACIONAL argentino de siempre (troncal `0`, "9" móvil, "15" local).
+ *
+ * ── fix wave F3 (finding S1, smoke en vivo): NÚMERO RECHAZADO DE MÁS ────────
+ * `{"phone":"1178547218"}` (LIVE) volvía `non_mobile` acá — un NSN de 10
+ * dígitos LIMPIO, sin "9" ni "15" — y `validate` lo excluía (422
+ * EMPTY_RECIPIENTS si era el único recipient), pero `toWhatsAppE164` (el
+ * mismo motor que usa `send`) SIEMPRE lo trató como móvil (`+549<nsn>`): en
+ * Argentina el "9"/"15" son artefactos del DISCADO, no parte del número — la
+ * forma [área][abonado] de 10 dígitos ES la forma canónica del móvil.
+ * `validate` rechazaba lo que `send` hubiera aceptado igual. Ahora es un
+ * wrapper FINO y CONSISTENTE con `toWhatsAppE164`: mobile ssi (a) no es un
+ * extranjero explícito (regla intacta arriba) y (b) `toWhatsAppE164(raw)` no
+ * da `null` — la MISMA función, la MISMA verdad. Ya no hay tercer resultado
+ * `non_mobile`; el literal sigue vivo en `ExternalBulkInvalidReason` (D12)
+ * por estabilidad de contrato de wire, pero el use case ya no lo emite.
  */
-type ArPhoneKind = 'mobile' | 'non_mobile' | 'invalid';
-
-function classifyArPhone(raw: string): ArPhoneKind {
+function classifyArPhone(raw: string): boolean {
   const trimmed = raw.trim();
-  let digits = trimmed.replace(/\D/g, '');
-  if (digits.length === 0) return 'invalid';
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length === 0) return false;
 
   // ¿El caller declaró un número INTERNACIONAL? ("+…" o el prefijo "00…").
   const explicitInternational = trimmed.startsWith('+') || digits.startsWith('00');
-  if (digits.startsWith('00')) digits = digits.slice(2);
-  if (explicitInternational && !digits.startsWith('54')) {
+  const digitsAfterAccessPrefix = digits.startsWith('00') ? digits.slice(2) : digits;
+  if (explicitInternational && !digitsAfterAccessPrefix.startsWith('54')) {
     // País distinto de Argentina — NUNCA reconstruible como `+549…`.
-    return 'invalid';
+    return false;
   }
 
-  let sawCountryMobileMarker = false;
-  if (digits.startsWith('54') && digits.length > 10) {
-    digits = digits.slice(2);
-    if (digits.startsWith('9')) {
-      digits = digits.slice(1);
-      sawCountryMobileMarker = true;
-    }
-  }
-  while (digits.startsWith('0')) digits = digits.slice(1);
-
-  if (sawCountryMobileMarker) return digits.length === 10 ? 'mobile' : 'invalid';
-  if (digits.length === 10) return 'non_mobile'; // NSN limpio, sin marcador ⇒ línea fija.
-  if (digits.length === 11 && digits.startsWith('9')) return 'mobile'; // "9"+NSN sin country code.
-  // [área][15][abonado] y "9"+[área][15][abonado]: solo son móvil AR si el "15"
-  // cae en un borde de área VÁLIDO — la MISMA condición que `toWhatsAppE164`
-  // exige para reconstruir el NSN. Si no, no hay número AR que reconstruir.
-  if (digits.length === 12) return hasLocal15(digits) ? 'mobile' : 'invalid';
-  if (digits.length === 13 && digits.startsWith('9')) {
-    return hasLocal15(digits.slice(1)) ? 'mobile' : 'invalid';
-  }
-  return 'invalid';
-}
-
-/**
- * Espejo EXACTO de `stripLocal15` (`toWhatsAppE164.ts`): ¿hay un "15" en un
- * borde de código de área AR válido (2 solo si es "11", o 3/4 dígitos)?
- */
-function hasLocal15(nsnWith15: string): boolean {
-  for (const areaLen of [2, 3, 4]) {
-    if (nsnWith15.slice(areaLen, areaLen + 2) !== '15') continue;
-    if (areaLen === 2 && !nsnWith15.startsWith('11')) continue;
-    if (nsnWith15.length - 2 === 10) return true;
-  }
-  return false;
+  return toWhatsAppE164(raw) !== null;
 }
 
 /** D6 — inicio del día calendario Argentina (00:00 ART = 03:00 UTC), sin `Intl`. */

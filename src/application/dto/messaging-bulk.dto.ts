@@ -41,6 +41,13 @@ export interface TemplateSummaryDto {
    * body de texto plano para este template.
    */
   body: string;
+  /**
+   * fix wave F5 (HIGH) — motivo de rechazo de Meta, tal cual `TemplateDto.rejectionReason`
+   * (`ContentAndApprovals` YA lo trae en el listado, sin segundo GET — F4/S4). Additivo, moría en
+   * este mapper (`ListTemplates.execute`) antes del fix: el listado nunca lo exponía aunque el
+   * proveedor lo informara.
+   */
+  rejectionReason?: string | null;
 }
 
 // ─── Segmentación — preview/conteo (SEG-1..SEG-5) ────────────────────────────

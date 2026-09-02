@@ -89,7 +89,7 @@ no-array, valores de `variables` que no son string, `templateRef` ausente) MUST 
 
 ### Requirement: VAL-2 — normalización E.164 AR móvil + razones de invalidez
 Cada `recipient.phone` MUST normalizarse a E.164 argentino de línea móvil; los que no
-normalizan (formato) o resuelven a fijo (no-móvil) van a `invalid` con `reason` propia. Duplicados
+normalizan (formato) van a `invalid` con `reason` propia. Duplicados
 DENTRO del batch (mismo E.164 normalizado) MUST excluirse del segundo en adelante con
 `reason:'duplicate'`; números con opt-out (match exacto o por sufijo, molde `matchManualContacts`)
 MUST excluirse con `reason:'opted_out'`.
@@ -99,10 +99,18 @@ MUST excluirse con `reason:'opted_out'`.
 - When se valida el batch
 - Then cae en `invalid` con `reason` de formato inválido; no cuenta en `valid`
 
-#### Scenario: fijo (no-móvil)
-- Given un recipient con un número de línea fija válido pero no-móvil
+#### Scenario: NSN de 10 dígitos limpio es SIEMPRE móvil — AMENDED, fix wave F3 (S1, smoke en vivo)
+> LIVE: `{"phone":"1178547218"}` caía en `invalid` con `reason:'non_mobile'` (y con eso solo, en
+> `EMPTY_RECIPIENTS`), pero el motor de envío (`toWhatsAppE164`, el MISMO que usa `send`) SIEMPRE
+> reconstruyó ese crudo como móvil (`+5491178547218`) — `validate` rechazaba lo que `send` hubiera
+> aceptado igual. En el plan de numeración argentino, un NSN ([área][abonado]) de 10 dígitos limpio
+> ES la forma canónica del móvil — el "9"/"15" son artefactos de discado, no parte del número.
+> `classifyArPhone` pasa a ser un wrapper CONSISTENTE con `toWhatsAppE164`: `non_mobile` YA NO SE
+> EMITE (el literal se mantiene en `ExternalBulkInvalidReason`, D12, por estabilidad de wire).
+- Given un recipient con `phone:"1178547218"` (NSN de 10 dígitos, sin "9"/"15")
 - When se valida
-- Then cae en `invalid` con `reason:'non_mobile'`
+- Then cae en `valid` con `phone:"+5491178547218"` — NUNCA en `invalid` con `reason:'non_mobile'`
+- And lo mismo para `"11 7854-7218"`, `"011 15 7854 7218"`, `"+54 9 11 7854 7218"`, `"549 11 7854 7218"` — todos resuelven al MISMO E.164
 
 #### Scenario: número EXTRANJERO nunca se reconstruye como argentino — AMENDED, fix wave F1 (F11)
 > El clasificador de móvil daba `true` para CUALQUIER crudo de 12 dígitos (asumiendo el formato
@@ -498,7 +506,9 @@ apagado — es la misma superficie de riesgo.
 `GET .../templates` MUST devolver TODOS los templates del proveedor (no solo los aprobados) como
 `{data: [{contentSid, friendlyName, language, variables: string[], approvalStatus, category,
 sendable, body}]}` — `sendable === (approvalStatus === 'approved')`, mismo DTO curado que la UI
-admin (`ListTemplates`). MUST NOT devolver el JSON crudo del proveedor.
+admin (`ListTemplates`). MUST NOT devolver el JSON crudo del proveedor. Fix wave F5 — cada item
+MUST incluir `rejectionReason` cuando el proveedor lo informa (additivo, `ContentAndApprovals` ya
+lo trae en el listado sin GET extra).
 
 #### Scenario: listado mixto aprobado/pendiente
 - Given el proveedor tiene un template `approved` y otro `pending`
@@ -506,15 +516,56 @@ admin (`ListTemplates`). MUST NOT devolver el JSON crudo del proveedor.
 - Then responde 200 con los DOS, `sendable:true` en el aprobado y `false` en el pendiente
 - And cada item trae `variables` (los placeholders declarados) y `body`
 
+#### Scenario: rejectionReason llega al wire en el listado (fix wave F5)
+- Given el proveedor tiene un template `rejected` con `rejection_reason:'Tag_Content_Mismatch'`
+- When `GET .../templates`
+- Then el item de ESE template en `data[]` trae `rejectionReason:'Tag_Content_Mismatch'`
+- And ANTES del fix el campo moría en el mapper (`ListTemplates.execute`/`TemplateSummaryDto`) —
+  el adapter ya lo traía (F4/S4), pero nunca llegaba al wire
+
 ### Requirement: TPL-2 — ficha/estado de UN template
 `GET .../templates/:sid` MUST consultar el estado VIVO contra el proveedor (`GetTemplate`) y
 devolver el DTO curado. Un `sid` inexistente MUST responder 404 `TEMPLATE_NOT_FOUND`; el proveedor
 caído/mal configurado MUST responder 503.
 
+Fix wave F4 (S4) — el adapter (`TwilioContentGateway.getTemplate`) MUST consultar TAMBIÉN
+`GET /v1/Content/{sid}/ApprovalRequests` (la Content API sola no trae `approval_requests`) y
+mergear ese estado real por encima del mapeo content-only, incluyendo `rejectionReason` cuando el
+proveedor lo informa. Si ese segundo GET falla (404 = nunca sometido, timeout, 5xx) el endpoint
+MUST degradar a `approvalStatus:'unsubmitted'` SIN tirar — es un dato secundario, no debe volver
+503 la ficha del template.
+
 #### Scenario: consulta del estado de aprobación
 - Given un template recién submitido, todavía `pending` en Meta
 - When `GET .../templates/:sid`
 - Then responde 200 con `approvalStatus:'pending'` y `sendable:false`
+
+#### Scenario: rechazado por Meta, con motivo
+- Given un template cuyo `ApprovalRequests` en el proveedor trae `status:'rejected'` y
+  `rejection_reason:'Tag_Content_Mismatch'`
+- When `GET .../templates/:sid`
+- Then responde 200 con `approvalStatus:'rejected'`, `sendable:false`,
+  `rejectionReason:'Tag_Content_Mismatch'` y `approvalCategory` (la categoría según ese mismo
+  endpoint de aprobación)
+- And ANTES del fix (S4) esto respondía `approvalStatus:'unsubmitted'` (bug S4 — la Content API
+  sola no trae `approval_requests`)
+- And fix wave F5 — `rejectionReason`/`approvalCategory` YA los completaba el adapter desde S4, pero
+  el mapper (`toTemplateDetailDto`) los descartaba antes del wire: el 200 respondía SIN esos campos
+  aunque el proveedor los hubiera informado. Bug de mapper, no del adapter.
+
+#### Scenario: status crudo del proveedor fuera del union (paused/disabled) — fix wave F5
+- Given un template YA aprobado que el proveedor reporta como `status:'paused'` (o `'disabled'`) en
+  `ApprovalRequests` — un estado válido de Twilio, fuera del union `approved|pending|rejected|unsubmitted`
+- When `GET .../templates/:sid`
+- Then responde 200 con `approvalStatus:'unsubmitted'` (degradado, MISMO criterio que cualquier
+  status desconocido — el union NO cambia, lo espejea el FE) pero `providerStatus:'paused'`
+  (o `'disabled'`) con el string CRUDO, para que un operador/AI distinga "nunca sometido" de
+  "aprobado y luego pausado/desactivado"
+
+#### Scenario: ApprovalRequests no disponible (nunca sometido, o falla transitoria del proveedor)
+- Given el proveedor responde 404 (o timeout/5xx) en `GET .../ApprovalRequests` para ese `sid`
+- When `GET .../templates/:sid`
+- Then responde 200 con `approvalStatus:'unsubmitted'` (degradado, NO 503)
 
 #### Scenario: sid inexistente
 - Given un `sid` que el proveedor no conoce
@@ -546,16 +597,27 @@ La creación MUST NOT submitir el template a Meta: submit es un paso EXPLÍCITO 
 - Then responde 400 `VALIDATION_ERROR`, sin crear nada
 
 ### Requirement: TPL-4 — submit a Meta, explícito y separado
-`POST .../templates/:sid/submit` MUST aceptar `{name, category}`, normalizar `name` a
-`[a-z0-9_]` (`normalizeTemplateName`) y validar `category` ∈ el enum, delegando en
-`SubmitTemplateForApproval`. Éxito MUST responder 202 `{contentSid, submitted:true}`. `sid`
-inexistente MUST responder 404 `TEMPLATE_NOT_FOUND`; `name` que normaliza a vacío o `category`
-inválida MUST responder 400 `VALIDATION_ERROR`.
+`POST .../templates/:sid/submit` MUST aceptar `{category, name?}` — `name` es OPCIONAL (AMENDED,
+fix wave F3, S3): si no vino, el handler lo resuelve del propio template (`friendlyName`, vía
+`GetTemplate`, ya inyectado, D4.f — cero use case nuevo); si vino explícito, gana siempre. Ambos
+caminos normalizan `name` a `[a-z0-9_]` (`normalizeTemplateName`) y validan `category` ∈ el enum,
+delegando en `SubmitTemplateForApproval`. Éxito MUST responder 202 `{contentSid, submitted:true}`.
+`sid` inexistente MUST responder 404 `TEMPLATE_NOT_FOUND` (con o sin `name` en el body — la
+resolución del `friendlyName` toca `GetTemplate` ANTES que `submitTemplate`, así que un `sid`
+inexistente 404-ea igual sin `name`); `name` (explícito o resuelto) que normaliza a vacío, o
+`category` inválida, MUST responder 400 `VALIDATION_ERROR`.
 
-#### Scenario: submit válido
+#### Scenario: submit válido, name explícito
 - Given un template `unsubmitted` y `{name:"Promo SETIEMBRE #1", category:"MARKETING"}`
 - When `POST .../templates/:sid/submit`
 - Then responde 202 y el proveedor recibió `name:"promo_setiembre_1"`, `category:"MARKETING"`
+
+#### Scenario: submit sin `name` → default al friendlyName — AMENDED, fix wave F3 (S3, smoke en vivo)
+> LIVE: `{"category":"UTILITY"}` (sin `name`) → 400 "name" required. Fricción innecesaria para el
+> caller AI — el template YA tiene un `friendlyName`.
+- Given un template `unsubmitted` con `friendlyName:"recordatorio_deuda"` y `{category:"UTILITY"}` (sin `name`)
+- When `POST .../templates/:sid/submit`
+- Then responde 202 y el proveedor recibió `name:"recordatorio_deuda"` (el `friendlyName` normalizado)
 
 #### Scenario: name que normaliza a vacío
 - Given `{name:"###", category:"UTILITY"}`
@@ -569,18 +631,31 @@ inválida MUST responder 400 `VALIDATION_ERROR`.
 
 #### Scenario: sid inexistente
 - Given un `sid` que el proveedor no conoce
-- When `POST .../templates/:sid/submit`
-- Then responde 404 `TEMPLATE_NOT_FOUND`
+- When `POST .../templates/:sid/submit` (con o sin `name`)
+- Then responde 404 `TEMPLATE_NOT_FOUND`, y `submitTemplate` NUNCA se invoca
 
 ### Requirement: TPL-5 — el borrado NO se expone
 El router externo MUST NOT exponer ningún verbo de borrado de templates (decisión de scope: es
 destructivo e irreversible en Meta con `deleteInWaba`). `DELETE .../templates/:sid` MUST responder
-404/405 y MUST NOT alcanzar `DeleteTemplate` ni el port del proveedor.
+404 y MUST NOT alcanzar `DeleteTemplate` ni el port del proveedor.
 
 #### Scenario: intento de DELETE
 - Given un `sid` existente y la key dedicada válida
 - When `DELETE .../templates/:sid`
-- Then responde 404 (ruta no registrada), y `TemplateAdminPort.deleteTemplate` NO se invoca
+- Then responde 404 `NOT_FOUND` (ruta no registrada), y `TemplateAdminPort.deleteTemplate` NO se invoca
+
+#### Scenario: el router queda SELLADO — AMENDED, fix wave F3 (S2, smoke en vivo)
+> LIVE: `DELETE .../templates/:sid` y `GET .../campaigns/` (id vacío) devolvían 401 `UNAUTHORIZED`
+> en vez de 404. La causa NO era la ruta faltante en sí: sin un catch-all propio, Express seguía
+> buscando un match y caía en el mount GLOBAL de `app.ts` (`/api/external/v1`, key GLOBAL sin la
+> key dedicada) — el 401 venía de ESE middleware de auth, no de "ruta inexistente". Un caller M2M
+> viendo 401 en una ruta mal tipeada cree que su key está mal, no que el path no existe. El router
+> ahora termina en un catch-all propio (`router.use`, ÚLTIMO handler) que sella el prefijo entero
+> ANTES de que Express siga cayendo afuera — mismo shape del 404 global (`{error:'Not found',
+> code:'NOT_FOUND'}`).
+- Given el router dedicado montado ANTES del mount global (COMP-1, orden intacto)
+- When `DELETE .../templates/:sid` o `GET .../campaigns/` (id vacío) con la key dedicada válida
+- Then responde 404 `NOT_FOUND` — NUNCA el 401 del mount global, cualquiera sea el orden de matching de Express
 
 ---
 

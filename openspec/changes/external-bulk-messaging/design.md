@@ -452,7 +452,20 @@ igual que en `validate`/`send`:
 | `GET /templates/:sid` | `GetTemplate.execute(sid)` | 200 DTO | 404 `TEMPLATE_NOT_FOUND` · 503 |
 | `POST /templates` | `CreateTemplate.execute(input)` | 201 DTO | 400 `VALIDATION_ERROR` · 503 |
 | `POST /templates/:sid/submit` | `SubmitTemplateForApproval.execute(sid, {name, category})` | 202 `{contentSid, submitted:true}` | 400 · 404 · 503 |
-| `DELETE /templates/:sid` | — | — | **404: la ruta no se registra** (TPL-5) |
+| `DELETE /templates/:sid` | — | — | **404 `NOT_FOUND`: la ruta no se registra, sellado por el catch-all del router** (TPL-5) |
+
+**AMENDED, fix wave F3 (S3, smoke en vivo)** — el body de `POST /templates/:sid/submit` pasa a
+`{category, name?}`: `name` es OPCIONAL. Si el caller no lo manda, el route handler lo resuelve
+llamando primero a `GetTemplate.execute(sid)` (ya inyectado, D4.f) y usando su `friendlyName` —
+`name` explícito sigue ganando si vino. `sid` inexistente 404-ea igual (vía `GetTemplate`, ANTES de
+tocar `submitTemplate`), con o sin `name` en el body.
+
+**AMENDED, fix wave F3 (S2, smoke en vivo)** — el `DELETE /templates/:sid` de arriba (y cualquier
+otra ruta no registrada bajo el prefijo, ej. `GET /campaigns/` con id vacío) YA NO cae al 401 del
+mount GLOBAL (`/api/external/v1`, key global) por falta de match — Express seguía buscando afuera
+del router sin un catch-all propio. `createExternalMessagingRouter` ahora termina con
+`router.use((_req,res) => res.status(404).json({error:'Not found', code:'NOT_FOUND'}))` como ÚLTIMO
+handler (mismo shape del 404 global, `app.ts`), sellando el prefijo entero.
 
 El mapeo es EXACTAMENTE el que ya usa el router admin, porque son los MISMOS errores tipados y el
 MISMO `errorHandler` global: `InvalidTemplateInputError → 'VALIDATION_ERROR' → 400`
@@ -588,6 +601,10 @@ Req  { templateName: string;                       // friendlyName; alias `templ
        invalid: { input: string;
                   reason: 'sin_telefono'|'telefono_invalido'|'opt_out'|'duplicado'
                         |'non_mobile'|'variables_faltantes';
+                  // AMENDED, fix wave F3 (S1, smoke en vivo) — 'non_mobile' YA NO SE EMITE: un
+                  // NSN AR de 10 dígitos limpio ahora clasifica `mobile` (consistente con
+                  // `toWhatsAppE164`, el motor que usa `send`). El literal queda en la union
+                  // SOLO por estabilidad de wire (un consumer con `switch` exhaustivo no rompe).
                   missingVariables?: string[] }[]; // SOLO en `variables_faltantes`, keys ordenadas
        caps: { maxPerRequest:number; maxPerDay:number; remainingToday:number } }
 
@@ -602,20 +619,48 @@ Req  { previewId: string }
 // ── Templates (mismo router / misma key dedicada / mismo kill-switch, D7.d) ──
 type TemplateDetailDto = { contentSid: string; friendlyName: string; language: string;
                            variables: string[]; approvalStatus: 'approved'|'pending'|'rejected'|'unsubmitted';
-                           category?: string; sendable: boolean; body: string };
+                           category?: string; sendable: boolean; body: string;
+                           // fix wave F4 (S4) — ADITIVOS, ambos `string | null` opcionales.
+                           // `rejectionReason`: motivo de Meta, solo significativo si
+                           // approvalStatus === 'rejected'. `approvalCategory`: la categoría según el
+                           // endpoint dedicado de aprobación — SOLO viene poblada en GET .../:sid (ver
+                           // abajo); en el listado (GET .../templates) queda undefined/ausente.
+                           // fix wave F5 — F4 los agregó a `TemplateDto` (dominio) pero el mapper
+                           // (`toTemplateDetailDto`) los descartaba: morían ANTES del wire. Fix acá,
+                           // sin cambiar el shape declarado en F4.
+                           rejectionReason?: string | null; approvalCategory?: string | null;
+                           // fix wave F5 (LOW) — ADITIVO, string suelto (NO union). Status crudo del
+                           // proveedor (ej. `paused`, `disabled`) tal cual lo informa Twilio, SIN
+                           // normalizar — `approvalStatus` colapsa cualquier valor fuera del union de
+                           // arriba a `'unsubmitted'`, así que un template YA aprobado y luego pausado
+                           // por el operador (o desactivado por Meta) se ve idéntico a "nunca
+                           // sometido" salvo que se mire este campo. `undefined` cuando el proveedor
+                           // no informó status. Presente en AMBOS endpoints (listado y ficha).
+                           providerStatus?: string };
 
 // GET  .../templates
 200  { data: TemplateDetailDto[] }                 // TODOS (no solo los approved); sendable = approved
 // GET  .../templates/:sid                          estado VIVO contra el proveedor
+// fix wave F4 (S4) — ANTES: `GET /v1/Content/{sid}` de Twilio no trae `approval_requests` ⇒
+// approvalStatus quedaba SIEMPRE 'unsubmitted', aunque el listado (`ContentAndApprovals`) mostrara
+// 'rejected'/'approved' reales. Fix en `TwilioContentGateway.getTemplate()`: segundo GET a
+// `/v1/Content/{sid}/ApprovalRequests` y merge del estado real + `rejection_reason`/`category`. Si
+// ese segundo GET falla (404 = nunca sometido, timeout, 5xx) degrada a 'unsubmitted' SIN tirar —
+// dato secundario, no debe romper la lectura del template. Mismo DTO que consume el admin
+// `GET /api/templates/:sid` (additivo, sin breaking change).
 200  TemplateDetailDto        | 404 { code:'TEMPLATE_NOT_FOUND' } | 503
 // POST .../templates
 Req  { friendlyName: string; language: string; body: string;   // body con placeholders {{1}},{{2}}…
        category?: 'UTILITY'|'MARKETING'|'AUTHENTICATION'; variables?: string[] }
 201  TemplateDetailDto (approvalStatus:'unsubmitted')  | 400 { code:'VALIDATION_ERROR' } | 503
 // POST .../templates/:sid/submit                    ← paso EXPLÍCITO y separado (cuesta review de Meta)
-Req  { name: string; category: 'UTILITY'|'MARKETING'|'AUTHENTICATION' }  // name se normaliza a [a-z0-9_]
+// AMENDED, fix wave F3 (S3, smoke en vivo) — `name` pasa a OPCIONAL: si no vino, el handler lo
+// resuelve del propio template (`friendlyName`, vía `GetTemplate`, ya inyectado) ANTES de tocar
+// `submitTemplate`; si vino explícito, gana siempre. `sid` inexistente 404-ea igual, con o sin `name`.
+Req  { category: 'UTILITY'|'MARKETING'|'AUTHENTICATION'; name?: string }  // name se normaliza a [a-z0-9_]
 202  { contentSid: string; submitted: true }       | 400 | 404 | 503
-// DELETE .../templates/:sid → 404 — NO se expone (TPL-5)
+// DELETE .../templates/:sid → 404 { code:'NOT_FOUND' } — NO se expone (TPL-5); AMENDED, fix wave F3
+// (S2) — sellado por el catch-all del router (antes escapaba al mount global ⇒ 401, ver D7.d).
 
 // GET /api/external/v1/messaging/bulk/campaigns/:id   — scoped a createdById === api-messaging
 200  { campaignId; status: 'pending'|'running'|'done'|'failed';

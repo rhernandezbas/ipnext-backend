@@ -76,8 +76,12 @@ const CreateTemplateBodySchema = z.object({
   variables: z.array(z.string()).optional(),
 });
 
+// fix wave F3 (S3, smoke en vivo) — `name` pasa a OPCIONAL: si no vino, el
+// handler lo resuelve del propio template (`friendlyName`, vía `GetTemplate`,
+// ya inyectado). `category` sigue siendo obligatorio (la validación de ENUM
+// vive en `SubmitTemplateForApproval`, D7.d).
 const SubmitTemplateBodySchema = z.object({
-  name: z.string(),
+  name: z.string().optional(),
   category: z.string(),
 });
 
@@ -214,16 +218,39 @@ export function createExternalMessagingRouter(deps: ExternalMessagingRouterDeps)
       if (!(await isFeatureEnabled())) throw new FeatureExternalBulkDisabledError();
       const body = parseOr400(SubmitTemplateBodySchema, req.body, res);
       if (body === null) return;
-      await deps.submitTemplate.execute(req.params['sid'] as string, body as SubmitTemplateInput);
-      res.status(202).json({ contentSid: req.params['sid'], submitted: true });
+      const sid = req.params['sid'] as string;
+      // fix wave F3 (S3) — `name` ausente → se resuelve del PROPIO template
+      // (`friendlyName`). `GetTemplate` ya está inyectado (D4.f, cero use
+      // case nuevo) y su `TemplateNotFoundError` (404) cubre el sid
+      // inexistente ANTES de tocar `submitTemplate` — un `name` explícito
+      // SIEMPRE gana, no se pisa.
+      const name = body.name ?? (await deps.getTemplate.execute(sid)).friendlyName;
+      await deps.submitTemplate.execute(sid, { name, category: body.category } as SubmitTemplateInput);
+      res.status(202).json({ contentSid: sid, submitted: true });
     } catch (err) {
       next(err);
     }
   });
 
-  // DELETE /templates/:sid (TPL-5) — a propósito NO REGISTRADA. Cae al 404
-  // default de Express; `deleteTemplate` ni siquiera está en
-  // `ExternalMessagingRouterDeps` (D4.f) — no hay forma de invocarlo desde acá.
+  // DELETE /templates/:sid (TPL-5) — a propósito NO REGISTRADA.
+  // `deleteTemplate` ni siquiera está en `ExternalMessagingRouterDeps` (D4.f)
+  // — no hay forma de invocarlo desde acá. Cae al catch-all de abajo (404).
+
+  // ─── fix wave F3 (S2, smoke en vivo) — catch-all: SELLA el router ─────────
+  // LIVE: `DELETE /templates/:sid` y `GET /campaigns/` (id vacío) — ninguna
+  // ruta registrada acá — devolvían 401 UNAUTHORIZED en vez de 404. La causa
+  // NO era este router: sin un catch-all propio, `next()` implícito de
+  // Express seguía buscando un match y caía en el mount GLOBAL de `app.ts`
+  // (`/api/external/v1`, key GLOBAL sin la key dedicada) — el 401 venía de
+  // ESE middleware de auth, no de "ruta inexistente". Un caller M2M viendo
+  // 401 en una ruta mal tipeada cree que su key está mal, no que el path no
+  // existe. Este catch-all DEBE ser el ÚLTIMO handler del router (Express
+  // matchea/ejecuta en orden de registro) para sellar el prefijo entero antes
+  // de que Express siga buscando afuera. Mismo shape que el 404 global de
+  // `app.ts` (`res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' })`).
+  router.use((_req: Request, res: Response): void => {
+    res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
+  });
 
   return router;
 }

@@ -25,6 +25,7 @@ export class ListTemplates {
       category: t.category,
       sendable: t.approvalStatus === 'approved',
       body: t.body,
+      rejectionReason: t.rejectionReason,
     }));
   }
 }

@@ -209,16 +209,52 @@ export class TwilioContentGateway implements TemplateMessagingPort, TemplateAdmi
     }
   }
 
-  /** GET `/v1/Content/{sid}`. 404 → `TemplateNotFoundError`. */
+  /**
+   * GET `/v1/Content/{sid}`. 404 → `TemplateNotFoundError`.
+   *
+   * S4 fix — `/v1/Content/{sid}` NO trae `approval_requests` (a diferencia de
+   * `/v1/ContentAndApprovals`, que usa `listTemplates`), así que este método
+   * devolvía SIEMPRE `approvalStatus: 'unsubmitted'` aunque el template ya
+   * estuviera aprobado/rechazado en Meta. Fix: segundo GET al endpoint
+   * dedicado `/v1/Content/{sid}/ApprovalRequests` y merge del estado real. Si
+   * ese segundo GET falla (404 = nunca sometido a aprobación, timeout, 5xx)
+   * se degrada al mapeo content-only (`unsubmitted`) SIN tirar — es un dato
+   * secundario, no debe romper `getTemplate`.
+   */
   async getTemplate(contentSid: string): Promise<TemplateDto> {
+    let item: TwilioContentItem;
     try {
       const response = await this.http.get(`${this.contentBaseUrl}/v1/Content/${contentSid}`, {
         auth: this.auth(),
         timeout: this.timeoutMs,
       });
-      return toTemplateDto(response.data as TwilioContentItem);
+      item = response.data as TwilioContentItem;
     } catch (err) {
       throw this.mapCrudError(err);
+    }
+
+    const approval = await this.fetchApprovalRequest(contentSid);
+    return toTemplateDto(item, approval);
+  }
+
+  /**
+   * S4 fix — GET `/v1/Content/{sid}/ApprovalRequests`. Respuesta:
+   * `{ whatsapp?: {status, rejection_reason, category, ...}, url }` — `whatsapp`
+   * puede faltar/venir vacío cuando el template nunca fue sometido a
+   * aprobación. CUALQUIER falla (404/timeout/5xx) se traga acá y devuelve
+   * `undefined` — nunca propaga: es un GET secundario dentro de `getTemplate`,
+   * no debe convertir un template legítimo en un error.
+   */
+  private async fetchApprovalRequest(contentSid: string): Promise<TwilioWhatsappApproval | undefined> {
+    try {
+      const response = await this.http.get(
+        `${this.contentBaseUrl}/v1/Content/${contentSid}/ApprovalRequests`,
+        { auth: this.auth(), timeout: this.timeoutMs },
+      );
+      const data = response.data as TwilioApprovalRequestsResponse;
+      return data.whatsapp;
+    } catch {
+      return undefined;
     }
   }
 
@@ -332,7 +368,7 @@ interface TwilioContentItem {
   friendly_name: string;
   language: string;
   variables?: Record<string, string>;
-  approval_requests?: { status?: string; category?: string };
+  approval_requests?: { status?: string; category?: string; rejection_reason?: string };
   /**
    * messaging-bulk v1.1 — `types` es un mapa keyed por tipo de contenido
    * declarado (`twilio/text`, `twilio/quick-reply`, `twilio/call-to-action`,
@@ -346,6 +382,26 @@ interface TwilioContentItem {
 interface TwilioContentAndApprovalsResponse {
   contents?: TwilioContentItem[];
   meta?: { next_page_url?: string | null };
+}
+
+/**
+ * S4 fix — shape del `whatsapp` de `GET /v1/Content/{sid}/ApprovalRequests`.
+ * Solo tipamos los campos que consumimos; `status`/`rejection_reason`/`category`
+ * pueden faltar cuando el template nunca fue sometido a aprobación.
+ */
+interface TwilioWhatsappApproval {
+  type?: string;
+  name?: string;
+  category?: string;
+  content_type?: string;
+  status?: string;
+  rejection_reason?: string;
+  allow_category_change?: boolean;
+}
+
+interface TwilioApprovalRequestsResponse {
+  whatsapp?: TwilioWhatsappApproval;
+  url?: string;
 }
 
 function normalizeApprovalStatus(status: string | undefined): TemplateDto['approvalStatus'] {
@@ -375,14 +431,33 @@ export function extractTemplateBody(types: Record<string, { body?: string }> | u
   return '';
 }
 
-function toTemplateDto(item: TwilioContentItem): TemplateDto {
-  return {
+/**
+ * S4 fix — `approvalOverride` es el `whatsapp` de `GET .../ApprovalRequests`
+ * (solo lo pasa `getTemplate`; `listTemplates`/`createTemplate` no lo tienen y
+ * siguen usando `item.approval_requests` tal cual, sin cambios de shape).
+ * `rejectionReason` se mergea de CUALQUIER fuente que la traiga (additivo para
+ * `listTemplates`, ver `ContentAndApprovals`); `approvalCategory` SOLO sale del
+ * override — es el campo "categoría según el endpoint de aprobación", distinto
+ * de `category` (que ya existía y sigue viniendo de `approval_requests`).
+ */
+function toTemplateDto(item: TwilioContentItem, approvalOverride?: TwilioWhatsappApproval): TemplateDto {
+  const status = approvalOverride?.status ?? item.approval_requests?.status;
+  const rejectionReason = approvalOverride?.rejection_reason ?? item.approval_requests?.rejection_reason;
+
+  const dto: TemplateDto = {
     contentSid: item.sid,
     friendlyName: item.friendly_name,
     language: item.language,
     variables: item.variables ?? {},
-    approvalStatus: normalizeApprovalStatus(item.approval_requests?.status),
-    category: item.approval_requests?.category,
+    approvalStatus: normalizeApprovalStatus(status),
+    category: approvalOverride?.category ?? item.approval_requests?.category,
     body: extractTemplateBody(item.types),
   };
+  if (rejectionReason !== undefined) dto.rejectionReason = rejectionReason;
+  if (approvalOverride?.category !== undefined) dto.approvalCategory = approvalOverride.category;
+  // fix wave F5 (LOW) — mismo `status` ya resuelto arriba (merge > content-only), SIN normalizar.
+  // Cubre AMBOS paths: `listTemplates`/`createTemplate` (solo `item.approval_requests.status`) y
+  // `getTemplate` (con `approvalOverride.status` de `ApprovalRequests` ganando).
+  if (status !== undefined) dto.providerStatus = status;
+  return dto;
 }

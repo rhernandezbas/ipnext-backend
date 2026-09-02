@@ -54,6 +54,25 @@ export interface TemplateDetailDto {
   sendable: boolean;
   /** Texto plano del template (ver `TemplateDto.body`). `''` si no declara body. */
   body: string;
+  /**
+   * fix wave F5 (HIGH) — motivo de rechazo de Meta, tal cual `TemplateDto.rejectionReason` (F4/S4).
+   * Additivo. El adapter YA lo completaba (`TwilioContentGateway.toTemplateDto`) pero moría acá: el
+   * mapper lo descartaba antes de llegar al wire — `GET .../templates/:sid` respondía 200 sin el
+   * campo aunque el proveedor lo hubiera informado.
+   */
+  rejectionReason?: string | null;
+  /**
+   * fix wave F5 (HIGH) — categoría según el endpoint dedicado de aprobación, tal cual
+   * `TemplateDto.approvalCategory` (F4/S4). SOLO se completa en `GET .../templates/:sid` (viene del
+   * merge con `ApprovalRequests`); en el listado queda `undefined`. Mismo bug de mapper que
+   * `rejectionReason` — moría acá, nunca llegaba al wire.
+   */
+  approvalCategory?: string | null;
+  /**
+   * fix wave F5 (LOW) — status crudo del proveedor, tal cual `TemplateDto.providerStatus`. Ver el
+   * docstring del port: cubre `paused`/`disabled` (Twilio-only, fuera del union `approvalStatus`).
+   */
+  providerStatus?: string;
 }
 
 /** Mapper puro `TemplateDto` (dominio) → `TemplateDetailDto` (wire curado). */
@@ -67,5 +86,8 @@ export function toTemplateDetailDto(t: TemplateDto): TemplateDetailDto {
     category: t.category,
     sendable: t.approvalStatus === 'approved',
     body: t.body,
+    rejectionReason: t.rejectionReason,
+    approvalCategory: t.approvalCategory,
+    providerStatus: t.providerStatus,
   };
 }

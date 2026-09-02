@@ -67,9 +67,11 @@ describe('TwilioContentGateway — listTemplates', () => {
 
     const templates = await gateway.listTemplates();
 
+    // fix wave F5 (LOW) — `providerStatus` es additivo: cubre el string crudo (`item.approval_requests.status`)
+    // cada vez que el proveedor lo informa, ver `TemplateDto.providerStatus`.
     expect(templates).toEqual([
-      { contentSid: 'HXapproved', friendlyName: 'recordatorio_deuda', language: 'es', variables: { '1': 'nombre' }, approvalStatus: 'approved', category: 'UTILITY', body: 'Hola {{1}}, tenés un saldo pendiente' },
-      { contentSid: 'HXpending', friendlyName: 'promo_nueva', language: 'es', variables: {}, approvalStatus: 'pending', category: undefined, body: '' },
+      { contentSid: 'HXapproved', friendlyName: 'recordatorio_deuda', language: 'es', variables: { '1': 'nombre' }, approvalStatus: 'approved', category: 'UTILITY', body: 'Hola {{1}}, tenés un saldo pendiente', providerStatus: 'approved' },
+      { contentSid: 'HXpending', friendlyName: 'promo_nueva', language: 'es', variables: {}, approvalStatus: 'pending', category: undefined, body: '', providerStatus: 'pending' },
     ]);
     expect(get).toHaveBeenCalledTimes(1);
     const [url, config] = get.mock.calls[0];
@@ -159,6 +161,59 @@ describe('TwilioContentGateway — listTemplates', () => {
     expect(templates.map((t) => t.contentSid)).toEqual(['HX1', 'HX2']);
     expect(get).toHaveBeenCalledTimes(2);
     expect(get.mock.calls[1][0]).toBe('https://content.twilio.com/v1/ContentAndApprovals?PageSize=200&PageToken=abc');
+  });
+
+  // S4 fix — ContentAndApprovals SÍ trae approval_requests completo (a diferencia
+  // de GET /v1/Content/{sid}); si trae rejection_reason, se mapea additivamente.
+  it('S4: approval_requests.rejection_reason (rejected) → template.rejectionReason', async () => {
+    const { gateway } = makeGateway({
+      get: jest.fn().mockResolvedValueOnce({
+        data: {
+          contents: [
+            {
+              sid: 'HXrej',
+              friendly_name: 'promo_rechazada',
+              language: 'es',
+              variables: {},
+              approval_requests: { status: 'rejected', category: 'MARKETING', rejection_reason: 'Tag_Content_Mismatch' },
+            },
+          ],
+          meta: { next_page_url: null },
+        },
+      }),
+    });
+
+    const [template] = await gateway.listTemplates();
+
+    expect(template!.approvalStatus).toBe('rejected');
+    expect(template!.rejectionReason).toBe('Tag_Content_Mismatch');
+  });
+
+  // fix wave F5 (LOW) — mismo criterio que el test admin equivalente: 'paused' es un estado
+  // legítimo de Twilio para un template YA aprobado que el operador pausó; `providerStatus`
+  // preserva el crudo sin tocar el union `approvalStatus` (D12).
+  it('fix wave F5: approval_requests.status "paused" (Twilio-only) → approvalStatus unsubmitted + providerStatus crudo', async () => {
+    const { gateway } = makeGateway({
+      get: jest.fn().mockResolvedValueOnce({
+        data: {
+          contents: [
+            {
+              sid: 'HXpaused',
+              friendly_name: 'promo_pausada',
+              language: 'es',
+              variables: {},
+              approval_requests: { status: 'paused', category: 'MARKETING' },
+            },
+          ],
+          meta: { next_page_url: null },
+        },
+      }),
+    });
+
+    const [template] = await gateway.listTemplates();
+
+    expect(template!.approvalStatus).toBe('unsubmitted');
+    expect(template!.providerStatus).toBe('paused');
   });
 
   it('401 (credencial mala) → TemplateProviderUnavailableError', async () => {
