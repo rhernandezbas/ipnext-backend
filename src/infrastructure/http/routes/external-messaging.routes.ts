@@ -28,14 +28,56 @@ import type { CreateTemplate } from '@application/use-cases/messaging/CreateTemp
 import type { SubmitTemplateForApproval } from '@application/use-cases/messaging/SubmitTemplateForApproval';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { GetMessagingCredit } from '@application/use-cases/messaging/GetMessagingCredit';
+import type { ListChatwootLabels } from '@application/use-cases/messaging/ListChatwootLabels';
+import type { CreateChatwootLabel } from '@application/use-cases/messaging/CreateChatwootLabel';
 import type { CreateTemplateInput as CreateTemplateHttpInput, SubmitTemplateInput } from '@application/dto/messaging-templates.dto';
+import type { ValidateExternalBulkInput } from '@application/dto/external-bulk-messaging.dto';
+import { normalizeLabelTitle } from '@application/use-cases/messaging/normalizeLabelTitle';
 import {
   CampaignRunnerBusyError,
   FeatureExternalBulkDisabledError,
   InsufficientCreditError,
 } from '@domain/errors/external-bulk-messaging';
+import { ChatwootUnavailableError } from '@domain/errors/messaging';
+import { InvalidChatwootLabelError } from '@domain/errors/messaging-bulk';
+import type { ChatwootLabelDto } from '@domain/ports/ChatwootGateway';
 
 const FEATURE_FLAG_KEY = 'messaging-external-bulk-enabled';
+
+/**
+ * external-labels (design.md D4) — default hexadecimal cuando `POST .../labels`
+ * no manda `color`. Es el azul default de Chatwoot (NO el naranja de marca de
+ * IPNEXT: el label vive en el inbox de Chatwoot, no en una pieza de IPNEXT).
+ */
+const DEFAULT_LABEL_COLOR = '#1f93ff';
+
+// fix wave F1 (finding 2) — `normalizeLabelTitle` se MUDÓ a
+// `@application/use-cases/messaging/normalizeLabelTitle.ts` (helper
+// COMPARTIDO): `ValidateExternalBulk`/`SendExternalBulk` necesitan la MISMA
+// regla para resolver el `chatwootLabel` del caller contra el catálogo, o el
+// round-trip create→validate queda roto (un título recién creado no matchea
+// contra sí mismo). Ver el comentario del archivo nuevo para el detalle.
+
+/**
+ * fix wave F1 (finding 3a) — charset que Chatwoot acepta para un título de
+ * label: letras/números unicode, `_` y `-` (el `-` que introduce
+ * `normalizeLabelTitle` en cada run de whitespace YA cumple esto). Cualquier
+ * otro carácter (emoji, puntuación, `#`, `/`, etc.) hoy llegaba HASTA
+ * `createAccountLabel`, que lo envuelve en `ChatwootUnavailableError` (503) —
+ * un error de INPUT del caller disfrazado de "Chatwoot está caído". Se
+ * rechaza ACÁ, en la ruta, con un 400 accionable, ANTES de tocar el
+ * proveedor.
+ */
+const LABEL_TITLE_CHARSET = /^[\p{L}\p{N}_-]+$/u;
+
+/** fix wave F1 (finding 3a) — devuelve los caracteres que rompen `LABEL_TITLE_CHARSET`, sin duplicados, en orden de aparición. */
+function findInvalidLabelChars(normalizedTitle: string): string[] {
+  const invalid: string[] = [];
+  for (const ch of normalizedTitle) {
+    if (!LABEL_TITLE_CHARSET.test(ch) && !invalid.includes(ch)) invalid.push(ch);
+  }
+  return invalid;
+}
 
 /** Molde `assistant.routes.ts` — `safeParse`, NUNCA `.parse()` (D11). Devuelve `null` cuando ya respondió. */
 function parseOr400<T>(schema: z.ZodType<T>, payload: unknown, res: Response): T | null {
@@ -63,7 +105,14 @@ const ValidateBodySchema = z.object({
   templateRef: z.string().optional(),
   templateName: z.string().optional(),
   variables: VariablesRecordSchema.optional(),
-  chatwootLabel: z.string().optional(),
+  // fix wave F1 (finding 1) — `.nullable()` sumado a `.optional()`. Antes SOLO
+  // `.optional()`: un `chatwootLabel: null` explícito (JSON válido, tipo
+  // NINGUNO de los declarados) reventaba el Zod → 400 `VALIDATION_ERROR`, no
+  // el 422 `CHATWOOT_LABEL_REQUIRED` de negocio que `assertValidShape` emite
+  // para ausente/vacío/whitespace (D1: la obligatoriedad es de NEGOCIO, vive
+  // en el use case, nunca en el Zod). `null` es un valor de tipo LEGÍTIMO acá
+  // — el Zod solo valida forma, no la regla de negocio.
+  chatwootLabel: z.string().nullable().optional(),
   recipients: z.array(ValidateRecipientSchema),
 });
 
@@ -90,6 +139,23 @@ const SubmitTemplateBodySchema = z.object({
   category: z.string(),
 });
 
+// external-labels (LBL-2, design.md Interfaces/Contracts) — `.strict()` ⇒
+// `description` (o cualquier extra) → 400: el modelo de label NO lo soporta
+// (`ChatwootLabelDto` es `{title,color}`), y el repo prefiere fail-loud a
+// descartarlo en silencio.
+// fix wave F1 (finding 4) — `.min(1).max(100)`. Sin tope, un `title` de miles
+// de caracteres viajaba HASTA `createAccountLabel` (una llamada real a
+// Chatwoot) antes de fallar por cualquier motivo — un caller M2M mal
+// comportado gastaba una request al proveedor por un input que nunca iba a
+// servir. 100 es el mismo límite que Chatwoot aplica del lado del server para
+// el nombre de un label (documentado acá, no en el spec del proveedor).
+const CreateLabelBodySchema = z
+  .object({
+    title: z.string().min(1).max(100),
+    color: z.string().regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
+  })
+  .strict();
+
 export interface ExternalMessagingRouterDeps {
   validateExternalBulk: ValidateExternalBulk;
   sendExternalBulk: SendExternalBulk;
@@ -102,6 +168,10 @@ export interface ExternalMessagingRouterDeps {
   featureFlags: FeatureFlagRepository;
   /** twilio-credit-guard (D5.a) — alimenta `GET /credit` (CRED-1/CRED-2). */
   getMessagingCredit: GetMessagingCredit;
+  /** external-labels (LBL-1) — reuso TAL CUAL del use case admin (`ListChatwootLabels.ts`). */
+  listChatwootLabels: ListChatwootLabels;
+  /** external-labels (LBL-2) — reuso TAL CUAL del use case admin (`CreateChatwootLabel.ts`). */
+  createChatwootLabel: CreateChatwootLabel;
   /**
    * fix wave F1 (finding F7) — rate limiter de ESCRITURA, aplicado SOLO a los
    * POST. Antes vivia en el mount (`app.use(prefix, limiter, router)`), asi que
@@ -134,7 +204,15 @@ export function createExternalMessagingRouter(deps: ExternalMessagingRouterDeps)
     const body = parseOr400(ValidateBodySchema, req.body, res);
     if (body === null) return;
     try {
-      const result = await deps.validateExternalBulk.execute(body);
+      // external-labels-required (D1) — `ValidateBodySchema.chatwootLabel`
+      // se queda `.nullable().optional()` A PROPÓSITO: el Zod solo valida
+      // TIPO (un `chatwootLabel:42` sigue 400); `null`/ausente/`''` son
+      // valores de tipo LEGÍTIMOS que el Zod deja pasar sin opinar — la
+      // OBLIGATORIEDAD (ausente, vacío o whitespace ⇒ 422) es una regla de
+      // NEGOCIO que vive dentro de `assertValidShape` (D1: la obligatoriedad
+      // nunca vive en el Zod). El cast bridgea el gap intencional entre el
+      // wire (opcional/nullable) y el DTO del use case (obligatorio).
+      const result = await deps.validateExternalBulk.execute(body as ValidateExternalBulkInput);
       res.status(200).json(result);
     } catch (err) {
       next(err);
@@ -267,6 +345,110 @@ export function createExternalMessagingRouter(deps: ExternalMessagingRouterDeps)
   // DELETE /templates/:sid (TPL-5) — a propósito NO REGISTRADA.
   // `deleteTemplate` ni siquiera está en `ExternalMessagingRouterDeps` (D4.f)
   // — no hay forma de invocarlo desde acá. Cae al catch-all de abajo (404).
+
+  // ─── external-labels (LBL-1..LBL-5, design.md D2/D3/D4) — catálogo de labels
+  // de Chatwoot vía la API Externa. CERO use case nuevo (reusa `ListChatwootLabels`/
+  // `CreateChatwootLabel` tal cual, molde TPL-0..TPL-5). Registradas ANTES del
+  // catch-all. ────────────────────────────────────────────────────────────────
+
+  /**
+   * `ListChatwootLabels`/`CreateChatwootLabel` (admin, reusados TAL CUAL) NO
+   * envuelven las fallas del gateway — en producción `HttpChatwootGateway.call()`
+   * ya lo hace (TODO error de axios → `ChatwootUnavailableError`), pero un
+   * fake/adapter que no envuelva puede dejar pasar un Error crudo. Mismo
+   * criterio fail-closed que `ValidateExternalBulk.assertLabelExists` — nunca
+   * un 500 opaco por una lectura del catálogo caída.
+   */
+  async function listLabelsOrUnavailable(): Promise<ChatwootLabelDto[]> {
+    try {
+      return await deps.listChatwootLabels.execute();
+    } catch {
+      throw new ChatwootUnavailableError();
+    }
+  }
+
+  // GET /labels (LBL-1) — lectura, sin writeLimit (molde GET /templates, GET /credit).
+  router.get('/labels', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!(await isFeatureEnabled())) throw new FeatureExternalBulkDisabledError();
+      const data = await listLabelsOrUnavailable();
+      res.status(200).json({ data });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /labels (LBL-2/LBL-3, design.md D2/D3/D4) — writeLimit, kill-switch,
+  // normalización, default de color, pre-chequeo de duplicado IDEMPOTENTE
+  // (decisión del orquestador 2026-09-03: 200 {...existingLabel, created:false}
+  // en vez de un 409 — la creación NUNCA falla por "ya existe").
+  router.post('/labels', writeLimit, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!(await isFeatureEnabled())) throw new FeatureExternalBulkDisabledError();
+      const body = parseOr400(CreateLabelBodySchema, req.body, res);
+      if (body === null) return;
+      const normalizedTitle = normalizeLabelTitle(body.title);
+      const color = body.color ?? DEFAULT_LABEL_COLOR;
+
+      // fix wave F1 (finding 3a) — charset de Chatwoot, chequeado DESPUÉS de
+      // normalizar (el `-` que introduce `normalizeLabelTitle` es válido) y
+      // ANTES de tocar el catálogo/Chatwoot. Sin esto, un título con un
+      // carácter no soportado (emoji, `#`, `/`, etc.) llegaba hasta
+      // `createAccountLabel`, que envuelve CUALQUIER error de axios en
+      // `ChatwootUnavailableError` (503) — un input inválido del caller
+      // disfrazado de "el proveedor está caído".
+      const invalidChars = findInvalidLabelChars(normalizedTitle);
+      if (invalidChars.length > 0) {
+        res.status(400).json({
+          error: `title contains characters not supported by Chatwoot labels: ${invalidChars.join(', ')} (only letters, numbers, "_" and "-" are allowed)`,
+          code: 'VALIDATION_ERROR',
+        });
+        return;
+      }
+
+      // D3 — pre-chequeo contra el catálogo VIVO, por título normalizado.
+      const catalog = await listLabelsOrUnavailable();
+      const existing = catalog.find((l) => l.title === normalizedTitle);
+      if (existing) {
+        res.status(200).json({ ...existing, created: false });
+        return;
+      }
+
+      let created: ChatwootLabelDto;
+      try {
+        created = await deps.createChatwootLabel.execute({ title: normalizedTitle, color });
+      } catch (err) {
+        // `InvalidChatwootLabelError` (title vacío tras normalizar) es un 400
+        // legítimo — NUNCA se re-envuelve.
+        if (err instanceof InvalidChatwootLabelError) throw err;
+
+        // fix wave F1 (finding 3b) — TOCTOU entre el pre-chequeo (arriba) y
+        // este `create`: si OTRO request creó el MISMO título normalizado en
+        // el medio, `createAccountLabel` puede fallar del lado de Chatwoot
+        // (constraint de unicidad, 4xx que el port no discrimina, D3). Antes
+        // de declarar 503, se re-lista el catálogo UNA vez — si el título YA
+        // existe ahora, la respuesta es la MISMA idempotente que el
+        // pre-chequeo (200, `created:false`): la carrera la ganó otro
+        // request, pero el resultado que el caller quería (el label existe)
+        // ya está. Si el catálogo sigue sin tenerlo (o el re-listado también
+        // falla), la causa real es Chatwoot inalcanzable → 503.
+        try {
+          const recheck = await deps.listChatwootLabels.execute();
+          const nowExisting = recheck.find((l) => l.title === normalizedTitle);
+          if (nowExisting) {
+            res.status(200).json({ ...nowExisting, created: false });
+            return;
+          }
+        } catch {
+          // el re-listado también falló — cae al 503 de abajo, sin re-envolver.
+        }
+        throw new ChatwootUnavailableError();
+      }
+      res.status(201).json({ ...created, created: true });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   // ─── fix wave F3 (S2, smoke en vivo) — catch-all: SELLA el router ─────────
   // LIVE: `DELETE /templates/:sid` y `GET /campaigns/` (id vacío) — ninguna

@@ -18,6 +18,7 @@ import {
   FeatureExternalBulkDisabledError,
   ExternalBulkValidationError,
   CapExceededError,
+  ChatwootLabelRequiredError,
   ChatwootLabelNotFoundError,
   PreviewNotFoundError,
   PreviewExpiredError,
@@ -32,6 +33,7 @@ import {
 import { TemplateNotApprovedError } from '@domain/errors/messaging-bulk';
 import { ChatwootUnavailableError } from '@domain/errors/messaging';
 import { externalBulkPayloadHash } from './externalBulkPayloadHash';
+import { normalizeLabelTitle } from './normalizeLabelTitle';
 import { AsyncMutex } from './asyncMutex';
 import { toArgentinaDateKey } from './reportsTimezone';
 import { API_MESSAGING_USER_LOGIN } from '@domain/constants/machineUsers';
@@ -163,10 +165,33 @@ export class SendExternalBulk {
     this.assertPayloadUnchanged(preview);
 
     // 4 — SEND-4, re-validación completa (D0 pasos 4-7, contra el estado de AHORA).
-    const template = await this.assertTemplateApproved(preview.templateRef);
-    if (preview.chatwootLabel) {
-      await this.assertLabelExists(preview.chatwootLabel);
+    // external-labels-required (SEND-4, decisión del orquestador 2026-09-03) —
+    // incondicional. Un preview PERSISTIDO ANTES de este deploy (ventana de TTL
+    // de 15 min, D5) puede traer `chatwootLabel:null` — se rechaza con 422
+    // `CHATWOOT_LABEL_REQUIRED` (nunca se crea el label, nunca se acepta sin
+    // él).
+    //
+    // fix wave F1 (finding 5) — este guard corre ANTES de `assertTemplateApproved`
+    // (antes iba DESPUÉS). Un preview de la ventana de deploy puede traer
+    // `chatwootLabel:null` Y apuntar a un template que mientras tanto dejó de
+    // estar aprobado: con el orden viejo el caller veía `TEMPLATE_NOT_APPROVED`
+    // — un error real, pero NO el motivo por el que este preview específico ya
+    // no sirve. El label faltante es la causa más temprana y más accionable
+    // (re-hacer `validate` con label arregla los dos problemas de una), así que
+    // gana el guard.
+    if (!preview.chatwootLabel || preview.chatwootLabel.trim().length === 0) {
+      throw new ChatwootLabelRequiredError();
     }
+    // fix wave F1 (finding 2) — normalizado de forma DEFENSIVA: en el camino
+    // normal `preview.chatwootLabel` YA salió normalizado de `ValidateExternalBulk`,
+    // pero un preview persistido antes de ese fix (misma ventana de deploy de
+    // D5) puede traer un título "bonito" sin normalizar. El catálogo vivo
+    // SIEMPRE tiene títulos normalizados (`POST /labels`, D2) — normalizar acá
+    // también es lo que hace que ese preview viejo siga siendo resoluble, y que
+    // la `Campaign` creada más abajo aplique el título CANÓNICO, no el crudo.
+    const chatwootLabel = normalizeLabelTitle(preview.chatwootLabel);
+    const template = await this.assertTemplateApproved(preview.templateRef);
+    await this.assertLabelExists(chatwootLabel);
     const config = await this.configRepo.get();
     if (preview.recipients.length > config.maxPerRequest) {
       throw new CapExceededError({
@@ -189,7 +214,7 @@ export class SendExternalBulk {
     // el gasto se vuelve REAL: soltar el candado antes admitiría un segundo
     // send contra un saldo que ya está comprometido pero todavía no drenado.
     return this.creditMutex.runExclusive(() =>
-      this.acceptSend(input.previewId, idempotencyKey, preview, template, apiMessagingUserId),
+      this.acceptSend(input.previewId, idempotencyKey, preview, template, apiMessagingUserId, chatwootLabel),
     );
   }
 
@@ -199,6 +224,8 @@ export class SendExternalBulk {
     preview: ExternalBulkPreview,
     template: { category?: string; variables: Record<string, string> },
     apiMessagingUserId: string,
+    /** fix wave F1 (finding 2) — el título YA normalizado (ver `execute()`), NUNCA `preview.chatwootLabel` crudo. */
+    chatwootLabel: string,
   ): Promise<SendExternalBulkOutput> {
     // 4.5 — SEND-4bis, GATE de crédito (twilio-credit-guard D4.c), fail-closed.
     // Contra los recipients que REALMENTE se van a crear
@@ -250,7 +277,10 @@ export class SendExternalBulk {
         name: `external-bulk:${preview.templateName}`,
         templateRef: preview.templateRef,
         templateName: preview.templateName,
-        chatwootLabel: preview.chatwootLabel ?? undefined,
+        // fix wave F1 (finding 2) — el título NORMALIZADO, no el crudo del
+        // preview: el label que `SendCampaign` aplica en Chatwoot debe ser el
+        // MISMO que el catálogo vivo conoce.
+        chatwootLabel,
         segment: { statuses: [] },
         variablesMap: variableSpec,
         manualContacts,

@@ -3691,6 +3691,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
         submitTemplate: new SubmitTemplateForApproval(templatePort),
         featureFlags: featureFlagRepoForBulk,
         getMessagingCredit: new GetMessagingCredit(creditBalancePort, messagingRatesRepo),
+        // external-labels (LBL-1/LBL-2) — MISMOS use cases admin (línea
+        // 3613-3614 arriba), MISMA instancia `chatwootGatewayForBulk`. Cero
+        // wiring nuevo.
+        listChatwootLabels: new ListChatwootLabels(chatwootGatewayForBulk),
+        createChatwootLabel: new CreateChatwootLabel(chatwootGatewayForBulk),
       }),
     );
     // [external-bulk-mount-end] — MARCADOR load-bearing (fix wave F1, R3 #5).

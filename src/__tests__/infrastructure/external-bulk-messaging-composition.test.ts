@@ -46,6 +46,8 @@ import { bootstrapApiMessagingUser } from '@infrastructure/bootstrap/bootstrapAp
 import { InMemoryCreditBalancePort } from '@infrastructure/adapters/in-memory/InMemoryCreditBalancePort';
 import { InMemoryMessagingRatesConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryMessagingRatesConfigRepository';
 import { GetMessagingCredit } from '@application/use-cases/messaging/GetMessagingCredit';
+import { ListChatwootLabels } from '@application/use-cases/messaging/ListChatwootLabels';
+import { CreateChatwootLabel } from '@application/use-cases/messaging/CreateChatwootLabel';
 import { FakeChatwootGateway } from '../helpers/FakeChatwootGateway';
 import type { CampaignSegmentSource, CampaignSegmentFilter } from '@domain/ports/CustomerRepository';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
@@ -257,6 +259,8 @@ function buildOrderedApp(opts: { dedicatedKey?: string; flagEnabled?: boolean } 
     submitTemplate: new SubmitTemplateForApproval(templatePort),
     featureFlags,
     getMessagingCredit: new GetMessagingCredit(creditPort, ratesRepo),
+    listChatwootLabels: new ListChatwootLabels(chatwootGateway),
+    createChatwootLabel: new CreateChatwootLabel(chatwootGateway),
   };
 
   const app = express();

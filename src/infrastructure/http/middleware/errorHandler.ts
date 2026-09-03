@@ -261,6 +261,11 @@ const statusMap: Record<string, number> = {
   CAP_EXCEEDED: 422,
   EMPTY_RECIPIENTS: 422,
   CHATWOOT_LABEL_NOT_FOUND: 422,
+  // external-labels-required (LBL-2/VAL-1/SEND-4, decisión del orquestador
+  // 2026-09-03) — `chatwootLabel` ausente/vacío en `validate`/`send`. El
+  // duplicado de `POST .../labels` NO usa este código: es 200 idempotente,
+  // no un error.
+  CHATWOOT_LABEL_REQUIRED: 422,
   PREVIEW_NOT_FOUND: 404,
   PREVIEW_EXPIRED: 410,
   PREVIEW_ALREADY_CONSUMED: 409,

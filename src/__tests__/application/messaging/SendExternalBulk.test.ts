@@ -28,6 +28,7 @@ import {
   FeatureExternalBulkDisabledError,
   ExternalBulkValidationError,
   CapExceededError,
+  ChatwootLabelRequiredError,
   ChatwootLabelNotFoundError,
   PreviewNotFoundError,
   PreviewExpiredError,
@@ -44,6 +45,17 @@ import { BULK_NUMBERS_ACTION } from '@domain/services/bulkRecipientAuthorization
 
 const NOW = new Date('2026-09-02T12:00:00.000Z');
 const FLAG_KEY = 'messaging-external-bulk-enabled';
+
+/**
+ * external-labels-required (task 2.4/2.5, decisión del orquestador
+ * 2026-09-03) — `chatwootLabel` pasó a OBLIGATORIO también en el
+ * re-chequeo de `send` (SEND-4). `buildPreviewData()` defaultea a ESTE
+ * título (en vez de `null`) y `setup()` siembra el catálogo del fake con él
+ * — arreglado en el HELPER, no test por test (mismo criterio que
+ * `ValidateExternalBulk.test.ts`). Los tests que ejercitan el 422
+ * `CHATWOOT_LABEL_REQUIRED` pasan `chatwootLabel: null` EXPLÍCITAMENTE.
+ */
+const DEFAULT_CHATWOOT_LABEL = 'default-label';
 
 const TEMPLATE: TemplateDto = {
   contentSid: 'HXpromo1',
@@ -122,7 +134,13 @@ async function setup(
   const campaignRepo = new InMemoryCampaignRepository({ now: () => NOW });
   const templatePort = new InMemoryTemplateMessagingGateway({ templates: opts.templates ?? [TEMPLATE] });
   const chatwootGateway = new FakeChatwootGateway();
-  chatwootGateway.accountLabelsResult = (opts.chatwootLabels ?? []).map((title) => ({ title, color: 'blue' }));
+  // task 2.4 — catálogo sembrado con el título DEFAULT de `buildPreviewData()`.
+  // Tests que necesitan un catálogo distinto (o vacío) pasan `chatwootLabels`
+  // explícitamente.
+  chatwootGateway.accountLabelsResult = (opts.chatwootLabels ?? [DEFAULT_CHATWOOT_LABEL]).map((title) => ({
+    title,
+    color: 'blue',
+  }));
   const featureFlags = new InMemoryFeatureFlagRepository();
   if (opts.flagEnabled !== false) {
     featureFlags.seed(FLAG_KEY, true);
@@ -197,7 +215,11 @@ function buildPreviewData(opts: {
 }): ExternalBulkPreviewCreateData {
   const templateName = opts.templateName ?? TEMPLATE.friendlyName;
   const variables = opts.variables ?? {};
-  const chatwootLabel = opts.chatwootLabel ?? null;
+  // task 2.4 — default DEFAULT_CHATWOOT_LABEL (no `null`): `chatwootLabel` es
+  // OBLIGATORIO desde este change. `opts.chatwootLabel === undefined` (NO `??`)
+  // para que un `chatwootLabel: null` EXPLÍCITO (molde "preview viejo sin
+  // label", R2/D5) siga viajando `null`, no se pise con el default.
+  const chatwootLabel = opts.chatwootLabel === undefined ? DEFAULT_CHATWOOT_LABEL : opts.chatwootLabel;
   const recipients = opts.recipients.map((r) => ({
     phoneE164: r.phoneE164,
     phoneNormalized: r.phoneNormalized ?? r.phoneE164,
@@ -372,6 +394,47 @@ describe('SendExternalBulk', () => {
       expect((await campaignRepo.list({})).total).toBe(0);
     });
 
+    // ─── external-labels-required (SEND-4, decisión del orquestador 2026-09-03) ─
+    it('preview persistido con chatwootLabel:null (ventana de deploy, R2) → ChatwootLabelRequiredError (422), sin crear Campaign ni consumir el preview', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup();
+      const preview = await previewRepo.create(
+        buildPreviewData({ chatwootLabel: null, recipients: ONE_RECIPIENT }),
+      );
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(ChatwootLabelRequiredError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+      expect((await previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+
+    // ─── fix wave F1 (finding 5) — orden de guards ───────────────────────────
+    it('preview con chatwootLabel:null Y template YA no aprobado → ChatwootLabelRequiredError (422), NUNCA TemplateNotApprovedError — el label se chequea PRIMERO', async () => {
+      const { useCase, previewRepo, templatePort, campaignRepo } = await setup();
+      const preview = await previewRepo.create(
+        buildPreviewData({ chatwootLabel: null, recipients: ONE_RECIPIENT }),
+      );
+      jest.spyOn(templatePort, 'listTemplates').mockResolvedValue([{ ...TEMPLATE, approvalStatus: 'pending' }]);
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(ChatwootLabelRequiredError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+      expect((await previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+
+    it('label borrado del catálogo entre validate y send → ChatwootLabelNotFoundError (422), sin crear Campaign ni consumir el preview, sin crear el label', async () => {
+      const { useCase, previewRepo, campaignRepo, chatwootGateway } = await setup({ chatwootLabels: [] });
+      const preview = await previewRepo.create(
+        buildPreviewData({ chatwootLabel: 'promo-agosto', recipients: ONE_RECIPIENT }),
+      );
+      const createLabelSpy = jest.spyOn(chatwootGateway, 'createAccountLabel');
+
+      await expect(useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(ChatwootLabelNotFoundError);
+
+      expect((await campaignRepo.list({})).total).toBe(0);
+      expect((await previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+      expect(createLabelSpy).not.toHaveBeenCalled();
+    });
+
     it('cupo diario agotado por OTRA campaña api-messaging desde el validate → CapExceededError (422), sin crear Campaign', async () => {
       const { useCase, previewRepo, configRepo, campaignRepo, apiMessagingUserId } = await setup();
       await configRepo.set({ maxPerRequest: 500, maxPerDay: 1 });
@@ -439,6 +502,19 @@ describe('SendExternalBulk', () => {
 
       const campaign = await campaignRepo.findById(result.campaignId);
       expect(campaign?.chatwootLabel).toBe('promo-agosto');
+    });
+
+    // ─── external-labels-required (fix wave F1, finding 2) — re-normalización DEFENSIVA ─
+    it('preview persistido con chatwootLabel CRUDO sin normalizar (molde preview pre-deploy) → send OK y la Campaign creada queda con el título NORMALIZADO', async () => {
+      const { useCase, previewRepo, campaignRepo } = await setup({ chatwootLabels: ['cobranzas-agosto'] });
+      const preview = await previewRepo.create(
+        buildPreviewData({ chatwootLabel: 'Cobranzas Agosto', recipients: ONE_RECIPIENT }),
+      );
+
+      const result = await useCase.execute({ previewId: preview.id }, 'key-1');
+
+      const campaign = await campaignRepo.findById(result.campaignId);
+      expect(campaign?.chatwootLabel).toBe('cobranzas-agosto');
     });
   });
 

@@ -32,6 +32,7 @@ import {
   ExternalBulkValidationError,
   CapExceededError,
   EmptyRecipientsError,
+  ChatwootLabelRequiredError,
   ChatwootLabelNotFoundError,
   ReporterUnavailableError,
 } from '@domain/errors/external-bulk-messaging';
@@ -42,6 +43,15 @@ const NOW = new Date('2026-09-02T12:00:00.000Z');
 import { MAX_MANUAL_CONTACTS } from '@application/use-cases/messaging/resolveCombinedRecipients';
 
 const FLAG_KEY = 'messaging-external-bulk-enabled';
+
+/**
+ * external-labels-required (task 2.4, decisión del orquestador 2026-09-03) —
+ * `chatwootLabel` pasó a OBLIGATORIO: TODOS los ~60 `execute(` de este archivo
+ * necesitan un label válido presente en el catálogo del fake, o caen en 422
+ * `CHATWOOT_LABEL_REQUIRED`/`CHATWOOT_LABEL_NOT_FOUND` de golpe. Se arregla ACÁ
+ * — en el helper — nunca test por test (R1 de exploration.md).
+ */
+const DEFAULT_CHATWOOT_LABEL = 'default-label';
 
 const TEMPLATE: TemplateDto = {
   contentSid: 'HXpromo1',
@@ -103,6 +113,11 @@ async function setup(
   const campaignRepo = new InMemoryCampaignRepository({ now: () => NOW });
   const templatePort = new InMemoryTemplateMessagingGateway({ templates: opts.templates ?? [TEMPLATE] });
   const chatwootGateway = new FakeChatwootGateway();
+  // task 2.4 — catálogo sembrado con el título DEFAULT de `baseInput()`. Los
+  // tests de VAL-5 que necesitan un catálogo distinto reasignan
+  // `chatwootGateway.accountLabelsResult` DESPUÉS de `setup()` — este default
+  // no les molesta.
+  chatwootGateway.accountLabelsResult = [{ title: DEFAULT_CHATWOOT_LABEL, color: '#fff' }];
   const featureFlags = new InMemoryFeatureFlagRepository();
   if (opts.flagEnabled !== false) {
     featureFlags.seed(FLAG_KEY, true);
@@ -149,6 +164,7 @@ function baseInput(overrides: Partial<ValidateExternalBulkInput> = {}): Validate
   return {
     templateRef: TEMPLATE.contentSid,
     variables: { '1': 'Cliente' },
+    chatwootLabel: DEFAULT_CHATWOOT_LABEL,
     recipients: [{ phone: MOBILE_A }],
     ...overrides,
   };
@@ -197,6 +213,37 @@ describe('ValidateExternalBulk', () => {
       await expect(
         useCase.execute(baseInput({ templateRef: undefined, templateName: undefined })),
       ).rejects.toThrow(ExternalBulkValidationError);
+    });
+
+    // ─── external-labels-required (VAL-1, decisión del orquestador 2026-09-03) ─
+    it('chatwootLabel ausente → ChatwootLabelRequiredError (422), sin llamar a listAccountLabels ni persistir preview', async () => {
+      const { useCase, chatwootGateway, previewRepo } = await setup();
+      const listLabelsSpy = jest.spyOn(chatwootGateway, 'listAccountLabels');
+      const createSpy = jest.spyOn(previewRepo, 'create');
+      const input = { ...baseInput(), chatwootLabel: undefined } as unknown as ValidateExternalBulkInput;
+
+      await expect(useCase.execute(input)).rejects.toThrow(ChatwootLabelRequiredError);
+      expect(listLabelsSpy).not.toHaveBeenCalled();
+      expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('chatwootLabel: "" (vacío) → ChatwootLabelRequiredError (422)', async () => {
+      const { useCase } = await setup();
+
+      await expect(useCase.execute(baseInput({ chatwootLabel: '' }))).rejects.toThrow(ChatwootLabelRequiredError);
+    });
+
+    it('chatwootLabel: "   " (solo whitespace) → ChatwootLabelRequiredError (422)', async () => {
+      const { useCase } = await setup();
+
+      await expect(useCase.execute(baseInput({ chatwootLabel: '   ' }))).rejects.toThrow(ChatwootLabelRequiredError);
+    });
+
+    it('el kill-switch (KS-1) gana sobre chatwootLabel faltante → FeatureExternalBulkDisabledError (403), no 422', async () => {
+      const { useCase } = await setup({ flagEnabled: false });
+      const input = { ...baseInput(), chatwootLabel: undefined } as unknown as ValidateExternalBulkInput;
+
+      await expect(useCase.execute(input)).rejects.toThrow(FeatureExternalBulkDisabledError);
     });
   });
 
@@ -440,6 +487,29 @@ describe('ValidateExternalBulk', () => {
 
       const preview = await previewRepo.findById(result.previewId);
       expect(preview?.chatwootLabel).toBe('promo-agosto');
+    });
+
+    // ─── fix wave F1 (finding 2) — round-trip: el caller reusa el título "bonito" ─
+    it('el caller manda el título "bonito" (sin normalizar) de un label creado con ESE título → matchea contra el catálogo (ya normalizado), no 422', async () => {
+      const { useCase, chatwootGateway, previewRepo } = await setup();
+      // El catálogo vivo SIEMPRE tiene títulos normalizados (POST /labels los
+      // normaliza antes de crearlos en Chatwoot, D2).
+      chatwootGateway.accountLabelsResult = [{ title: 'cobranzas-agosto', color: '#fff' }];
+
+      const result = await useCase.execute(baseInput({ chatwootLabel: 'Cobranzas Agosto' }));
+
+      expect(result.chatwootLabel).toBe('cobranzas-agosto');
+      const preview = await previewRepo.findById(result.previewId);
+      expect(preview?.chatwootLabel).toBe('cobranzas-agosto');
+    });
+
+    it('respuesta 200 ecoa el chatwootLabel NORMALIZADO (D12 aditivo)', async () => {
+      const { useCase, chatwootGateway } = await setup();
+      chatwootGateway.accountLabelsResult = [{ title: 'promo-agosto', color: '#fff' }];
+
+      const result = await useCase.execute(baseInput({ chatwootLabel: '  Promo   Agosto  ' }));
+
+      expect(result.chatwootLabel).toBe('promo-agosto');
     });
   });
 
@@ -817,7 +887,7 @@ describe('ValidateExternalBulk', () => {
       expect(preview?.credit).toEqual(result.credit);
     });
 
-    it('payloadHash IDÉNTICO al valor de antes de este change (literal hardcodeado, pin de no-regresión CG-VAL-2)', async () => {
+    it('payloadHash IDÉNTICO al algoritmo de externalBulkPayloadHash (literal hardcodeado, pin de no-regresión CG-VAL-2)', async () => {
       const { useCase, previewRepo } = await setup();
 
       const result = await useCase.execute(baseInput());
@@ -826,7 +896,14 @@ describe('ValidateExternalBulk', () => {
       // Literal capturado con el algoritmo de `externalBulkPayloadHash` SIN
       // TOCAR (twilio-credit-guard no modifica ese archivo) — el crédito NUNCA
       // participa del hash aunque las tarifas cambien.
-      expect(preview?.payloadHash).toBe('b9deaf15c46833d24da7bee0d9de80641e9038442d9f8de9583b8047499b886a');
+      //
+      // external-labels-required (decisión del orquestador 2026-09-03) — el
+      // literal CAMBIÓ respecto de la versión anterior de este test: antes
+      // `baseInput()` no traía `chatwootLabel` (viajaba `null` en el hash); ahora
+      // es OBLIGATORIO y `baseInput()` siempre manda `DEFAULT_CHATWOOT_LABEL` —
+      // el hash lo incluye, así que el literal recalculado es distinto (esperado,
+      // no una regresión: `externalBulkPayloadHash` no se tocó).
+      expect(preview?.payloadHash).toBe('1c8914e07bc3c58336da6b82f6ae7ed6688f1273c553715f9cd243969c0a3927');
     });
 
     it('el hash NO cambia si las tarifas cambian entre dos previews del MISMO payload (CG-VAL-2)', async () => {

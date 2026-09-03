@@ -14,10 +14,16 @@
  *
  * HTTP mapping lives in errorHandler.ts statusMap (single source of truth, D7.a):
  *   FEATURE_DISABLED → 403 · CAP_EXCEEDED → 422 · EMPTY_RECIPIENTS → 422 ·
- *   CHATWOOT_LABEL_NOT_FOUND → 422 · PREVIEW_NOT_FOUND → 404 · PREVIEW_EXPIRED → 410 ·
+ *   CHATWOOT_LABEL_NOT_FOUND → 422 · CHATWOOT_LABEL_REQUIRED → 422 (external-labels-required,
+ *   VAL-1/SEND-4) · PREVIEW_NOT_FOUND → 404 · PREVIEW_EXPIRED → 410 ·
  *   PREVIEW_ALREADY_CONSUMED → 409 · PREVIEW_PAYLOAD_MISMATCH → 409 ·
  *   IDEMPOTENCY_KEY_CONFLICT → 409 · CAMPAIGN_RUNNER_BUSY → 409 · REPORTER_UNAVAILABLE → 503 ·
  *   INSUFFICIENT_CREDIT → 422 · CREDIT_UNAVAILABLE → 503
+ *
+ * external-labels-required (LBL-2, decisión del orquestador 2026-09-03): `POST
+ * .../labels` sobre un título YA existente NO lanza ningún error de este archivo
+ * — responde 200 idempotente `{...existingLabel, created:false}` desde la ruta
+ * misma (`external-messaging.routes.ts`). No hay `ChatwootLabelExistsError`.
  */
 import { DomainError } from './index';
 
@@ -89,6 +95,21 @@ export class EmptyRecipientsError extends DomainError {
   constructor(message = 'All recipients in the batch were excluded; nothing to validate') {
     super(message, 'EMPTY_RECIPIENTS');
     this.name = 'EmptyRecipientsError';
+  }
+}
+
+/**
+ * external-labels (LBL-2) — raised by `ValidateExternalBulk`/`SendExternalBulk`
+ * (VAL-1/SEND-4, delta external-bulk-messaging) when `chatwootLabel` is absent,
+ * `null`, or empty/whitespace after `trim`. NOT used by `POST .../labels`
+ * (external-labels capability) — that route resolves an already-existing
+ * title to a 200 idempotent response (`{...existingLabel, created:false}`,
+ * decisión del orquestador 2026-09-03), never a 4xx.
+ */
+export class ChatwootLabelRequiredError extends DomainError {
+  constructor(message = 'chatwootLabel is required') {
+    super(message, 'CHATWOOT_LABEL_REQUIRED');
+    this.name = 'ChatwootLabelRequiredError';
   }
 }
 

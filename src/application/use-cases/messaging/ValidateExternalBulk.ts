@@ -22,6 +22,7 @@ import {
   ExternalBulkValidationError,
   CapExceededError,
   EmptyRecipientsError,
+  ChatwootLabelRequiredError,
   ChatwootLabelNotFoundError,
   ReporterUnavailableError,
 } from '@domain/errors/external-bulk-messaging';
@@ -33,6 +34,7 @@ import { toWhatsAppE164 } from './toWhatsAppE164';
 import { normalizePhone } from '@application/use-cases/recapture/matchActiveClient';
 import { renderTemplateBody } from './SendCampaign';
 import { externalBulkPayloadHash } from './externalBulkPayloadHash';
+import { normalizeLabelTitle } from './normalizeLabelTitle';
 import { toArgentinaDateKey } from './reportsTimezone';
 import { API_MESSAGING_USER_LOGIN } from '@domain/constants/machineUsers';
 import { MAX_MANUAL_CONTACTS } from './resolveCombinedRecipients';
@@ -60,7 +62,8 @@ const PURGE_LIMIT = 500;
  *   3. config (lectura temprana, sin comparar aún)
  *   4. template aprobado (VAL-4/D4.d)
  *   5. matchManualContacts — formato/opt-out/link (VAL-2)
- *   6. label de Chatwoot si vino (VAL-5)
+ *   6. label de Chatwoot, SIEMPRE presente (VAL-1/VAL-5, decisión del
+ *      orquestador 2026-09-03 — ya no es "si vino")
  *   7. merge de variables POR RECIPIENT + render (VAL-10/VAL-3)
  *   8. EMPTY_RECIPIENTS si no quedó ningún valid (VAL-3 scenario 2)
  *   9. cap por request, luego cap diario (VAL-6/VAL-7)
@@ -87,10 +90,18 @@ export class ValidateExternalBulk {
       throw new FeatureExternalBulkDisabledError();
     }
 
-    // 2 — VAL-1, forma del input. CERO llamadas downstream si falla.
+    // 2 — VAL-1, forma del input (incl. chatwootLabel OBLIGATORIO, decisión del
+    // orquestador 2026-09-03). CERO llamadas downstream si falla.
     assertValidShape(input);
     const globalVariables = input.variables ?? {};
-    const chatwootLabel = input.chatwootLabel ?? null;
+    // fix wave F1 (finding 2) — NORMALIZADO (no solo `trim()`): el catálogo
+    // vivo (`assertLabelExists`, más abajo) SIEMPRE contiene títulos
+    // normalizados (`POST /labels`, D2), así que un caller que reusa el
+    // título "bonito" que acaba de crear (`"Cobranzas Agosto"`) matchea contra
+    // `"cobranzas-agosto"`. El valor normalizado es el que se persiste en el
+    // preview y el que viaja en la respuesta (`chatwootLabel`, D12 aditivo) —
+    // "el título normalizado ES el identificador" (D2).
+    const chatwootLabel = normalizeLabelTitle(input.chatwootLabel);
 
     // 3 — lectura temprana de config (defaults 500/2000 si no hay fila, CONFIG-1).
     // fix wave F1 (F4) — clamp DEFENSIVO al techo del motor de envío.
@@ -115,10 +126,10 @@ export class ValidateExternalBulk {
     // 5 — VAL-2 — formato (E.164 AR via toWhatsAppE164, extranjero explicito = invalido) / opt-out / link + dedup intra-batch.
     const { candidates, invalid: invalidFromMatch } = await this.classifyRecipients(input.recipients);
 
-    // 6 — VAL-5 — label de Chatwoot (si vino) contra el catálogo VIVO.
-    if (chatwootLabel) {
-      await this.assertLabelExists(chatwootLabel);
-    }
+    // 6 — VAL-5 — label de Chatwoot (SIEMPRE presente, VAL-1) contra el
+    // catálogo VIVO. Incondicional (decisión del orquestador 2026-09-03) —
+    // ya no existe el camino "sin label".
+    await this.assertLabelExists(chatwootLabel);
 
     // 7 — VAL-10/VAL-3 — merge por-recipient + render; puede degradar a invalid.
     const declaredKeys = Object.keys(template.variables);
@@ -244,6 +255,9 @@ export class ValidateExternalBulk {
       previewId: preview.id,
       expiresAt: preview.expiresAt,
       renderedMessage: valid[0]?.renderedMessage ?? '',
+      // fix wave F1 (finding 2) — el título NORMALIZADO, el mismo que quedó
+      // persistido en el preview (round-trip create→validate→send).
+      chatwootLabel,
       counts,
       valid,
       invalid,
@@ -486,6 +500,14 @@ function assertValidShape(input: ValidateExternalBulkInput): void {
   const templateName = typeof input.templateName === 'string' ? input.templateName.trim() : '';
   if (!templateRef && !templateName) {
     throw new ExternalBulkValidationError('templateRef or templateName is required');
+  }
+  // external-labels-required (VAL-1, delta external-bulk-messaging, decisión
+  // del orquestador 2026-09-03) — 422 de NEGOCIO (mismo criterio que
+  // `ChatwootLabelNotFoundError`), NO 400: por eso vive acá y no en el Zod de
+  // la ruta (D1 del design). Ausente/`null`/vacío/whitespace, todos rechazados.
+  const chatwootLabel = typeof input.chatwootLabel === 'string' ? input.chatwootLabel.trim() : '';
+  if (!chatwootLabel) {
+    throw new ChatwootLabelRequiredError();
   }
 }
 

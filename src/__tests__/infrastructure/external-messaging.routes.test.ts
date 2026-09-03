@@ -34,6 +34,8 @@ import { InMemoryAuditEventRepository } from '@infrastructure/adapters/in-memory
 import { InMemoryCreditBalancePort } from '@infrastructure/adapters/in-memory/InMemoryCreditBalancePort';
 import { InMemoryMessagingRatesConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryMessagingRatesConfigRepository';
 import { GetMessagingCredit } from '@application/use-cases/messaging/GetMessagingCredit';
+import { ListChatwootLabels } from '@application/use-cases/messaging/ListChatwootLabels';
+import { CreateChatwootLabel } from '@application/use-cases/messaging/CreateChatwootLabel';
 import { bootstrapApiMessagingUser } from '@infrastructure/bootstrap/bootstrapApiMessagingUser';
 import { FakeChatwootGateway } from '../helpers/FakeChatwootGateway';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter } from '@domain/ports/CustomerRepository';
@@ -55,6 +57,15 @@ jest.mock('@infrastructure/config', () => ({
 const NOW = new Date('2026-09-02T12:00:00.000Z');
 const FLAG_KEY = 'messaging-external-bulk-enabled';
 const DEDICATED_KEY = 'dedicated-external-messaging-key';
+
+/**
+ * external-labels-required (task 2.4, decisión del orquestador 2026-09-03) —
+ * `chatwootLabel` pasó a OBLIGATORIO en `validate`/`send`. `VALID_BODY` y
+ * `buildPreviewData()` defaultean a ESTE título y `buildApp()` siembra el
+ * catálogo del fake con él por default — arreglado en el HELPER, nunca test
+ * por test (mismo criterio que los archivos de use case).
+ */
+const DEFAULT_CHATWOOT_LABEL = 'default-label';
 
 const TEMPLATE: TemplateDto = {
   contentSid: 'HXpromo1',
@@ -89,6 +100,8 @@ interface BuildAppOpts {
   creditAmount?: string;
   creditCurrency?: string;
   creditFails?: boolean;
+  /** LBL-2 — simula Chatwoot inalcanzable EN `createAccountLabel` (distinto de `chatwootThrows`, que es `listAccountLabels`). */
+  chatwootCreateFails?: boolean;
 }
 
 function buildApp(opts: BuildAppOpts = {}) {
@@ -97,8 +110,12 @@ function buildApp(opts: BuildAppOpts = {}) {
   const campaignRepo = new InMemoryCampaignRepository({ now: () => NOW });
   const templatePort = new InMemoryTemplateMessagingGateway({ templates: opts.templates ?? [TEMPLATE] });
   const chatwootGateway = new FakeChatwootGateway();
-  chatwootGateway.accountLabelsResult = (opts.chatwootLabels ?? []).map((title) => ({ title, color: 'blue' }));
+  chatwootGateway.accountLabelsResult = (opts.chatwootLabels ?? [DEFAULT_CHATWOOT_LABEL]).map((title) => ({
+    title,
+    color: 'blue',
+  }));
   if (opts.chatwootThrows) chatwootGateway.failListAccountLabels = true;
+  if (opts.chatwootCreateFails) chatwootGateway.failCreateAccountLabel = true;
   const featureFlags = new InMemoryFeatureFlagRepository();
   if (opts.flagEnabled !== false) featureFlags.seed(FLAG_KEY, true);
   const rbacUserRepo = new InMemoryRbacUserRepository();
@@ -138,6 +155,8 @@ function buildApp(opts: BuildAppOpts = {}) {
     submitTemplate: new SubmitTemplateForApproval(templatePort),
     featureFlags,
     getMessagingCredit,
+    listChatwootLabels: new ListChatwootLabels(chatwootGateway),
+    createChatwootLabel: new CreateChatwootLabel(chatwootGateway),
     // fix wave F1 (F7) — el limiter de ESCRITURA entra como dep del router y
     // solo cubre los POST; los GET (status/templates) quedan libres.
     ...(opts.writeRateLimiter ? { writeRateLimiter: opts.writeRateLimiter } : {}),
@@ -158,7 +177,7 @@ function buildApp(opts: BuildAppOpts = {}) {
   );
   app.use(errorHandler);
 
-  return { app, previewRepo, configRepo, campaignRepo, rbacUserRepo, templatePort, auditRepo, creditPort, ratesRepo };
+  return { app, previewRepo, configRepo, campaignRepo, rbacUserRepo, templatePort, auditRepo, creditPort, ratesRepo, chatwootGateway, featureFlags };
 }
 
 async function seedApiMessagingUser(rbacUserRepo: InMemoryRbacUserRepository): Promise<string> {
@@ -174,7 +193,10 @@ function buildPreviewData(opts: {
 }): ExternalBulkPreviewCreateData {
   const templateName = TEMPLATE.friendlyName;
   const variables = {};
-  const chatwootLabel = opts.chatwootLabel ?? null;
+  // task 2.4 — default DEFAULT_CHATWOOT_LABEL (no `null`, ver comentario de la
+  // constante). `=== undefined` (no `??`) para que `chatwootLabel: null`
+  // EXPLÍCITO (molde "preview viejo sin label") no se pise con el default.
+  const chatwootLabel = opts.chatwootLabel === undefined ? DEFAULT_CHATWOOT_LABEL : opts.chatwootLabel;
   const recipients = opts.recipients.map((r) => ({
     phoneE164: r.phoneE164,
     phoneNormalized: r.phoneE164,
@@ -214,6 +236,9 @@ const VALID_BODY = {
   // TEMPLATE declara `{"1"}` (body "Hola {{1}}") — sin esto el único recipient
   // cae en `invalid:'variables_faltantes'` y el batch entero → EMPTY_RECIPIENTS.
   variables: { '1': 'Nombre' },
+  // task 2.4 — OBLIGATORIO desde este change (VAL-1); `buildApp()` siembra el
+  // catálogo del fake con ESTE MISMO título por default.
+  chatwootLabel: DEFAULT_CHATWOOT_LABEL,
   recipients: [{ phone: '011 15-2345-6789' }],
 };
 
@@ -246,6 +271,51 @@ describe('POST /validate', () => {
       .send(VALID_BODY);
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('FEATURE_DISABLED');
+  });
+
+  // ─── external-labels-required (VAL-1, decisión del orquestador 2026-09-03) ─
+  it('CHATWOOT_LABEL_REQUIRED → 422 (NO 400) cuando falta chatwootLabel — pinea D1', async () => {
+    const { app } = buildApp();
+    const { chatwootLabel: _omit, ...bodyWithoutLabel } = VALID_BODY;
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send(bodyWithoutLabel);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('CHATWOOT_LABEL_REQUIRED');
+  });
+
+  it('CHATWOOT_LABEL_REQUIRED → 422 cuando chatwootLabel es "" o "   "', async () => {
+    const { app } = buildApp();
+    for (const chatwootLabel of ['', '   ']) {
+      const res = await request(app)
+        .post('/api/external/v1/messaging/bulk/validate')
+        .set('X-Api-Key', DEDICATED_KEY)
+        .send({ ...VALID_BODY, chatwootLabel });
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('CHATWOOT_LABEL_REQUIRED');
+    }
+  });
+
+  // ─── fix wave F1 (finding 1) ────────────────────────────────────────────
+  it('CHATWOOT_LABEL_REQUIRED → 422 (NO 400) cuando chatwootLabel es null EXPLÍCITO en el JSON', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ ...VALID_BODY, chatwootLabel: null });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('CHATWOOT_LABEL_REQUIRED');
+  });
+
+  it('con chatwootLabel válido → 200 (molde ya cubierto por "200 en el camino feliz" más abajo)', async () => {
+    const { app, rbacUserRepo } = buildApp();
+    await seedApiMessagingUser(rbacUserRepo);
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send(VALID_BODY);
+    expect(res.status).toBe(200);
   });
 
   it('TEMPLATE_NOT_APPROVED → 422 cuando el template no existe/no está aprobado', async () => {
@@ -283,7 +353,7 @@ describe('POST /validate', () => {
     const res = await request(app)
       .post('/api/external/v1/messaging/bulk/validate')
       .set('X-Api-Key', DEDICATED_KEY)
-      .send({ templateRef: TEMPLATE.contentSid, recipients: [{ phone: '123' }] });
+      .send({ templateRef: TEMPLATE.contentSid, chatwootLabel: DEFAULT_CHATWOOT_LABEL, recipients: [{ phone: '123' }] });
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('EMPTY_RECIPIENTS');
   });
@@ -297,6 +367,7 @@ describe('POST /validate', () => {
       .send({
         templateRef: TEMPLATE.contentSid,
         variables: { '1': 'Nombre' },
+        chatwootLabel: DEFAULT_CHATWOOT_LABEL,
         recipients: [{ phone: '011 15-2345-6789' }, { phone: '011 15-2345-6780' }],
       });
     expect(res.status).toBe(422);
@@ -388,6 +459,345 @@ describe('GET /credit', () => {
     const { app } = buildApp();
     const res = await request(app).get('/api/external/v1/messaging/bulk/credit');
     expect(res.status).toBe(401);
+  });
+});
+
+// ─── external-labels (LBL-1..LBL-5) — catálogo de labels por la API Externa ──
+describe('GET /labels', () => {
+  it('LBL-1: 200 con {data:[{title,color}]} — el catálogo vivo', async () => {
+    const { app } = buildApp({ chatwootLabels: ['promo-agosto', 'soporte'] });
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      data: [
+        { title: 'promo-agosto', color: 'blue' },
+        { title: 'soporte', color: 'blue' },
+      ],
+    });
+  });
+
+  it('LBL-1: catálogo vacío → 200 con {data:[]}, no 404', async () => {
+    const { app } = buildApp({ chatwootLabels: [] });
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ data: [] });
+  });
+
+  it('LBL-1: Chatwoot caído (failListAccountLabels) → 503 CHATWOOT_UNAVAILABLE', async () => {
+    const { app } = buildApp({ chatwootThrows: true });
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CHATWOOT_UNAVAILABLE');
+  });
+
+  it('LBL-1: N+1 GETs con un limiter de escritura de N — ninguno responde 429 (el GET no consume presupuesto de escritura)', async () => {
+    const built = buildApp({ writeRateLimiter: createExternalWriteRateLimiter({ limit: 2, windowMs: 60_000 }) });
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const res = await request(built.app)
+        .get('/api/external/v1/messaging/bulk/labels')
+        .set('X-Api-Key', DEDICATED_KEY);
+      statuses.push(res.status);
+    }
+    expect(statuses.filter((s) => s === 429)).toHaveLength(0);
+  });
+
+  it('LBL-3: 401 sin X-Api-Key', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/external/v1/messaging/bulk/labels');
+    expect(res.status).toBe(401);
+  });
+
+  it('LBL-3: 403 FEATURE_DISABLED con el flag OFF, sin llamar a Chatwoot', async () => {
+    const { app, chatwootGateway } = buildApp({ flagEnabled: false });
+    // fix wave F1 (finding 6) — `toBeDefined()` sobre un array SIEMPRE
+    // definido (seedeado por `buildApp`, sin tocar Chatwoot) es tautológico:
+    // pasa aunque `listAccountLabels` se hubiera llamado. Un spy sobre el
+    // MÉTODO es la única forma de probar "sin llamar a Chatwoot".
+    const listSpy = jest.spyOn(chatwootGateway, 'listAccountLabels');
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FEATURE_DISABLED');
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+
+  it('LBL-4: el listado NO deja fila de auditoría', async () => {
+    const { app, auditRepo } = buildApp({ withAudit: true });
+    await request(app).get('/api/external/v1/messaging/bulk/labels').set('X-Api-Key', DEDICATED_KEY);
+    await new Promise((resolve) => setImmediate(resolve));
+    const page = await auditRepo.list({ page: 1, pageSize: 10 });
+    expect(page.items.filter((e) => e.path.includes('/labels'))).toHaveLength(0);
+  });
+});
+
+describe('POST /labels', () => {
+  it('LBL-2: normaliza "  Prueba API Externa  " → "prueba-api-externa" y responde 201 {title,color,created:true}', async () => {
+    const { app, chatwootGateway } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: '  Prueba API Externa  ' });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ title: 'prueba-api-externa', color: '#1f93ff', created: true });
+    expect(chatwootGateway.createAccountLabelCalls).toEqual([{ title: 'prueba-api-externa', color: '#1f93ff' }]);
+  });
+
+  it('LBL-2: color explícito viaja tal cual', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo', color: '#FF6B00' });
+    expect(res.status).toBe(201);
+    expect(res.body.color).toBe('#FF6B00');
+    expect(res.body.created).toBe(true);
+  });
+
+  it('LBL-2: color ausente → DEFAULT_LABEL_COLOR', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo' });
+    expect(res.status).toBe(201);
+    expect(res.body.color).toBe('#1f93ff');
+  });
+
+  it('LBL-2: color inválido → 400 VALIDATION_ERROR, sin llamar a Chatwoot', async () => {
+    const { app, chatwootGateway } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo', color: 'naranja' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('LBL-2: title whitespace puro → normalizeLabelTitle lo vacía → InvalidChatwootLabelError del use case → 400 VALIDATION_ERROR (no del Zod, que solo exige min(1) del CRUDO)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: '   ' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('LBL-2: description presente → 400 VALIDATION_ERROR (no soportada, .strict())', async () => {
+    const { app, chatwootGateway } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo', description: 'campaña de septiembre' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  // ─── fix wave F1 (finding 3a) — charset ────────────────────────────────
+  it('fix wave F1 (3a): título con caracteres no soportados por Chatwoot → 400 VALIDATION_ERROR listando los caracteres, sin llamar a Chatwoot', async () => {
+    const { app, chatwootGateway } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo #agosto 🎉' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.body.error).toContain('#');
+    expect(res.body.error).toContain('🎉');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('fix wave F1 (3a): título con solo letras/números/guiones/underscore (post-normalización) → pasa el charset', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo_agosto-2026' });
+    expect(res.status).toBe(201);
+  });
+
+  // ─── fix wave F1 (finding 4) — tope de longitud ────────────────────────
+  it('fix wave F1 (4): title de 101 caracteres → 400 VALIDATION_ERROR (min/max del Zod), sin llamar a Chatwoot', async () => {
+    const { app, chatwootGateway } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'a'.repeat(101) });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('fix wave F1 (4): title de EXACTO 100 caracteres → pasa el tope (no se cierra de más)', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'a'.repeat(100) });
+    expect(res.status).toBe(201);
+  });
+
+  // ─── fix wave F1 (finding 3b) — TOCTOU ──────────────────────────────────
+  it('fix wave F1 (3b): create falla DESPUÉS del pre-chequeo pero el título YA existe al re-listar → 200 idempotente {created:false}, no 503', async () => {
+    const { app, chatwootGateway } = buildApp({ chatwootCreateFails: true });
+    // El pre-chequeo (1er listAccountLabels) ve el catálogo VACÍO (default);
+    // `createAccountLabel` falla (chatwootCreateFails); el RE-chequeo
+    // (2do listAccountLabels, ya con el ganador de la carrera adentro) SÍ lo
+    // encuentra — simulado sobreescribiendo `accountLabelsResult` recién
+    // ahora, ya que el pre-chequeo corre síncrono ANTES de esta línea... por
+    // eso se usa un spy que devuelve `[]` la 1ra vez y el catálogo poblado
+    // desde la 2da.
+    let calls = 0;
+    jest.spyOn(chatwootGateway, 'listAccountLabels').mockImplementation(async () => {
+      calls += 1;
+      return calls === 1 ? [] : [{ title: 'promo', color: '#1f93ff' }];
+    });
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ title: 'promo', color: '#1f93ff', created: false });
+  });
+
+  it('fix wave F1 (3b): create falla y el re-chequeo TAMPOCO lo encuentra → 503 CHATWOOT_UNAVAILABLE (comportamiento previo intacto)', async () => {
+    const { app } = buildApp({ chatwootCreateFails: true, chatwootLabels: [] });
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CHATWOOT_UNAVAILABLE');
+  });
+
+  it('LBL-2: título ya existente en el catálogo → 200 idempotente {...existingLabel, created:false}, createAccountLabel NO llamado (decisión del orquestador)', async () => {
+    const { app, chatwootGateway } = buildApp({ chatwootLabels: ['promo-agosto'] });
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'Promo Agosto' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ title: 'promo-agosto', color: 'blue', created: false });
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('LBL-2: Chatwoot caído durante la creación (failCreateAccountLabel) → 503 CHATWOOT_UNAVAILABLE', async () => {
+    const { app } = buildApp({ chatwootCreateFails: true });
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CHATWOOT_UNAVAILABLE');
+  });
+
+  it('LBL-3: 401 sin X-Api-Key', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .send({ title: 'promo' });
+    expect(res.status).toBe(401);
+  });
+
+  it('LBL-3: 403 FEATURE_DISABLED con el flag OFF, sin llamar a Chatwoot', async () => {
+    const { app, chatwootGateway } = buildApp({ flagEnabled: false });
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo' });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FEATURE_DISABLED');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('LBL-3: el repo de flags lanza → 403 FEATURE_DISABLED (nunca se interpreta como ON)', async () => {
+    const { app, featureFlags, chatwootGateway } = buildApp();
+    jest.spyOn(featureFlags, 'get').mockRejectedValue(new Error('db down'));
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo' });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FEATURE_DISABLED');
+    expect(chatwootGateway.createAccountLabelCalls).toHaveLength(0);
+  });
+
+  it('LBL-3: POST rate-limitado — los primeros N (limit:2) son 201, el (N+1)-ésimo en adelante 429', async () => {
+    const built = buildApp({ writeRateLimiter: createExternalWriteRateLimiter({ limit: 2, windowMs: 60_000 }) });
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const res = await request(built.app)
+        .post('/api/external/v1/messaging/bulk/labels')
+        .set('X-Api-Key', DEDICATED_KEY)
+        .send({ title: `promo-${i}` });
+      statuses.push(res.status);
+    }
+    // fix wave F1 (finding 6) — assert PRECISO en vez de "algún 429 en algún
+    // lado": con `limit:2` los primeros 2 requests (títulos NUEVOS, nunca
+    // colisionan con el idempotente 200) DEBEN crear (201); recién el 3° y el
+    // 4° caen fuera de la ventana y DEBEN ser 429 — no cualquier subconjunto.
+    expect(statuses).toEqual([201, 201, 429, 429]);
+  });
+
+  it('LBL-4: deja fila de auditoría con actorLogin:"api-messaging" y actorId no nulo', async () => {
+    const { app, auditRepo, rbacUserRepo } = buildApp({ withAudit: true });
+    await seedApiMessagingUser(rbacUserRepo);
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'promo' });
+    expect(res.status).toBe(201);
+    await new Promise((resolve) => setImmediate(resolve));
+    const page = await auditRepo.list({ page: 1, pageSize: 10 });
+    const row = page.items.find((e) => e.path.includes('/labels'));
+    expect(row?.actorLogin).toBe(API_MESSAGING_USER_LOGIN);
+    expect(row?.actorId).toBeTruthy();
+  });
+});
+
+// ─── fix wave F1 (finding 2/7) — round-trip create→validate→send ───────────
+// El título normalizado ES el identificador (D2): un caller que crea un label
+// con el título "bonito" DEBE poder reusar ESE MISMO título en `validate` y
+// ver el label CANÓNICO aplicado por `send` — no un 422 CHATWOOT_LABEL_NOT_FOUND
+// contra su propio label recién creado.
+describe('fix wave F1 (finding 2) — round-trip: POST /labels crea, POST /validate resuelve por título normalizado, POST /send persiste el canónico', () => {
+  it('"Cobranzas Agosto" → 201 cobranzas-agosto; validate con el título bonito → 200 chatwootLabel:"cobranzas-agosto"; la Campaign creada lleva el label canónico', async () => {
+    const { app, rbacUserRepo, campaignRepo } = buildApp({ chatwootLabels: [] });
+    await seedApiMessagingUser(rbacUserRepo);
+
+    const createRes = await request(app)
+      .post('/api/external/v1/messaging/bulk/labels')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ title: 'Cobranzas Agosto' });
+    expect(createRes.status).toBe(201);
+    expect(createRes.body).toMatchObject({ title: 'cobranzas-agosto', created: true });
+
+    const validateRes = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ ...VALID_BODY, chatwootLabel: 'Cobranzas Agosto' });
+    expect(validateRes.status).toBe(200);
+    expect(validateRes.body.chatwootLabel).toBe('cobranzas-agosto');
+
+    const sendRes = await request(app)
+      .post('/api/external/v1/messaging/bulk/send')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .set('Idempotency-Key', 'round-trip-key')
+      .send({ previewId: validateRes.body.previewId });
+    expect(sendRes.status).toBe(202);
+
+    const campaign = await campaignRepo.findById(sendRes.body.campaignId);
+    expect(campaign?.chatwootLabel).toBe('cobranzas-agosto');
   });
 });
 
@@ -638,6 +1048,7 @@ describe('AUDIT-1 — validate y send quedan auditados', () => {
       .send({
         templateRef: TEMPLATE.contentSid,
         variables: { '1': 'Nombre' },
+        chatwootLabel: DEFAULT_CHATWOOT_LABEL,
         recipients: [{ phone: '011 15-2345-6789' }, { phone: '011 15-2345-6780' }],
       });
     expect(res.status).toBe(422);
@@ -714,7 +1125,11 @@ describe('fix wave F1 (F6) — AUDIT-1: el actor auditado es api-messaging, no a
       request(app)
         .post('/api/external/v1/messaging/bulk/validate')
         .set('X-Api-Key', DEDICATED_KEY)
-        .send({ templateRef: TEMPLATE.contentSid, recipients: [{ phone: '011 15-2345-6789', variables: { '1': 'Ana' } }] }),
+        .send({
+          templateRef: TEMPLATE.contentSid,
+          chatwootLabel: DEFAULT_CHATWOOT_LABEL,
+          recipients: [{ phone: '011 15-2345-6789', variables: { '1': 'Ana' } }],
+        }),
     );
 
     expect(rows).toHaveLength(1);
@@ -733,6 +1148,7 @@ describe('fix wave F1 (F6) — AUDIT-1: el actor auditado es api-messaging, no a
           .send({
             templateRef: TEMPLATE.contentSid,
             variables: { '1': 'Ana' },
+            chatwootLabel: DEFAULT_CHATWOOT_LABEL,
             recipients: [{ phone: '011 15-2345-6789' }, { phone: '011 15-9876-5432' }],
           }),
       { caps: { maxPerRequest: 1, maxPerDay: 2000 } },

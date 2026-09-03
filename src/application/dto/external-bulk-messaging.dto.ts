@@ -31,7 +31,13 @@ export interface ValidateExternalBulkInput {
   templateName?: string;
   /** Literales GLOBALES — default para todos los recipients (D4.c). */
   variables?: Record<string, string>;
-  chatwootLabel?: string;
+  /**
+   * external-labels-required (VAL-1, delta external-bulk-messaging, decisión
+   * del orquestador 2026-09-03) — OBLIGATORIO, no vacío tras `trim`. Ausente/
+   * `null`/vacío/whitespace ⇒ 422 `CHATWOOT_LABEL_REQUIRED` (`assertValidShape`,
+   * ANTES de tocar Chatwoot/DB). Previously optional (`chatwootLabel?: string`).
+   */
+  chatwootLabel: string;
   recipients: ValidateExternalBulkRecipientInput[];
 }
 
@@ -104,6 +110,14 @@ export interface ValidateExternalBulkOutput {
   expiresAt: string;
   /** MUESTRA — el `renderedMessage` del PRIMER `valid` (`''` si no hay ninguno). */
   renderedMessage: string;
+  /**
+   * fix wave F1 (finding 2, aditivo) — el título NORMALIZADO (`normalizeLabelTitle`)
+   * que quedó PERSISTIDO en el preview, no el crudo que mandó el caller. El
+   * round-trip create→validate exige que el caller pueda ver el mismo título
+   * exacto que `send` va a aplicar en Chatwoot (D2 — "el título normalizado es
+   * el identificador").
+   */
+  chatwootLabel: string;
   counts: ValidateExternalBulkCountsDto;
   valid: ValidateExternalBulkValidRecipientDto[];
   invalid: ValidateExternalBulkInvalidRecipientDto[];

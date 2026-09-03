@@ -233,8 +233,19 @@ export class FakeChatwootGateway implements ChatwootGateway {
   async createAccountLabel(params: { title: string; color: string }): Promise<ChatwootLabelDto> {
     this.createAccountLabelCalls.push({ ...params });
     if (this.failCreateAccountLabel) throw new Error('fake: Chatwoot unreachable (createAccountLabel)');
-    if (this.createAccountLabelResult) return this.createAccountLabelResult;
-    return { title: params.title, color: params.color };
+    const created = this.createAccountLabelResult ?? { title: params.title, color: params.color };
+    // fix wave F1 (external-labels-required, finding 2) — el REAL Chatwoot
+    // persiste el label creado: una llamada subsiguiente a `listAccountLabels()`
+    // lo devuelve. El fake antes NO mutaba `accountLabelsResult`, así que un
+    // caller que creaba un label y en la MISMA suite lo validaba contra el
+    // catálogo (round-trip create→validate) veía un catálogo desactualizado —
+    // no era un bug del código bajo test, era el fake mintiendo. Se agrega acá
+    // (append, sin duplicar por título) para que el fake se comporte como el
+    // adapter real que envuelve.
+    if (!this.accountLabelsResult.some((l) => l.title === created.title)) {
+      this.accountLabelsResult.push(created);
+    }
+    return created;
   }
 
   // ─── campaign-chatwoot-label (design D1.c/D2, CLBL-3/4/5) — addConversationLabels ──
