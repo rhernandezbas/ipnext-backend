@@ -508,7 +508,7 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
       expect(body.source_id).toBe('whatsapp:+5493511234567');
     });
 
-    it('teléfono con contacto ya existente (mismo source_id) — reusa sin duplicar (CHW-2 scenario), igual UNA sola llamada', async () => {
+    it('CHW-2 (2.1, no-regresión): teléfono con contacto ya existente (mismo source_id) — reusa sin duplicar, igual UNA sola llamada, sin GET', async () => {
       const { http, gw } = fakeHttp({
         post: jest.fn().mockResolvedValue({
           data: { id: 501, messages: [{ id: 778, message_type: 1, content: 'hola de nuevo', created_at: 1751001200 }] },
@@ -524,10 +524,11 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
       });
 
       expect(http.post).toHaveBeenCalledTimes(1);
+      expect(http.get).not.toHaveBeenCalled();
     });
 
-    it('error de red/timeout/4xx/5xx → ChatwootUnavailableError (mismo criterio único del port, CHW-7)', async () => {
-      const { gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
+    it('1.3: fallo de red (sin response) en POST /conversations → mensaje "— sin respuesta" (no el texto crudo de axios), ChatwootUnavailableError', async () => {
+      const { http, gw } = fakeHttp({ post: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) });
       await expect(
         gw.createConversationWithTemplate({
           phoneE164: '+5493511234567',
@@ -536,7 +537,350 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
           processedParams: {},
           content: 'x',
         }),
-      ).rejects.toBeInstanceOf(ChatwootUnavailableError);
+      ).rejects.toMatchObject({
+        name: 'ChatwootUnavailableError',
+        message: 'Chatwoot: crear la conversación (POST /conversations) — sin respuesta',
+      });
+      expect(http.post).toHaveBeenCalledTimes(1);
+    });
+
+    it('2.7: status distinto de 404 (ej. 500) → el ensure NO corre, UNA sola llamada, error tipado del paso conversación', async () => {
+      const post = jest.fn().mockRejectedValue({
+        response: { status: 500 },
+        isAxiosError: true,
+        message: 'Request failed with status code 500',
+      });
+      const { http, gw } = fakeHttp({ post });
+
+      await expect(
+        gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ChatwootUnavailableError',
+        message: 'Chatwoot: crear la conversación (POST /conversations) — HTTP 500',
+      });
+      expect(http.post).toHaveBeenCalledTimes(1);
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it('2.2/2.3: teléfono sin contacto — 404 en conversations, POST /contacts crea contacto+inbox, reintenta conversations con el source_id de la respuesta', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockResolvedValueOnce({
+          data: { id: 900, contact_inbox: { inbox: { id: 1 }, source_id: 'whatsapp:+5493511234567' } },
+        })
+        .mockResolvedValueOnce({
+          data: { id: 700, messages: [{ id: 901, message_type: 1, content: 'hola', created_at: 1751002000 }] },
+        });
+      const { http, gw } = fakeHttp({ post });
+
+      const result = await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        name: 'Juan Perez',
+        templateName: 'deuda_v1',
+        language: 'es',
+        processedParams: { '1': 'Juan' },
+        content: 'hola',
+      });
+
+      expect(post.mock.calls).toHaveLength(3);
+      expect(post.mock.calls[0]).toEqual([
+        '/api/v1/accounts/2/conversations',
+        expect.objectContaining({ source_id: 'whatsapp:+5493511234567' }),
+      ]);
+      expect(post.mock.calls[1]).toEqual([
+        '/api/v1/accounts/2/contacts',
+        { inbox_id: '1', phone_number: '+5493511234567', name: 'Juan Perez' },
+      ]);
+      expect(post.mock.calls[2]).toEqual([
+        '/api/v1/accounts/2/conversations',
+        expect.objectContaining({ source_id: 'whatsapp:+5493511234567' }),
+      ]);
+      expect(result).toEqual({ chatwootConversationId: 700, chatwootMessageId: 901 });
+      expect(http.get).not.toHaveBeenCalled();
+    });
+
+    it('2.4/2.5: contacto existente sin ContactInbox — 422 en POST /contacts, resuelve por búsqueda y vincula el ContactInbox (NO crea un 2º Contact); name vacío se omite (CSV)', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockRejectedValueOnce({
+          response: { status: 422, data: { message: 'Phone number has already been taken' } },
+          isAxiosError: true,
+          message: 'Request failed with status code 422',
+        })
+        .mockResolvedValueOnce({ data: { id: 55, contact_id: 12, source_id: 'whatsapp:+5493511234567' } })
+        .mockResolvedValueOnce({
+          data: { id: 701, messages: [{ id: 902, message_type: 1, content: 'hola', created_at: 1751002100 }] },
+        });
+      const get = jest.fn().mockResolvedValue({
+        data: { payload: [{ id: 12, name: 'Juan Perez', phone_number: '+5493511234567' }] },
+      });
+      const { gw } = fakeHttp({ post, get });
+
+      const result = await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        name: '',
+        templateName: 'deuda_v1',
+        language: 'es',
+        processedParams: {},
+        content: 'hola',
+      });
+
+      expect(post.mock.calls).toHaveLength(4);
+      expect(post.mock.calls[1]).toEqual([
+        '/api/v1/accounts/2/contacts',
+        { inbox_id: '1', phone_number: '+5493511234567' },
+      ]);
+      expect(get).toHaveBeenCalledWith('/api/v1/accounts/2/contacts/search', { params: { q: '5493511234567' } });
+      // FW1 (fix wave) — `source_id` YA NO se manda en este body: Chatwoot's ContactInboxBuilder
+      // lo genera según el canal cuando está ausente (design decisión "leer, nunca re-derivar",
+      // extendida acá a NO forzar tampoco el formato en el request). Sólo `inbox_id`.
+      expect(post.mock.calls[2]).toEqual(['/api/v1/accounts/2/contacts/12/contact_inboxes', { inbox_id: '1' }]);
+      expect(result).toEqual({ chatwootConversationId: 701, chatwootMessageId: 902 });
+    });
+
+    // FW1 (fix wave, MEDIUM-HIGH) — el retry a /conversations debe usar el source_id LEÍDO de la
+    // respuesta de POST /contacts/:id/contact_inboxes, nunca el derivado localmente. Se prueba con
+    // un valor DISTINTO al whatsapp:+E164 derivado para discriminar "lo leyó" de "lo forzó".
+    it('FW1: 422 en POST /contacts → source_id del retry viene de la respuesta de POST /contacts/:id/contact_inboxes, NO del derivado local', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockRejectedValueOnce({
+          response: { status: 422, data: { message: 'Phone number has already been taken' } },
+          isAxiosError: true,
+          message: 'Request failed with status code 422',
+        })
+        // Channel::Whatsapp (Cloud API): source_id devuelto SIN prefijo/+ — bien distinto del
+        // whatsapp:+5493511234567 derivado localmente.
+        .mockResolvedValueOnce({ data: { id: 55, contact_id: 12, source_id: '5493511234567' } })
+        .mockResolvedValueOnce({
+          data: { id: 701, messages: [{ id: 902, message_type: 1, content: 'hola', created_at: 1751002100 }] },
+        });
+      const get = jest.fn().mockResolvedValue({
+        data: { payload: [{ id: 12, name: 'Juan Perez', phone_number: '+5493511234567' }] },
+      });
+      const { gw } = fakeHttp({ post, get });
+
+      await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'deuda_v1',
+        language: 'es',
+        processedParams: {},
+        content: 'hola',
+      });
+
+      expect(post.mock.calls[3]).toEqual([
+        '/api/v1/accounts/2/conversations',
+        expect.objectContaining({ source_id: '5493511234567' }),
+      ]);
+    });
+
+    // FW2 (fix wave, MEDIUM) — NO todo 422 en POST /contacts es "teléfono duplicado": sólo el que
+    // el body de Chatwoot indica como tal ("has already been taken"/"already exists") dispara la
+    // resolución por búsqueda. Cualquier otro 422 (ej. validación de phone_number/inbox_id) se
+    // propaga tal cual como error tipado del paso contacto, SIN correr la búsqueda.
+    it('FW2: 422 en POST /contacts que NO es de teléfono duplicado (otro error de validación) → error tipado del paso contacto, búsqueda NUNCA corre', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockRejectedValueOnce({
+          response: { status: 422, data: { errors: { inbox_id: ['is not a valid inbox'] } } },
+          isAxiosError: true,
+          message: 'Request failed with status code 422',
+        });
+      const get = jest.fn();
+      const { gw } = fakeHttp({ post, get });
+
+      await expect(
+        gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ChatwootUnavailableError',
+        message: 'Chatwoot: crear el contacto (POST /contacts) — HTTP 422',
+      });
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    // FW3a (fix wave, MEDIUM) — el fallo del GET /contacts/search DENTRO del ensure debe conservar
+    // el status HTTP real (antes se perdía por pasar por `this.call`, que lo envuelve en
+    // ChatwootUnavailableError sin `.response` y el mensaje quedaba "— sin respuesta" para un 500 real).
+    it('FW3a: GET /contacts/search responde 500 dentro del ensure → mensaje con HTTP 500, no "sin respuesta"', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockRejectedValueOnce({
+          response: { status: 422, data: { message: 'Phone number has already been taken' } },
+          isAxiosError: true,
+          message: 'Request failed with status code 422',
+        });
+      const get = jest.fn().mockRejectedValue({
+        response: { status: 500 },
+        isAxiosError: true,
+        message: 'Request failed with status code 500',
+      });
+      const { gw } = fakeHttp({ post, get });
+
+      await expect(
+        gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ChatwootUnavailableError',
+        message: 'Chatwoot: buscar el contacto (GET /contacts/search) — HTTP 500',
+      });
+    });
+
+    // FW3b (fix wave, MEDIUM) — 0 coincidencias es un caso propio ("sin coincidencias"), no un
+    // "sin respuesta" (no hubo ningún fallo HTTP: el GET respondió 200 con payload vacío/sin match).
+    it('422 en POST /contacts pero la búsqueda no encuentra coincidencias → mensaje exacto "sin coincidencias" (FW3b, no "sin respuesta")', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockRejectedValueOnce({
+          response: { status: 422, data: { message: 'Phone number has already been taken' } },
+          isAxiosError: true,
+          message: 'Request failed with status code 422',
+        });
+      const get = jest.fn().mockResolvedValue({ data: { payload: [] } });
+      const { gw } = fakeHttp({ post, get });
+
+      await expect(
+        gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ChatwootUnavailableError',
+        message: 'Chatwoot: buscar el contacto (GET /contacts/search): sin coincidencias para +5493511234567',
+      });
+    });
+
+    it('2.6: source_id devuelto por Chatwoot con formato distinto al derivado — el retry usa ESE valor, no el whatsapp:+E164 local', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        // Channel::Whatsapp (Cloud API): source_id = teléfono SIN '+' y sin prefijo.
+        .mockResolvedValueOnce({ data: { id: 900, contact_inbox: { source_id: '5493511234567' } } })
+        .mockResolvedValueOnce({ data: { id: 702, messages: [] } });
+      const { gw } = fakeHttp({ post });
+
+      await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'x',
+        language: 'es',
+        processedParams: {},
+        content: 'x',
+      });
+
+      expect(post.mock.calls[2][1]).toEqual(expect.objectContaining({ source_id: '5493511234567' }));
+    });
+
+    it('2.8/CHW-7: el ensure falla — POST /contacts responde 500 → mensaje con "crear el contacto (POST /contacts)" + HTTP 500', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockRejectedValueOnce({
+          response: { status: 500 },
+          isAxiosError: true,
+          message: 'Request failed with status code 500',
+        });
+      const { gw } = fakeHttp({ post });
+
+      await expect(
+        gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ChatwootUnavailableError',
+        message: 'Chatwoot: crear el contacto (POST /contacts) — HTTP 500',
+      });
+    });
+
+    it('404 en el reintento de POST /conversations (tras ensure exitoso) → error tipado, SIN loop infinito (el ensure no corre una 2da vez)', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockResolvedValueOnce({ data: { id: 900, contact_inbox: { source_id: 'whatsapp:+5493511234567' } } })
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        });
+      const { gw } = fakeHttp({ post });
+
+      await expect(
+        gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        }),
+      ).rejects.toMatchObject({
+        name: 'ChatwootUnavailableError',
+        message: 'Chatwoot: crear la conversación (POST /conversations) — HTTP 404',
+      });
+      expect(post.mock.calls).toHaveLength(3);
     });
 
     // F6 (fix wave) — si la respuesta no expone el message id (messages vacío/ausente), el retorno
@@ -572,6 +916,288 @@ describe('HttpChatwootGateway (B3 — cliente HTTP de la Application API de Chat
       });
 
       expect(result).toEqual({ chatwootConversationId: 503, chatwootMessageId: null });
+    });
+
+    // FW4 (fix wave, LOW-MEDIUM) — `contact_inboxes[]` puede traer MÁS de un inbox (una cuenta con
+    // varios canales); el source_id correcto es el del `ContactInbox` de ESTE inbox
+    // (`this.inboxId`), nunca "el primero que aparezca" del array.
+    it('FW4: contact_inboxes con dos inboxes — usa el que matchea inboxId, sin importar el orden del array', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockResolvedValueOnce({
+          data: {
+            id: 900,
+            contact_inboxes: [
+              { inbox: { id: 99 }, source_id: 'whatsapp:+other-inbox' },
+              { inbox: { id: 1 }, source_id: 'whatsapp:+5493511234567-correct' },
+            ],
+          },
+        })
+        .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+      const { gw } = fakeHttp({ post });
+
+      await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'x',
+        language: 'es',
+        processedParams: {},
+        content: 'x',
+      });
+
+      expect(post.mock.calls[2]).toEqual([
+        '/api/v1/accounts/2/conversations',
+        expect.objectContaining({ source_id: 'whatsapp:+5493511234567-correct' }),
+      ]);
+    });
+
+    it('FW4: contact_inboxes con shape PLANA inbox_id (número) — usa el que matchea inboxId, sin importar el orden', async () => {
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockResolvedValueOnce({
+          data: {
+            id: 900,
+            contact_inboxes: [
+              { inbox_id: 99, source_id: 'whatsapp:+other-inbox' },
+              { inbox_id: 1, source_id: 'whatsapp:+5493511234567-correct' },
+            ],
+          },
+        })
+        .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+      const { gw } = fakeHttp({ post });
+
+      await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'x',
+        language: 'es',
+        processedParams: {},
+        content: 'x',
+      });
+
+      expect(post.mock.calls[2]).toEqual([
+        '/api/v1/accounts/2/conversations',
+        expect.objectContaining({ source_id: 'whatsapp:+5493511234567-correct' }),
+      ]);
+    });
+
+    it('FW4: contact_inboxes SIN ningún inbox que matchee inboxId → warn + fallback al primero', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const post = jest.fn();
+      post
+        .mockRejectedValueOnce({
+          response: { status: 404 },
+          isAxiosError: true,
+          message: 'Request failed with status code 404',
+        })
+        .mockResolvedValueOnce({
+          data: {
+            id: 900,
+            contact_inboxes: [{ inbox: { id: 99 }, source_id: 'whatsapp:+other-inbox' }],
+          },
+        })
+        .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+      const { gw } = fakeHttp({ post });
+
+      await gw.createConversationWithTemplate({
+        phoneE164: '+5493511234567',
+        templateName: 'x',
+        language: 'es',
+        processedParams: {},
+        content: 'x',
+      });
+
+      expect(post.mock.calls[2]).toEqual([
+        '/api/v1/accounts/2/conversations',
+        expect.objectContaining({ source_id: 'whatsapp:+other-inbox' }),
+      ]);
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    // FW5 (fix wave, LOW) — ambas formas REALES documentadas del jbuilder deben resolverse: plana
+    // (`contact_inbox` en el nivel superior) y envuelta (`{payload:{contact,contact_inbox}}`).
+    describe('FW5: extractContactInboxSourceId — shapes reales de POST /contacts', () => {
+      it('shape PLANA {contact_inbox:{source_id}} en el nivel superior → lee ese source_id', async () => {
+        const post = jest.fn();
+        post
+          .mockRejectedValueOnce({
+            response: { status: 404 },
+            isAxiosError: true,
+            message: 'Request failed with status code 404',
+          })
+          .mockResolvedValueOnce({ data: { id: 900, contact_inbox: { source_id: 'whatsapp:+plano' } } })
+          .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+        const { gw } = fakeHttp({ post });
+
+        await gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        });
+
+        expect(post.mock.calls[2]).toEqual([
+          '/api/v1/accounts/2/conversations',
+          expect.objectContaining({ source_id: 'whatsapp:+plano' }),
+        ]);
+      });
+
+      it('shape ENVUELTA {payload:{contact,contact_inbox}} (jbuilder) → lee source_id de payload.contact_inbox', async () => {
+        const post = jest.fn();
+        post
+          .mockRejectedValueOnce({
+            response: { status: 404 },
+            isAxiosError: true,
+            message: 'Request failed with status code 404',
+          })
+          .mockResolvedValueOnce({
+            data: {
+              payload: {
+                contact: { id: 12 },
+                contact_inbox: { source_id: 'whatsapp:+envuelto' },
+              },
+            },
+          })
+          .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+        const { gw } = fakeHttp({ post });
+
+        await gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        });
+
+        expect(post.mock.calls[2]).toEqual([
+          '/api/v1/accounts/2/conversations',
+          expect.objectContaining({ source_id: 'whatsapp:+envuelto' }),
+        ]);
+      });
+
+      it('shape totalmente desconocida → warn con las keys + fallback derivado whatsapp:+E164', async () => {
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const post = jest.fn();
+        post
+          .mockRejectedValueOnce({
+            response: { status: 404 },
+            isAxiosError: true,
+            message: 'Request failed with status code 404',
+          })
+          .mockResolvedValueOnce({ data: { unexpected_shape: true } })
+          .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+        const { gw } = fakeHttp({ post });
+
+        await gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        });
+
+        expect(post.mock.calls[2]).toEqual([
+          '/api/v1/accounts/2/conversations',
+          expect.objectContaining({ source_id: 'whatsapp:+5493511234567' }),
+        ]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('unexpected_shape'));
+        warn.mockRestore();
+      });
+    });
+
+    // FW6 (fix wave, LOW) — `name` se sanitiza antes de mandarlo a POST /contacts: trim, tope de
+    // 255 chars, y se omite el campo si queda vacío tras el trim (no sólo si ya venía '').
+    describe('FW6: sanitización de name en POST /contacts', () => {
+      it('name con espacios al borde → se envía trimeado', async () => {
+        const post = jest.fn();
+        post
+          .mockRejectedValueOnce({
+            response: { status: 404 },
+            isAxiosError: true,
+            message: 'Request failed with status code 404',
+          })
+          .mockResolvedValueOnce({ data: { id: 900, contact_inbox: { source_id: 'whatsapp:+x' } } })
+          .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+        const { gw } = fakeHttp({ post });
+
+        await gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          name: '  Juan Perez  ',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        });
+
+        expect(post.mock.calls[1]).toEqual([
+          '/api/v1/accounts/2/contacts',
+          { inbox_id: '1', phone_number: '+5493511234567', name: 'Juan Perez' },
+        ]);
+      });
+
+      it('name de más de 255 chars → se trunca a 255', async () => {
+        const post = jest.fn();
+        post
+          .mockRejectedValueOnce({
+            response: { status: 404 },
+            isAxiosError: true,
+            message: 'Request failed with status code 404',
+          })
+          .mockResolvedValueOnce({ data: { id: 900, contact_inbox: { source_id: 'whatsapp:+x' } } })
+          .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+        const { gw } = fakeHttp({ post });
+        const longName = 'A'.repeat(300);
+
+        await gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          name: longName,
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        });
+
+        const body = post.mock.calls[1][1] as { name?: string };
+        expect(body.name).toHaveLength(255);
+        expect(body.name).toBe('A'.repeat(255));
+      });
+
+      it('name solo espacios (\'   \') → se omite el campo (no sólo el `\'\'` exacto)', async () => {
+        const post = jest.fn();
+        post
+          .mockRejectedValueOnce({
+            response: { status: 404 },
+            isAxiosError: true,
+            message: 'Request failed with status code 404',
+          })
+          .mockResolvedValueOnce({ data: { id: 900, contact_inbox: { source_id: 'whatsapp:+x' } } })
+          .mockResolvedValueOnce({ data: { id: 700, messages: [] } });
+        const { gw } = fakeHttp({ post });
+
+        await gw.createConversationWithTemplate({
+          phoneE164: '+5493511234567',
+          name: '   ',
+          templateName: 'x',
+          language: 'es',
+          processedParams: {},
+          content: 'x',
+        });
+
+        expect(post.mock.calls[1]).toEqual([
+          '/api/v1/accounts/2/contacts',
+          { inbox_id: '1', phone_number: '+5493511234567' },
+        ]);
+      });
     });
   });
 

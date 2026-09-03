@@ -52,6 +52,59 @@ const DOWNLOAD_MAX_BYTES_DEFAULT = 100 * 1024 * 1024;
  * `DistributedLock` held indefinitely on every replica. */
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 
+/**
+ * chatwoot-new-contact-404 (CHW-2/CHW-7) — status HTTP de un error de axios, o `null`
+ * si no fue una respuesta HTTP (red/timeout, `err.response` ausente). Usado ANTES de
+ * `this.call` en `createConversationWithTemplate`/`ensureContactInbox` para decidir si
+ * corresponde el ensure-on-404 — `this.call` sigue siendo el criterio único de fallo
+ * para el resto del port (12 operaciones, CHW-7), sin tocarlo (blast radius acotado).
+ */
+function httpStatusOf(err: unknown): number | null {
+  const status = (err as { response?: { status?: unknown } } | null | undefined)?.response?.status;
+  return typeof status === 'number' ? status : null;
+}
+
+/**
+ * chatwoot-new-contact-404 (CHW-7) — error tipado que nombra el PASO Chatwoot que
+ * falló y su STATUS HTTP, nunca el texto crudo de axios (`err.message` literal
+ * "Request failed with status code 404" que el operador veía antes de este fix).
+ * Sin status HTTP (red/timeout) el mensaje dice "— sin respuesta" en vez de un status
+ * inexistente. `step` usa los mismos 4 valores documentados en el design de este change.
+ */
+function chatwootStepError(step: string, err: unknown): ChatwootUnavailableError {
+  const status = httpStatusOf(err);
+  return new ChatwootUnavailableError(
+    status !== null ? `Chatwoot: ${step} — HTTP ${status}` : `Chatwoot: ${step} — sin respuesta`,
+  );
+}
+
+/**
+ * chatwoot-new-contact-404 (fix wave FW2, MEDIUM) — discrimina el ÚNICO 422 de `POST
+ * /contacts` que dispara la resolución por búsqueda (design §Data Flow: "teléfono ya
+ * existe") de cualquier OTRO 422 de validación (`inbox_id` inexistente, `phone_number`
+ * mal formado, etc.). Inspecciona el body de la respuesta de Chatwoot (`message`, o el
+ * shape de validation errors de Rails `{errors:{campo:[...]}}` / `{errors:[...]}`) —
+ * un 422 sin ese indicio NUNCA se trata como "teléfono duplicado".
+ */
+function isDuplicatePhoneConflict(err: unknown): boolean {
+  const data = (err as { response?: { data?: unknown } } | null | undefined)?.response?.data;
+  const record = data as Record<string, unknown> | null | undefined;
+  const texts: string[] = [];
+  if (typeof record?.['message'] === 'string') texts.push(record['message'] as string);
+  const errors = record?.['errors'];
+  if (typeof errors === 'string') {
+    texts.push(errors);
+  } else if (Array.isArray(errors)) {
+    for (const e of errors) if (typeof e === 'string') texts.push(e);
+  } else if (errors && typeof errors === 'object') {
+    for (const v of Object.values(errors as Record<string, unknown>)) {
+      if (typeof v === 'string') texts.push(v);
+      if (Array.isArray(v)) for (const e of v) if (typeof e === 'string') texts.push(e);
+    }
+  }
+  return texts.some((t) => /already\s+(been\s+)?taken|already\s+exists/i.test(t));
+}
+
 export interface HttpChatwootGatewayOptions {
   baseUrl: string;
   accountId: string;
@@ -203,9 +256,19 @@ export class HttpChatwootGateway implements ChatwootGateway {
   }
 
   async searchContact(query: string): Promise<{ id: number; name: string | null; phone: string | null }[]> {
-    const { data } = await this.call(() =>
-      this.http.get(this.accountPath('/contacts/search'), { params: { q: query } }),
-    );
+    return this.call(() => this.searchContactRaw(query));
+  }
+
+  /**
+   * chatwoot-new-contact-404 (fix wave FW3a) — misma llamada que `searchContact`, pero SIN pasar
+   * por `this.call`: `ensureContactInbox` necesita inspeccionar `err.response.status` (vía
+   * `httpStatusOf`) para el mensaje diagnóstico (CHW-7), y `this.call` lo pierde al envolver en
+   * `ChatwootUnavailableError` (mismo motivo por el que `postConversation` tampoco usa `this.call`).
+   */
+  private async searchContactRaw(
+    query: string,
+  ): Promise<{ id: number; name: string | null; phone: string | null }[]> {
+    const { data } = await this.http.get(this.accountPath('/contacts/search'), { params: { q: query } });
     return extractRows(data).map(toContactDto);
   }
 
@@ -255,15 +318,21 @@ export class HttpChatwootGateway implements ChatwootGateway {
   }
 
   /**
-   * chatwoot-hub-sendpath (design D2.b, CHW-2) — find-or-create ATÓMICO de
-   * contacto+conversación+primer mensaje (path bulk). UNA sola llamada: el
-   * `before_action :contact_inbox` de Chatwoot resuelve el find-or-create por
-   * `source_id` EXACTO (`'whatsapp:'+phoneE164`, verificado en vivo exploración §6) y
-   * crea el primer mensaje en la MISMA transacción — el adapter MUST NOT implementar
-   * una búsqueda propia de contacto antes de este POST (CHW-2). `chatwootMessageId` se
-   * extrae del último mensaje de la respuesta (intento síncrono, D2.b riesgo #3): si
-   * Chatwoot no lo expusiera de forma fiable, el eco `message_created` del webhook
-   * igual pobla el mirror — degradación aceptada, sin código adicional en este batch.
+   * chatwoot-hub-sendpath (design D2.b, CHW-2) — creación de contacto+conversación+
+   * primer mensaje (path bulk). Intenta PRIMERO `POST /conversations` con el
+   * `source_id` derivado (`whatsapp:+E164`) — UNA sola llamada cuando el
+   * `ContactInbox` ya existe (happy path, cero regresión). chatwoot-new-contact-404
+   * (verificado en vivo y contra el fuente upstream) CORRIGE la premisa previa de
+   * este docblock: Chatwoot NO hace find-or-create acá — su `before_action
+   * :contact_inbox` hace un FIND por `(source_id, inbox_id)` y responde 404 cuando
+   * no existe. Sólo ante ESE 404 el adapter asegura el contacto/`ContactInbox`
+   * (`ensureContactInbox`) y reintenta `POST /conversations` EXACTAMENTE una vez con
+   * el `source_id` leído de la respuesta de Chatwoot (nunca re-derivado, CHW-2). Un
+   * segundo 404 en el reintento (o cualquier otra falla) se propaga como error
+   * tipado — NUNCA un loop. `chatwootMessageId` se extrae del último mensaje de la
+   * respuesta (intento síncrono, D2.b riesgo #3): si Chatwoot no lo expusiera de
+   * forma fiable, el eco `message_created` del webhook igual pobla el mirror —
+   * degradación aceptada, sin código adicional en este batch.
    */
   async createConversationWithTemplate(params: {
     phoneE164: string;
@@ -274,12 +343,57 @@ export class HttpChatwootGateway implements ChatwootGateway {
     content: string;
   }): Promise<{ chatwootConversationId: number; chatwootMessageId: number | null }> {
     // F11 (fix wave, quirúrgico) — normalización defensiva del teléfono: Chatwoot resuelve el
-    // find-or-create por `source_id` EXACTO, así que un `whatsapp:` duplicado o espacios embebidos
+    // find/create por `source_id` EXACTO, así que un `whatsapp:` duplicado o espacios embebidos
     // NO matchearían el contacto (crearían uno nuevo / romperían la resolución). Strippeamos ambos.
     const normalizedPhone = params.phoneE164.replace(/\s+/g, '').replace(/^whatsapp:/i, '');
+    const derivedSourceId = `whatsapp:${normalizedPhone}`;
+
+    let raw: RawChatwootConversationCreate;
+    try {
+      raw = await this.postConversation(derivedSourceId, params);
+    } catch (err) {
+      // chatwoot-new-contact-404 (CHW-2) — el ensure SÓLO corre ante un 404 exacto en
+      // ESTE primer intento; cualquier otro status/red-timeout se propaga tal cual
+      // como error tipado del paso conversación (CHW-7), sin ensure de por medio.
+      if (httpStatusOf(err) !== 404) {
+        throw chatwootStepError('crear la conversación (POST /conversations)', err);
+      }
+      const sourceId = await this.ensureContactInbox(normalizedPhone, params.name);
+      try {
+        raw = await this.postConversation(sourceId, params);
+      } catch (retryErr) {
+        // chatwoot-new-contact-404 — el reintento es ÚNICO: cualquier falla acá
+        // (incluido otro 404) se reporta tal cual, NUNCA un segundo ensure/loop.
+        throw chatwootStepError('crear la conversación (POST /conversations)', retryErr);
+      }
+    }
+
+    const lastMessage =
+      raw.messages && raw.messages.length > 0 ? toMessageDto(raw.messages[raw.messages.length - 1]) : null;
+    return {
+      chatwootConversationId: raw.id,
+      // F6 (fix wave) — `?? null`, NUNCA `NaN`: si el create no expone el message id (messages
+      // vacío/ausente, o sin `id`), Prisma Int rechazaría NaN y el in-memory divergiría
+      // (NaN!==NaN). Con null, la proyección saltea el mensaje pero preserva el link; el eco repone.
+      chatwootMessageId: lastMessage != null && typeof lastMessage.id === 'number' ? lastMessage.id : null,
+    };
+  }
+
+  /**
+   * chatwoot-new-contact-404 — arma y postea el body de `POST /conversations`,
+   * compartido por el intento inicial y el reintento único de
+   * `createConversationWithTemplate` (2.9 REFACTOR, evita duplicar el armado del
+   * body entre ambos). Deliberadamente SIN `this.call`: el caller necesita
+   * inspeccionar `err.response.status` (vía `httpStatusOf`) ANTES de mapear a
+   * `ChatwootUnavailableError`, algo que `this.call` no permite (traga el status).
+   */
+  private async postConversation(
+    sourceId: string,
+    params: { templateName: string; language: string; processedParams: Record<string, string>; content: string },
+  ): Promise<RawChatwootConversationCreate> {
     const body = {
       inbox_id: this.inboxId,
-      source_id: `whatsapp:${normalizedPhone}`,
+      source_id: sourceId,
       message: {
         content: params.content,
         // F11 (fix wave) — message_type:'outgoing' (simetría con `sendTemplateMessage`): el eco
@@ -292,17 +406,84 @@ export class HttpChatwootGateway implements ChatwootGateway {
         },
       },
     };
-    const { data } = await this.call(() => this.http.post(this.accountPath('/conversations'), body));
-    const raw = data as RawChatwootConversationCreate;
-    const lastMessage =
-      raw.messages && raw.messages.length > 0 ? toMessageDto(raw.messages[raw.messages.length - 1]) : null;
-    return {
-      chatwootConversationId: raw.id,
-      // F6 (fix wave) — `?? null`, NUNCA `NaN`: si el create no expone el message id (messages
-      // vacío/ausente, o sin `id`), Prisma Int rechazaría NaN y el in-memory divergiría
-      // (NaN!==NaN). Con null, la proyección saltea el mensaje pero preserva el link; el eco repone.
-      chatwootMessageId: lastMessage != null && typeof lastMessage.id === 'number' ? lastMessage.id : null,
-    };
+    const { data } = await this.http.post(this.accountPath('/conversations'), body);
+    return data as RawChatwootConversationCreate;
+  }
+
+  /**
+   * chatwoot-new-contact-404 (CHW-2) — asegura que el teléfono tenga un `Contact` +
+   * `ContactInbox` en este inbox y devuelve el `source_id` CANÓNICO que Chatwoot le
+   * asoció (leído de la respuesta — nunca re-derivado, ver design §Architecture
+   * Decisions sobre la migración a `Channel::Whatsapp`).
+   *
+   * 1. `POST /contacts {inbox_id, phone_number, name?}` — una sola llamada crea
+   *    Contact + ContactInbox en la MISMA transacción (verificado contra el fuente
+   *    upstream, exploración §3). `name` sólo se envía si NO está vacío (puede ser
+   *    `''` para recipients CSV, `SendCampaign.ts:205-212`).
+   * 2. `422` (`Phone number has already been taken`) → el Contact ya existe: se
+   *    resuelve por `GET /contacts/search?q=<dígitos>` (match por dígitos del
+   *    teléfono, el ILIKE de Chatwoot no normaliza `+`) y se vincula el
+   *    `ContactInbox` con `POST /contacts/:id/contact_inboxes` — NUNCA se crea un
+   *    segundo `Contact`.
+   * 3. Cualquier otra falla en cualquiera de los 3 pasos → `chatwootStepError` con el
+   *    paso exacto que falló (CHW-7).
+   */
+  private async ensureContactInbox(normalizedPhone: string, name?: string | null): Promise<string> {
+    // FW6 (fix wave, LOW) — trim + tope de 255 chars antes de mandarlo a Chatwoot; se omite el
+    // campo si queda vacío TRAS el trim (no sólo si ya venía `''` exacto, ej. recipients CSV con
+    // sólo espacios).
+    const contactBody: Record<string, unknown> = { inbox_id: this.inboxId, phone_number: normalizedPhone };
+    const trimmedName = name?.trim();
+    if (trimmedName) contactBody.name = trimmedName.length > 255 ? trimmedName.slice(0, 255) : trimmedName;
+
+    try {
+      const { data } = await this.http.post(this.accountPath('/contacts'), contactBody);
+      return extractContactInboxSourceId(data, normalizedPhone, this.inboxId, 'POST /contacts');
+    } catch (err) {
+      // FW2 (fix wave, MEDIUM) — sólo el 422 que Chatwoot marca como "teléfono duplicado" dispara
+      // la resolución por búsqueda; cualquier OTRO 422 (validación distinta) se propaga tal cual.
+      if (httpStatusOf(err) !== 422 || !isDuplicatePhoneConflict(err)) {
+        throw chatwootStepError('crear el contacto (POST /contacts)', err);
+      }
+    }
+
+    // 422 (teléfono duplicado) — el Contact ya existe en la cuenta; resolverlo y vincular el ContactInbox.
+    const digits = normalizedPhone.replace(/\D/g, '');
+    let matches: { id: number; name: string | null; phone: string | null }[];
+    try {
+      // FW3a (fix wave, MEDIUM) — `searchContactRaw`, NO `this.searchContact` (ese pasa por
+      // `this.call`, que pierde `err.response.status` antes de que `chatwootStepError` lo lea).
+      matches = await this.searchContactRaw(digits);
+    } catch (err) {
+      throw chatwootStepError('buscar el contacto (GET /contacts/search)', err);
+    }
+    const contact = matches.find((m) => m.phone != null && m.phone.replace(/\D/g, '') === digits);
+    if (!contact) {
+      // FW3b (fix wave, MEDIUM) — 0 coincidencias NO es un fallo HTTP (el GET respondió 200): un
+      // mensaje propio, nunca el "— sin respuesta" de `chatwootStepError` (reservado a red/timeout).
+      throw new ChatwootUnavailableError(
+        `Chatwoot: buscar el contacto (GET /contacts/search): sin coincidencias para ${normalizedPhone}`,
+      );
+    }
+
+    try {
+      // FW1 (fix wave, MEDIUM-HIGH) — `source_id` YA NO se manda en este body: el
+      // `ContactInboxBuilder` de Chatwoot lo genera según el canal cuando está ausente (misma
+      // razón que motivó "leer, nunca re-derivar" en el design de este change, extendida acá a NO
+      // forzar tampoco el formato en el REQUEST — forzarlo podía pisar un canal Cloud API con el
+      // formato viejo de Twilio). El `source_id` real se toma SIEMPRE de la respuesta.
+      const { data } = await this.http.post(this.accountPath(`/contacts/${contact.id}/contact_inboxes`), {
+        inbox_id: this.inboxId,
+      });
+      return extractContactInboxSourceId(
+        data,
+        normalizedPhone,
+        this.inboxId,
+        'POST /contacts/:id/contact_inboxes',
+      );
+    } catch (err) {
+      throw chatwootStepError('vincular el contacto al inbox (POST /contacts/:id/contact_inboxes)', err);
+    }
   }
 
   /**
@@ -582,6 +763,56 @@ interface RawChatwootContact {
 function toContactDto(raw: unknown): { id: number; name: string | null; phone: string | null } {
   const r = raw as RawChatwootContact;
   return { id: r.id, name: r.name ?? null, phone: r.phone_number ?? null };
+}
+
+/**
+ * chatwoot-new-contact-404 (design §Interfaces/Contracts) — lee el `source_id`
+ * CANÓNICO que Chatwoot asoció al `ContactInbox`, de la respuesta de `POST
+ * /contacts` (create.json.jbuilder: bloque `contact_inbox: {inbox, source_id}`,
+ * a veces envuelto en `{payload: {...}}`) o de `POST /contacts/:id/contact_inboxes`
+ * (puede exponer `source_id` en el nivel superior del recurso ContactInbox). Nunca
+ * re-deriva el formato localmente (design: inmune a una migración de canal
+ * `Channel::TwilioSms` → `Channel::Whatsapp`, que cambia el shape del `source_id`).
+ * El `whatsapp:${normalizedPhone}` derivado es sólo el ÚLTIMO recurso defensivo si
+ * ninguna forma conocida trae el campo.
+ */
+function extractContactInboxSourceId(
+  raw: unknown,
+  normalizedPhone: string,
+  inboxId: string,
+  stepLabel: string,
+): string {
+  const asRecord = raw as Record<string, unknown> | null | undefined;
+  const payload = (asRecord?.['payload'] as Record<string, unknown> | undefined) ?? asRecord ?? undefined;
+  const contactInbox = payload?.['contact_inbox'] as { source_id?: unknown } | undefined;
+  const contactInboxes = payload?.['contact_inboxes'] as
+    | Array<{ source_id?: unknown; inbox?: { id?: unknown }; inbox_id?: unknown }>
+    | undefined;
+
+  // fix wave FW4 (LOW-MEDIUM) — con MÁS de un inbox en `contact_inboxes[]`, el `source_id`
+  // correcto es el de ESTE inbox (`inboxId`), nunca "el primero del array" a ciegas. Si ninguno
+  // matchea, cae al primero como fallback defensivo pero deja constancia con un warning.
+  let fromInboxesArray: unknown;
+  if (Array.isArray(contactInboxes) && contactInboxes.length > 0) {
+    const match = contactInboxes.find((ci) => String(ci.inbox?.id ?? ci.inbox_id ?? '') === String(inboxId));
+    if (!match) {
+      console.warn(
+        `Chatwoot: ${stepLabel} — contact_inboxes sin match para inboxId=${inboxId}, usando el primero como fallback`,
+      );
+    }
+    fromInboxesArray = (match ?? contactInboxes[0])?.source_id;
+  }
+
+  const candidates: unknown[] = [contactInbox?.source_id, fromInboxesArray, payload?.['source_id']];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+  }
+  // fix wave FW5 (LOW) — ningún shape conocido trajo el campo: se cae al derivado local como
+  // ÚLTIMO recurso, pero nunca en silencio — el warning deja rastro de qué shape llegó realmente.
+  console.warn(
+    `Chatwoot: ${stepLabel} — shape de respuesta no reconocido para contact_inbox, usando fallback derivado whatsapp:${normalizedPhone}. keys=${asRecord ? Object.keys(asRecord).join(',') : 'null'}`,
+  );
+  return `whatsapp:${normalizedPhone}`;
 }
 
 /**

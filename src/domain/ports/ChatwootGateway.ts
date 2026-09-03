@@ -175,15 +175,23 @@ export interface ChatwootGateway {
     params: { name: string; language: string; processedParams: Record<string, string>; content: string },
   ): Promise<{ chatwootMessageId: number; content: string }>;
   /**
-   * chatwoot-hub-sendpath (design D2.b, CHW-2) — find-or-create ATÓMICO de
-   * contacto+conversación+primer mensaje (path bulk, `SendCampaign` flag ON, recipient
-   * SIN `chatwootConversationId` previo). El adapter se apoya ÚNICAMENTE en el
-   * find-or-create de Chatwoot por `source_id` EXACTO (`'whatsapp:'+phoneE164`,
-   * verificado en vivo exploración §6) — MUST NOT implementar una búsqueda propia de
-   * contacto por teléfono antes de este POST (CHW-2, reuso de contacto ya existente sin
-   * duplicar). `name` es best-effort/reservado para el caso en que Chatwoot exija
-   * `contact_id` (find-or-create de contacto previo) — el camino verificado no lo
-   * necesita. Mismo criterio único de fallo que el resto del port (`ChatwootUnavailableError`).
+   * chatwoot-hub-sendpath (design D2.b, CHW-2) — ensure-on-404 de contacto+conversación+
+   * primer mensaje (path bulk, `SendCampaign` flag ON, recipient SIN
+   * `chatwootConversationId` previo). El adapter intenta PRIMERO `POST /conversations`
+   * por `source_id` EXACTO (`'whatsapp:'+phoneE164`) — UNA sola llamada cuando el
+   * `ContactInbox` ya existe (happy path, cero regresión). chatwoot-new-contact-404
+   * (verificado en vivo y contra el fuente upstream) CORRIGE la premisa previa de este
+   * docblock: Chatwoot NO hace find-or-create ATÓMICO acá — su `before_action
+   * :contact_inbox` hace un FIND por `(source_id, inbox_id)` y responde 404 cuando no
+   * existe. Sólo ante ESE 404 el adapter MUST asegurar el contacto y su `ContactInbox`
+   * (create-si-no-existe, o buscar+vincular ante un 422 de teléfono duplicado) y MUST
+   * reintentar `POST /conversations` EXACTAMENTE una vez con el `source_id` que Chatwoot
+   * devolvió en la respuesta del ensure — MUST NOT re-derivarlo de un formato asumido
+   * (inmune a una futura migración de canal `Channel::TwilioSms` → `Channel::Whatsapp`,
+   * que cambia el shape del `source_id`). `name` se envía sólo si NO está vacío (puede
+   * ser `''` para recipients CSV). Mismo criterio único de fallo que el resto del port
+   * (`ChatwootUnavailableError`), ahora con mensaje que identifica el PASO Chatwoot que
+   * falló y su STATUS HTTP (CHW-7) — nunca el texto crudo del cliente HTTP.
    *
    * F6 (fix wave) — `chatwootMessageId` es `number | null`: si la respuesta del create no expone
    * el message id de forma fiable, el adapter devuelve `null` (NUNCA `NaN`, que Prisma Int rechaza).
