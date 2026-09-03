@@ -2,6 +2,7 @@ import {
   ExternalBulkPreview,
   ExternalBulkPreviewRecipient,
   ExternalBulkPreviewInvalidEntry,
+  ExternalBulkPreviewCreditSnapshot,
 } from '@domain/entities/externalBulkPreview';
 
 /** Datos para crear un preview (task 1.1/1.4) — el repo completa id/consumedAt/createdAt. */
@@ -15,6 +16,12 @@ export interface ExternalBulkPreviewCreateData {
   invalid: ExternalBulkPreviewInvalidEntry[];
   validCount: number;
   invalidCount: number;
+  /**
+   * twilio-credit-guard (D1.b) — opcional para no romper callers que no
+   * calculan crédito (tests que arman un preview a mano); ausente ⇒ `null`
+   * en la entidad creada, nunca un valor fabricado.
+   */
+  credit?: ExternalBulkPreviewCreditSnapshot | null;
   /** ISO — `createdAt + 15min`, ya resuelto por el caller (use case). */
   expiresAt: string;
 }

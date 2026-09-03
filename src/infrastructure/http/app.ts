@@ -936,6 +936,16 @@ import { GetExternalBulkConfig } from '@application/use-cases/messaging/GetExter
 import { SetExternalBulkConfig } from '@application/use-cases/messaging/SetExternalBulkConfig';
 import { PrismaExternalBulkPreviewRepository } from '../adapters/prisma/PrismaExternalBulkPreviewRepository';
 import { PrismaExternalBulkMessagingConfigRepository } from '../adapters/prisma/PrismaExternalBulkMessagingConfigRepository';
+// twilio-credit-guard (B3, D6) — wiring COMPLETO: GET /credit, router de
+// config admin (/api/messaging/config/rates), GetMessagingCredit, y las
+// mismas 2 instancias (creditBalancePort/messagingRatesRepo) pasadas a
+// `SendExternalBulk` (cache de 60s compartida validate/send).
+import { TwilioCreditBalanceGateway } from '../adapters/twilio/TwilioCreditBalanceGateway';
+import { PrismaMessagingRatesConfigRepository } from '../adapters/prisma/PrismaMessagingRatesConfigRepository';
+import { GetMessagingCredit } from '@application/use-cases/messaging/GetMessagingCredit';
+import { GetMessagingRatesConfig } from '@application/use-cases/messaging/GetMessagingRatesConfig';
+import { SetMessagingRatesConfig } from '@application/use-cases/messaging/SetMessagingRatesConfig';
+import { createMessagingRatesConfigRouter } from './routes/messaging-rates-config.routes';
 // finance-growth Fase 1 — ingest global de cobranza GR (design.md Decision 4b).
 import { createFinanceGrowthRouter } from './routes/financeGrowth.routes';
 import { ListFinanceInvoiceTypes } from '@application/use-cases/finance/ListFinanceInvoiceTypes';
@@ -3464,6 +3474,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     ));
   }
 
+  // ─── twilio-credit-guard (D6) — saldo + tarifas, UNA sola instancia ────────
+  // fix wave F1 (R2 #4) — antes habia DOS `TwilioCreditBalanceGateway`: la del
+  // bloque bulk y una `creditPortForRoute` propia del router de config admin,
+  // "por anti-interleave". El costo real de esa duplicacion no eran las 2
+  // requests/minuto extra: eran DOS caches de 60s con vidas independientes
+  // sobre el MISMO saldo. La card de admin y el `validate` de la API externa
+  // podian mostrarle a dos personas dos numeros distintos al mismo tiempo, y
+  // la invalidacion post-send (fix F1) solo alcanzaba a UNA de las dos — la
+  // otra seguia sirviendo el saldo PRE-gasto hasta que venciera su TTL. Una
+  // sola instancia, un solo saldo, una sola verdad.
+  const creditBalancePort = new TwilioCreditBalanceGateway({
+    accountSid: config.twilio.accountSid,
+    authToken: config.twilio.authToken,
+  });
+  const messagingRatesRepo = new PrismaMessagingRatesConfigRepository();
+
   // ─── messaging-bulk (F2) — envío masivo por template WhatsApp (Twilio directo) ─
   // Prefijo REAL `/api/messaging/bulk` (spec manda, tasks.md contradicción #1 —
   // el prefijo `/api/messaging/campaigns` de design §7 NO se usa).
@@ -3609,6 +3635,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // este bloque entero se ejecuta antes del mount global más abajo.
     const externalBulkPreviewRepo = new PrismaExternalBulkPreviewRepository();
     const externalBulkConfigRepo = new PrismaExternalBulkMessagingConfigRepository();
+    // twilio-credit-guard — 4ª instancia Twilio, self-contained (molde
+    // "Change 3" de abajo, D6). NO se reusa `templatePort`: implementa otros
+    // 2 ports y este gateway tiene su propio timeout (10s) y su propia
+    // cache. MISMAS creds, cero env nueva. La MISMA instancia (creditBalancePort/
+    // messagingRatesRepo) se pasa a `ValidateExternalBulk` Y a `SendExternalBulk`
+    // (D6 — un validate seguido de un send no le pega dos veces a Twilio) y a
+    // `getMessagingCredit` en las deps del router.
     app.use('/api/external/v1/messaging/bulk',
       createApiKeyMiddleware(config.externalMessaging.apiKey),
       // fix wave F1 (F6, AUDIT-1/2) — actor MÁQUINA para la auditoría genérica.
@@ -3635,6 +3668,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
           chatwootGatewayForBulk,
           featureFlagRepoForBulk,
           rbacUserRepo,
+          creditBalancePort,
+          messagingRatesRepo,
         ),
         sendExternalBulk: new SendExternalBulk(
           externalBulkPreviewRepo,
@@ -3646,6 +3681,8 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
           rbacUserRepo,
           bulkCreateCampaign,
           campaignRunner,
+          creditBalancePort,
+          messagingRatesRepo,
         ),
         getExternalBulkCampaign: new GetExternalBulkCampaign(campaignRepo, rbacUserRepo),
         listTemplates: new ListMessagingTemplates(templatePort),
@@ -3653,6 +3690,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
         createTemplate: new CreateTemplate(templatePort),
         submitTemplate: new SubmitTemplateForApproval(templatePort),
         featureFlags: featureFlagRepoForBulk,
+        getMessagingCredit: new GetMessagingCredit(creditBalancePort, messagingRatesRepo),
       }),
     );
     // [external-bulk-mount-end] — MARCADOR load-bearing (fix wave F1, R3 #5).
@@ -3784,6 +3822,29 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       },
       new GetExternalBulkConfig(externalBulkConfigRepoForRoute),
       new SetExternalBulkConfig(externalBulkConfigRepoForRoute),
+    ));
+  }
+
+  // ─── twilio-credit-guard (D5.c/D6) — GET/PUT tarifas + GET /balance ────────
+  // fix wave F1 (R2 #4) — este bloque DESVÍA del molde "instancias propias"
+  // del bloque de arriba, a propósito: reusa `creditBalancePort`/
+  // `messagingRatesRepo` hoisteados arriba del bloque bulk. Un repo de tarifas
+  // es stateless (cualquier instancia sirve), pero el gateway de saldo NO: su
+  // cache de 60s ES estado, y dos slots independientes sobre el mismo saldo
+  // significan dos verdades simultáneas + una invalidación post-send que solo
+  // alcanza a una de las dos. El anti-interleave se paga con un merge más
+  // atento, no con una cache duplicada de la plata.
+  {
+    app.use('/api/messaging/config/rates', createMessagingRatesConfigRouter(
+      authAdapter,
+      sessionRepo,
+      {
+        read: requirePerm('messaging', 'read'),
+        manage: requirePerm('messaging', 'manage'),
+      },
+      new GetMessagingRatesConfig(messagingRatesRepo),
+      new SetMessagingRatesConfig(messagingRatesRepo),
+      new GetMessagingCredit(creditBalancePort, messagingRatesRepo),
     ));
   }
 

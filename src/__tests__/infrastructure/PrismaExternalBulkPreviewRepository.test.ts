@@ -137,3 +137,104 @@ describe('PrismaExternalBulkPreviewRepository', () => {
     expect(deleteCall.where).toEqual({ id: { in: ['p1', 'p2'] } });
   });
 });
+
+/**
+ * fix wave F1 (R2 #6) — round-trip del snapshot `credit`. La columna JSONB es
+ * NUEVA en este change y NINGÚN test tocaba el camino escritura→lectura del
+ * adapter Prisma: `create` podía dejar de mandar el campo, o `toEntity` podía
+ * dejar de mapearlo, y la suite seguía verde (los use cases usan el twin
+ * in-memory). Paridad exigida con `InMemoryExternalBulkPreviewRepository`.
+ */
+describe('PrismaExternalBulkPreviewRepository — round-trip del snapshot credit (fix wave F1, R2 #6)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  const CREDIT = {
+    available: '17.8940',
+    currency: 'USD',
+    category: 'MARKETING' as const,
+    categoryAssumed: true as const,
+    unitCost: '0.0668',
+    estimatedCost: '0.2004',
+    sufficient: true,
+  };
+
+  it('create ESCRIBE el credit tal cual en el data de Prisma', async () => {
+    mockPrisma.externalBulkPreview.create.mockResolvedValueOnce({ ...ROW, credit: CREDIT });
+    const repo = new PrismaExternalBulkPreviewRepository();
+
+    await repo.create({
+      payloadHash: 'hash-1',
+      templateRef: 'HXabc123',
+      templateName: 'recordatorio_deuda',
+      variables: { '1': 'Juan' },
+      chatwootLabel: null,
+      recipients: ROW.recipients,
+      invalid: [],
+      validCount: 1,
+      invalidCount: 0,
+      credit: CREDIT,
+      expiresAt: '2026-09-02T00:15:00.000Z',
+    });
+
+    expect(mockPrisma.externalBulkPreview.create.mock.calls[0][0].data.credit).toEqual(CREDIT);
+  });
+
+  it('findById LEE el credit de la fila y lo devuelve idéntico (ida y vuelta completa)', async () => {
+    mockPrisma.externalBulkPreview.findUnique.mockResolvedValueOnce({ ...ROW, credit: CREDIT });
+    const repo = new PrismaExternalBulkPreviewRepository();
+
+    const found = await repo.findById('preview-1');
+
+    expect(found?.credit).toEqual(CREDIT);
+  });
+
+  it('un credit UNKNOWN (unitCost/estimatedCost null, F8) sobrevive el round-trip sin volverse "0.0000"', async () => {
+    const unknownCredit = {
+      available: null,
+      currency: 'USD',
+      category: 'MARKETING' as const,
+      unitCost: null,
+      estimatedCost: null,
+      sufficient: false,
+      unknown: true as const,
+    };
+    mockPrisma.externalBulkPreview.findUnique.mockResolvedValueOnce({ ...ROW, credit: unknownCredit });
+    const repo = new PrismaExternalBulkPreviewRepository();
+
+    const found = await repo.findById('preview-1');
+
+    expect(found?.credit).toEqual(unknownCredit);
+    expect(found?.credit?.unitCost).toBeNull();
+  });
+
+  it('fila SIN credit (preview anterior a este change, columna nullable) ⇒ null, nunca undefined', async () => {
+    mockPrisma.externalBulkPreview.findUnique.mockResolvedValueOnce({ ...ROW, credit: null });
+    const repo = new PrismaExternalBulkPreviewRepository();
+
+    const found = await repo.findById('preview-1');
+
+    expect(found?.credit).toBeNull();
+  });
+
+  it('create SIN credit escribe null (no undefined) — paridad con el twin in-memory', async () => {
+    mockPrisma.externalBulkPreview.create.mockResolvedValueOnce({ ...ROW, credit: null });
+    const repo = new PrismaExternalBulkPreviewRepository();
+
+    await repo.create({
+      payloadHash: 'hash-1',
+      templateRef: 'HXabc123',
+      templateName: 'recordatorio_deuda',
+      variables: {},
+      chatwootLabel: null,
+      recipients: ROW.recipients,
+      invalid: [],
+      validCount: 1,
+      invalidCount: 0,
+      expiresAt: '2026-09-02T00:15:00.000Z',
+    });
+
+    expect(mockPrisma.externalBulkPreview.create.mock.calls[0][0].data.credit).toBeNull();
+  });
+});

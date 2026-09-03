@@ -6,12 +6,16 @@ import type { CampaignSegmentSource } from '@domain/ports/CustomerRepository';
 import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { RbacUserRepository } from '@domain/ports/RbacUserRepository';
+import type { CreditBalancePort } from '@domain/ports/CreditBalancePort';
+import type { MessagingRatesConfig, MessagingRatesConfigRepository } from '@domain/ports/MessagingRatesConfigRepository';
+import { MESSAGING_RATES_CONFIG_DEFAULTS } from '@domain/ports/MessagingRatesConfigRepository';
 import type {
   ValidateExternalBulkInput,
   ValidateExternalBulkOutput,
   ValidateExternalBulkValidRecipientDto,
   ValidateExternalBulkInvalidRecipientDto,
   ExternalBulkInvalidReason,
+  ExternalBulkWarning,
 } from '@application/dto/external-bulk-messaging.dto';
 import {
   FeatureExternalBulkDisabledError,
@@ -21,6 +25,7 @@ import {
   ChatwootLabelNotFoundError,
   ReporterUnavailableError,
 } from '@domain/errors/external-bulk-messaging';
+import { estimateMessagingCost, MessagingCreditDto } from './EstimateMessagingCost';
 import { TemplateNotApprovedError } from '@domain/errors/messaging-bulk';
 import { ChatwootUnavailableError } from '@domain/errors/messaging';
 import { matchManualContacts, ManualContactInput, ManualContactResolution } from './matchManualContacts';
@@ -33,6 +38,8 @@ import { API_MESSAGING_USER_LOGIN } from '@domain/constants/machineUsers';
 import { MAX_MANUAL_CONTACTS } from './resolveCombinedRecipients';
 
 const FEATURE_FLAG_KEY = 'messaging-external-bulk-enabled';
+/** fix wave F1 (F7) — perilla PROPIA del guard de credito. Ver SendExternalBulk. */
+const CREDIT_GUARD_FLAG_KEY = 'messaging-credit-guard-enabled';
 const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const PURGE_HORIZON_MS = 24 * 60 * 60 * 1000;
 const PURGE_LIMIT = 500;
@@ -69,6 +76,8 @@ export class ValidateExternalBulk {
     private readonly chatwootGateway: ChatwootGateway,
     private readonly featureFlags: FeatureFlagRepository,
     private readonly rbacUserRepo: RbacUserRepository,
+    private readonly creditPort: CreditBalancePort,
+    private readonly ratesRepo: MessagingRatesConfigRepository,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -163,6 +172,21 @@ export class ValidateExternalBulk {
       throw new CapExceededError({ limit: 'perDay', remainingToday });
     }
 
+    // 9.5 — CRÉDITO (ADVISORY, twilio-credit-guard D4.b). Después de los
+    // caps: si el lote ni siquiera entra por cantidad, el número de plata es
+    // ruido. NUNCA voltea el request — cualquier falla (balance, rates)
+    // degrada a `unknown`, jamás lanza.
+    // fix wave F1 (F7) — con la perilla del guard APAGADA no se mide nada: ni
+    // tarifas ni saldo (cero requests al proveedor). El bloque viaja `unknown`
+    // con una warning PROPIA — "no se midió" no es lo mismo que "no se pudo".
+    const creditGuardEnabled = await this.resolveCreditGuardEnabled();
+    const credit = creditGuardEnabled
+      ? await this.resolveCredit(template.category, valid.length)
+      : unmeasuredCredit(template.category);
+    const warnings: ExternalBulkWarning[] = creditGuardEnabled
+      ? creditWarnings(credit)
+      : ['CREDIT_GUARD_DISABLED'];
+
     // 10 — VAL-8 — persist preview con hash canónico + expiración de 15 min.
     const createdAt = this.now();
     const expiresAt = new Date(createdAt.getTime() + PREVIEW_TTL_MS).toISOString();
@@ -201,6 +225,7 @@ export class ValidateExternalBulk {
       })),
       validCount: valid.length,
       invalidCount: invalid.length,
+      credit,
       expiresAt,
     });
 
@@ -223,7 +248,56 @@ export class ValidateExternalBulk {
       valid,
       invalid,
       caps: { maxPerRequest: config.maxPerRequest, maxPerDay: config.maxPerDay, remainingToday },
+      credit,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
+  }
+
+  /**
+   * twilio-credit-guard (D4.b) — ADVISORY: cualquier falla (balance, rates,
+   * parseo) degrada a `unknown`, jamás tira. `validate` NUNCA se convierte en
+   * un error por crédito insuficiente/inalcanzable (CG-VAL-1) — eso es
+   * exclusivo del gate fail-closed de `SendExternalBulk` (D4.c).
+   */
+  private async resolveCredit(category: string | undefined, validCount: number): Promise<MessagingCreditDto> {
+    // fix wave F1 (F4) — el fallback a `MESSAGING_RATES_CONFIG_DEFAULTS` SE
+    // ELIMINÓ. Si la DB de tarifas se cae, mostrar un costo calculado con
+    // tarifas INVENTADAS es peor que decir "no sé": quien lo lee (la card FE,
+    // la IA que consume la API externa) lo toma por el precio real. `rates:null`
+    // degrada a `unknown`, que ya emite la warning CREDIT_UNAVAILABLE.
+    let rates: MessagingRatesConfig | null = null;
+    try {
+      rates = await this.ratesRepo.get();
+    } catch {
+      rates = null;
+    }
+    let balance = null;
+    try {
+      balance = await this.creditPort.getBalance();
+    } catch {
+      balance = null;
+    }
+    // fix wave F1 (F6) — `estimateMessagingCost` ya es total (el overflow
+    // degrada adentro), pero este camino es ADVISORY por contrato: NUNCA puede
+    // voltear un 200. El try es el cinturón sobre los tiradores.
+    try {
+      return estimateMessagingCost({ category, validCount, rates, balance });
+    } catch {
+      return unmeasuredCredit(category);
+    }
+  }
+
+  /**
+   * fix wave F1 (F7) — al REVÉS del kill-switch: fila ausente o repo caído
+   * resuelven a ON. Una protección no se apaga sola.
+   */
+  private async resolveCreditGuardEnabled(): Promise<boolean> {
+    try {
+      const flag = await this.featureFlags.get(CREDIT_GUARD_FLAG_KEY);
+      return flag ? flag.enabled === true : true;
+    } catch {
+      return true;
+    }
   }
 
   /** KS-1 — fail-safe: cualquier error del repo de flags resuelve a OFF, NUNCA a ON. */
@@ -373,6 +447,28 @@ export class ValidateExternalBulk {
       // best-effort — un fallo de purga no debe voltear un `validate` exitoso.
     }
   }
+}
+
+/**
+ * twilio-credit-guard (CG-VAL-1) — deriva `warnings` del `credit` ya
+ * calculado. `unknown` gana sobre `sufficient:false` (un balance inalcanzable
+ * NO es lo mismo que "no alcanza") — un lote nunca reporta las DOS a la vez.
+ * Array vacío ⇒ el caller lo omite del wire (D4.b, "warnings ausente cuando
+ * está vacío").
+ */
+/**
+ * fix wave F1 (F7/F8) — bloque `credit` HONESTO para "no se midió": ningún
+ * número, `unknown:true`, `sufficient:false`. Se usa con el guard apagado y
+ * como último recurso si el estimador llegara a tirar.
+ */
+function unmeasuredCredit(category: string | undefined): MessagingCreditDto {
+  return estimateMessagingCost({ category, validCount: 0, rates: null, balance: null });
+}
+
+function creditWarnings(credit: MessagingCreditDto): ExternalBulkWarning[] {
+  if (credit.unknown) return ['CREDIT_UNAVAILABLE'];
+  if (!credit.sufficient) return ['INSUFFICIENT_CREDIT'];
+  return [];
 }
 
 // ─── Helpers puros (VAL-1/VAL-2/D4.d/D6) ───────────────────────────────────

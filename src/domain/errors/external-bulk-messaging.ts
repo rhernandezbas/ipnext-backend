@@ -16,7 +16,8 @@
  *   FEATURE_DISABLED → 403 · CAP_EXCEEDED → 422 · EMPTY_RECIPIENTS → 422 ·
  *   CHATWOOT_LABEL_NOT_FOUND → 422 · PREVIEW_NOT_FOUND → 404 · PREVIEW_EXPIRED → 410 ·
  *   PREVIEW_ALREADY_CONSUMED → 409 · PREVIEW_PAYLOAD_MISMATCH → 409 ·
- *   IDEMPOTENCY_KEY_CONFLICT → 409 · CAMPAIGN_RUNNER_BUSY → 409 · REPORTER_UNAVAILABLE → 503
+ *   IDEMPOTENCY_KEY_CONFLICT → 409 · CAMPAIGN_RUNNER_BUSY → 409 · REPORTER_UNAVAILABLE → 503 ·
+ *   INSUFFICIENT_CREDIT → 422 · CREDIT_UNAVAILABLE → 503
  */
 import { DomainError } from './index';
 
@@ -191,5 +192,51 @@ export class ReporterUnavailableError extends DomainError {
   constructor(message = 'System reporter "api-messaging" is not provisioned') {
     super(message, 'REPORTER_UNAVAILABLE');
     this.name = 'ReporterUnavailableError';
+  }
+}
+
+/**
+ * twilio-credit-guard (D3.d/D4.c, CG-SEND-2) — raised ONLY by `SendExternalBulk`
+ * (fail-closed gate). In `validate` (`ValidateExternalBulk`) insufficient credit
+ * is a WARNING in the 200 response, NEVER this error (CG-VAL-1). `details` for
+ * the 422 wire response is assembled IN THE ROUTE (D5.b) — the `errorHandler`
+ * global does not serialize fields beyond `{error, code}`.
+ */
+export class InsufficientCreditError extends DomainError {
+  public readonly available: string;
+  public readonly estimatedCost: string;
+  public readonly currency: string;
+
+  constructor(details: { available: string; estimatedCost: string; currency: string }) {
+    super(
+      `Insufficient provider credit: ${details.estimatedCost} ${details.currency} needed, ${details.available} available`,
+      'INSUFFICIENT_CREDIT',
+    );
+    this.name = 'InsufficientCreditError';
+    this.available = details.available;
+    this.estimatedCost = details.estimatedCost;
+    this.currency = details.currency;
+  }
+}
+
+/**
+ * twilio-credit-guard (D3.c/D3.d, BAL-4/CG-SEND-3/CRED-2) — molde
+ * `ReporterUnavailableError`: platform misconfiguration/unavailability, never a
+ * caller error. Raised by `TwilioCreditBalanceGateway` for ANY failure reading
+ * the provider balance (timeout, network, 4xx/5xx, malformed body), and by
+ * `SendExternalBulk` when ANY input of the fail-closed gate is unusable: rates
+ * unreadable, balance unreachable, or the estimate coming back `unknown`.
+ *
+ * fix wave F1 (R2 #3) — la versión anterior decía que `GetMessagingCredit`
+ * también compara monedas. NO lo hace: ese use case solo PROPAGA lo que tire
+ * el port (CRED-2). El chequeo de moneda (balance vs `MessagingRatesConfig`)
+ * vive en `estimateMessagingCost` (COST-4), y lo convierte en este error
+ * únicamente `SendExternalBulk` — en `validate` el mismo mismatch es un
+ * `warning` del 200 (CG-VAL-1), nunca un error.
+ */
+export class CreditUnavailableError extends DomainError {
+  constructor(message = 'Provider credit balance is unavailable') {
+    super(message, 'CREDIT_UNAVAILABLE');
+    this.name = 'CreditUnavailableError';
   }
 }

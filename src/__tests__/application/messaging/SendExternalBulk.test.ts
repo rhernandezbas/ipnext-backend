@@ -15,6 +15,8 @@ import { InMemoryCampaignRepository } from '@infrastructure/adapters/in-memory/I
 import { InMemoryTemplateMessagingGateway } from '@infrastructure/adapters/in-memory/InMemoryTemplateMessagingGateway';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
+import { InMemoryCreditBalancePort } from '@infrastructure/adapters/in-memory/InMemoryCreditBalancePort';
+import { InMemoryMessagingRatesConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryMessagingRatesConfigRepository';
 import { bootstrapApiMessagingUser } from '@infrastructure/bootstrap/bootstrapApiMessagingUser';
 import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import { externalBulkPayloadHash } from '@application/use-cases/messaging/externalBulkPayloadHash';
@@ -33,6 +35,8 @@ import {
   PreviewPayloadMismatchError,
   IdempotencyKeyConflictError,
   CampaignRunnerBusyError,
+  InsufficientCreditError,
+  CreditUnavailableError,
 } from '@domain/errors/external-bulk-messaging';
 import { TemplateNotApprovedError, BulkRecipientsNotPermittedError } from '@domain/errors/messaging-bulk';
 import { UniqueConstraintViolationError } from '@domain/errors/persistence';
@@ -69,8 +73,15 @@ function makeSegmentSource(universe: CampaignRecipientCandidate[]): CampaignSegm
 class FakeCampaignStarter implements CampaignStarter {
   public calls: string[] = [];
   public accepted = true;
+  /**
+   * fix wave F1 (F3) — hook para simular el EFECTO de un envio aceptado (que
+   * la plata se comprometa). Sin esto, dos `execute()` concurrentes leen el
+   * mismo saldo y no hay forma de distinguir "serializado" de "no serializado".
+   */
+  public onStart?: (campaignId: string) => void | Promise<void>;
   async start(campaignId: string): Promise<{ accepted: boolean }> {
     this.calls.push(campaignId);
+    if (this.onStart) await this.onStart(campaignId);
     return { accepted: this.accepted };
   }
 }
@@ -85,6 +96,8 @@ interface Setup {
   featureFlags: InMemoryFeatureFlagRepository;
   rbacUserRepo: InMemoryRbacUserRepository;
   campaignStarter: FakeCampaignStarter;
+  creditPort: InMemoryCreditBalancePort;
+  ratesRepo: InMemoryMessagingRatesConfigRepository;
   apiMessagingUserId: string;
 }
 
@@ -95,6 +108,13 @@ async function setup(
     flagEnabled?: boolean;
     bootstrapApiMessaging?: boolean;
     chatwootLabels?: string[];
+    /** twilio-credit-guard (3.1) — saldo/tarifas del gate. Defaults: saldo AMPLIO, tarifas default. */
+    creditAmount?: string;
+    creditCurrency?: string;
+    creditFails?: boolean;
+    /** fix wave F1 (F1) — reloj del twin de credito (ms), para ejercitar el TTL de 60s. */
+    creditNow?: () => number;
+    ratesPatch?: { currency: string; utilityRate: string; marketingRate: string; authenticationRate: string; providerFee: string };
   } = {},
 ): Promise<Setup> {
   const previewRepo = new InMemoryExternalBulkPreviewRepository({ now: () => NOW });
@@ -116,6 +136,22 @@ async function setup(
   const segmentSource = makeSegmentSource(opts.clients ?? []);
   const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort);
   const campaignStarter = new FakeCampaignStarter();
+  // twilio-credit-guard (3.1) — saldo AMPLIO por default (10000 USD) para que
+  // los tests de OTROS requirements (SEND-1..SEND-10, ya existentes) no
+  // rebotEN contra el gate de crédito por casualidad.
+  const creditPort = new InMemoryCreditBalancePort({
+    amount: opts.creditAmount ?? '10000.0000',
+    currency: opts.creditCurrency ?? 'USD',
+    fetchedAt: NOW,
+    failNext: opts.creditFails ?? false,
+    // fix wave F1 (F1) — reloj inyectable: el twin ahora tiene cache REAL de
+    // 60s, igual que `TwilioCreditBalanceGateway`.
+    now: opts.creditNow ?? (() => NOW.getTime()),
+  });
+  const ratesRepo = new InMemoryMessagingRatesConfigRepository({ now: () => NOW });
+  if (opts.ratesPatch) {
+    await ratesRepo.set(opts.ratesPatch);
+  }
 
   const useCase = new SendExternalBulk(
     previewRepo,
@@ -127,6 +163,8 @@ async function setup(
     rbacUserRepo,
     createCampaign,
     campaignStarter,
+    creditPort,
+    ratesRepo,
     () => NOW,
   );
 
@@ -140,6 +178,8 @@ async function setup(
     featureFlags,
     rbacUserRepo,
     campaignStarter,
+    creditPort,
+    ratesRepo,
     apiMessagingUserId,
   };
 }
@@ -784,5 +824,400 @@ describe('SendExternalBulk', () => {
       const recipients = await campaignRepo.listRecipients(result.campaignId);
       expect(recipients.data[0]!.variables).toEqual({ '1': 'Ana', '2': 'ValorRecipient' });
     });
+  });
+
+  /**
+   * twilio-credit-guard (Batch 3, task 3.1/3.2, design.md D4.c) — gate
+   * fail-closed de crédito, ANTES de `CreateCampaign`/`markConsumed`, DESPUÉS
+   * de la re-validación completa de SEND-4 (template/label/caps). Molde de
+   * setup: `TEMPLATE.category` está ausente (D2 fixture) ⇒ se tarifa
+   * MARKETING (`0.0618 + 0.0050 = 0.0668` con los defaults).
+   */
+  describe('CG-SEND-2 — crédito insuficiente al momento del send', () => {
+    it('saldo insuficiente ⇒ InsufficientCreditError (422), CERO Campaign creada, preview sigue consumedAt:null', async () => {
+      const s = await setup({ creditAmount: '0.0010' });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(InsufficientCreditError);
+
+      expect((await s.campaignRepo.list({})).total).toBe(0);
+      expect((await s.previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+
+    it('el error trae {available, estimatedCost, currency} — D5.b los necesita para el 422 de la ruta', async () => {
+      const s = await setup({ creditAmount: '0.0010' });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      try {
+        await s.useCase.execute({ previewId: preview.id }, 'key-1');
+        throw new Error('expected InsufficientCreditError');
+      } catch (err) {
+        expect(err).toBeInstanceOf(InsufficientCreditError);
+        const e = err as InstanceType<typeof InsufficientCreditError>;
+        expect(e.available).toBe('0.0010');
+        expect(e.estimatedCost).toBe('0.0668');
+        expect(e.currency).toBe('USD');
+      }
+    });
+  });
+
+  describe('CG-SEND-3 — balance inalcanzable o mismatch de moneda ⇒ fail-closed', () => {
+    it('Balance.json inalcanzable (creditPort.getBalance() lanza) ⇒ CreditUnavailableError (503), CERO Campaign', async () => {
+      const s = await setup({ creditFails: true });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(CreditUnavailableError);
+
+      expect((await s.campaignRepo.list({})).total).toBe(0);
+      expect((await s.previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+    });
+
+    it('moneda del balance (ARS) ≠ la de MessagingRatesConfig (USD) ⇒ CreditUnavailableError (503), CERO Campaign', async () => {
+      const s = await setup({ creditCurrency: 'ARS' });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(CreditUnavailableError);
+
+      expect((await s.campaignRepo.list({})).total).toBe(0);
+    });
+  });
+
+  describe('CG-SEND-4 — el replay NO re-chequea crédito', () => {
+    it('replay (misma Idempotency-Key, campaña ya creada) ⇒ creditPort.calls NO aumenta (no vuelve a leer el balance)', async () => {
+      const s = await setup();
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await s.useCase.execute({ previewId: preview.id }, 'key-1');
+      const callsAfterFirstSend = s.creditPort.calls;
+      expect(callsAfterFirstSend).toBeGreaterThan(0); // el send FRESCO SÍ chequeó crédito
+
+      const replay = await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+      expect(replay.resumed).toBe(true);
+      expect(s.creditPort.calls).toBe(callsAfterFirstSend); // el replay NO volvió a llamar getBalance()
+    });
+  });
+
+  describe('CG-SEND-5 — tarifas en cero ⇒ guard inerte', () => {
+    it('las 4 tarifas en 0 ⇒ estimatedCost=0.0000, el guard NUNCA rechaza aunque el saldo también sea 0', async () => {
+      const s = await setup({
+        creditAmount: '0.0000',
+        ratesPatch: { currency: 'USD', utilityRate: '0', marketingRate: '0', authenticationRate: '0', providerFee: '0' },
+      });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      const result = await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+      expect(result.accepted).toBe(true);
+      expect((await s.campaignRepo.list({})).total).toBe(1);
+    });
+  });
+
+  describe('D0 — regla de oro del orden: crédito SIEMPRE después de caps/template, nunca antes', () => {
+    it('cap excedido (perDay) Y saldo insuficiente ⇒ CAP_EXCEEDED, el crédito NUNCA corre (creditPort.calls===0)', async () => {
+      const s = await setup({ creditAmount: '0.0000' });
+      await s.configRepo.set({ maxPerRequest: 500, maxPerDay: 0 });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(CapExceededError);
+
+      expect(s.creditPort.calls).toBe(0);
+    });
+
+    it('template no aprobado Y saldo insuficiente ⇒ TEMPLATE_NOT_APPROVED, el crédito NUNCA corre (creditPort.calls===0)', async () => {
+      const s = await setup({ creditAmount: '0.0000' });
+      const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+      jest.spyOn(s.templatePort, 'listTemplates').mockResolvedValue([{ ...TEMPLATE, approvalStatus: 'pending' }]);
+
+      await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(TemplateNotApprovedError);
+
+      expect(s.creditPort.calls).toBe(0);
+    });
+  });
+});
+
+/** fix wave F1 (F5) — N destinatarios DISTINTOS, para que `estimatedCost != unitCost`. */
+function nRecipients(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    phoneE164: `+54911${20000000 + i}`,
+    name: `Cliente ${i}`,
+    variables: { '1': `Cliente ${i}` },
+  }));
+}
+
+/**
+ * fix wave F1 (F1) — CACHE RANCIA. El flujo NORMAL de 2 pasos es
+ * `validate` (que llena la cache de 60s del port) → `send` segundos después.
+ * El gate del send comparaba contra el saldo PRE-gasto servido por esa cache:
+ * un lote de 5000 USD podía pasar con saldo 0 real.
+ */
+describe('CG-SEND-2 (fix wave F1, F1) — el gate lee saldo FRESCO, nunca el de la cache del validate', () => {
+  it('validate llena la cache con 10.0000, el saldo REAL cae a 0.0000, el send a los 30s ⇒ 422 InsufficientCreditError', async () => {
+    let clockMs = NOW.getTime();
+    const s = await setup({ creditAmount: '10.0000', creditNow: () => clockMs });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    // Paso 1 (validate): la MISMA instancia del port lee el balance y llena el slot.
+    const primed = await s.creditPort.getBalance();
+    expect(primed.amount).toBe('10.0000');
+    expect(s.creditPort.fetches).toBe(1);
+
+    // El saldo real se drena por fuera (otra campaña, un cobro de Twilio).
+    s.creditPort.amount = '0.0000';
+    clockMs += 30_000; // TTL de 60s TODAVÍA vigente
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(InsufficientCreditError);
+
+    expect(s.creditPort.fetches).toBe(2); // el gate FUE al origen, no a la cache
+    expect((await s.campaignRepo.list({})).total).toBe(0);
+    expect((await s.previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+  });
+
+  it('el gate pide fresh: aunque la cache tenga 0.0000, un saldo REAL suficiente deja pasar el envío', async () => {
+    let clockMs = NOW.getTime();
+    const s = await setup({ creditAmount: '0.0000', creditNow: () => clockMs });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await s.creditPort.getBalance(); // cache con 0.0000
+    s.creditPort.amount = '10.0000';
+    clockMs += 30_000;
+
+    const result = await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+    expect(result.accepted).toBe(true);
+  });
+
+  it('tras un send ACEPTADO la cache queda INVALIDADA — la próxima lectura normal vuelve al origen', async () => {
+    let clockMs = NOW.getTime();
+    const s = await setup({ creditAmount: '10000.0000', creditNow: () => clockMs });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await s.useCase.execute({ previewId: preview.id }, 'key-1');
+    const fetchesAfterSend = s.creditPort.fetches;
+
+    clockMs += 1_000; // el TTL seguiría vigente si el slot no se hubiera vaciado
+    await s.creditPort.getBalance(); // lo que haría el siguiente `validate`
+
+    expect(s.creditPort.fetches).toBe(fetchesAfterSend + 1);
+  });
+
+  it('un send RECHAZADO por saldo NO invalida de más: el slot sigue sirviendo su valor', async () => {
+    let clockMs = NOW.getTime();
+    const s = await setup({ creditAmount: '0.0010', creditNow: () => clockMs });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(InsufficientCreditError);
+    const fetchesAfterReject = s.creditPort.fetches;
+    const cached = await s.creditPort.getBalance();
+
+    expect(cached.cached).toBe(true);
+    expect(s.creditPort.fetches).toBe(fetchesAfterReject);
+  });
+});
+
+/**
+ * fix wave F1 (F3) — SOBREGIRO por concurrencia. Dos `send` simultáneos leían
+ * el MISMO saldo y ambos pasaban el gate: 2 × 8 = 16 USD gastados con 10 de
+ * saldo. El tramo gate + CreateCampaign + markConsumed se serializa con un
+ * mutex en proceso (protección de instancia única; el runner ya es uno por
+ * proceso).
+ */
+describe('CG-SEND-2 (fix wave F1, F3) — dos sends concurrentes NO sobregiran', () => {
+  const RATES_4_USD = {
+    currency: 'USD',
+    utilityRate: '4.0000',
+    marketingRate: '4.0000',
+    authenticationRate: '4.0000',
+    providerFee: '0.0000',
+  };
+
+  it('saldo 10, dos lotes de 8 cada uno lanzados a la vez ⇒ EXACTAMENTE un 202 y un 422', async () => {
+    const s = await setup({ creditAmount: '10.0000', ratesPatch: RATES_4_USD });
+    // El envío aceptado compromete la plata: el saldo REAL cae a 2.
+    s.campaignStarter.onStart = () => {
+      s.creditPort.amount = '2.0000';
+    };
+    const two = nRecipients(2);
+    const previewA = await s.previewRepo.create(buildPreviewData({ recipients: two }));
+    const previewB = await s.previewRepo.create(buildPreviewData({ recipients: two }));
+
+    const results = await Promise.allSettled([
+      s.useCase.execute({ previewId: previewA.id }, 'key-A'),
+      s.useCase.execute({ previewId: previewB.id }, 'key-B'),
+    ]);
+
+    const accepted = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(accepted).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(InsufficientCreditError);
+    expect((await s.campaignRepo.list({})).total).toBe(1);
+  });
+
+  it('sin drenaje, dos sends concurrentes con saldo de sobra SIGUEN pasando los dos (el mutex serializa, no bloquea)', async () => {
+    const s = await setup({ creditAmount: '10000.0000' });
+    const previewA = await s.previewRepo.create(buildPreviewData({ recipients: nRecipients(2) }));
+    const previewB = await s.previewRepo.create(buildPreviewData({ recipients: nRecipients(3) }));
+
+    const [a, b] = await Promise.all([
+      s.useCase.execute({ previewId: previewA.id }, 'key-A'),
+      s.useCase.execute({ previewId: previewB.id }, 'key-B'),
+    ]);
+
+    expect(a.accepted).toBe(true);
+    expect(b.accepted).toBe(true);
+    expect((await s.campaignRepo.list({})).total).toBe(2);
+  });
+});
+
+/**
+ * fix wave F1 (F5) — FIXTURES DEGENERADOS. Todos los tests del gate usaban UN
+ * destinatario, con lo cual `estimatedCost === unitCost` y la multiplicación
+ * por `preview.recipients.length` nunca se ejercitaba: reemplazarla por `1`
+ * dejaba la suite VERDE.
+ */
+describe('CG-SEND-2 (fix wave F1, F5) — estimatedCost = N × unitCost, con N > 1', () => {
+  it('3 destinatarios, MARKETING con defaults ⇒ estimatedCost 0.2004 (3 × 0.0668)', async () => {
+    const s = await setup({ creditAmount: '0.2003' }); // un decimal POR DEBAJO del costo de 3
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: nRecipients(3) }));
+
+    try {
+      await s.useCase.execute({ previewId: preview.id }, 'key-1');
+      throw new Error('expected InsufficientCreditError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(InsufficientCreditError);
+      expect((err as InstanceType<typeof InsufficientCreditError>).estimatedCost).toBe('0.2004');
+    }
+  });
+
+  it('500 destinatarios ⇒ estimatedCost 33.4000 EXACTO (500 × 0.0668)', async () => {
+    const s = await setup({ creditAmount: '33.3999' });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: nRecipients(500) }));
+
+    try {
+      await s.useCase.execute({ previewId: preview.id }, 'key-1');
+      throw new Error('expected InsufficientCreditError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(InsufficientCreditError);
+      expect((err as InstanceType<typeof InsufficientCreditError>).estimatedCost).toBe('33.4000');
+    }
+  });
+
+  it('el borde manda: saldo EXACTAMENTE 33.4000 con 500 destinatarios ⇒ pasa', async () => {
+    const s = await setup({ creditAmount: '33.4000' });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: nRecipients(500) }));
+
+    const result = await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+    expect(result.accepted).toBe(true);
+    expect(result.total).toBe(500);
+  });
+});
+
+/**
+ * fix wave F1 (F4) — `ratesRepo.get()` vivía FUERA del try/catch del gate: un
+ * repo caído subía el error crudo como 500, cuando el contrato fail-closed
+ * dice 503 CREDIT_UNAVAILABLE.
+ */
+describe('CG-SEND-3 (fix wave F1, F4) — cualquier degradación DENTRO del gate cierra con 503', () => {
+  it('ratesRepo.get() lanza ⇒ CreditUnavailableError (503), no un 500 crudo, CERO Campaign', async () => {
+    const s = await setup();
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+    jest.spyOn(s.ratesRepo, 'get').mockRejectedValue(new Error('db down'));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toBeInstanceOf(CreditUnavailableError);
+
+    expect((await s.campaignRepo.list({})).total).toBe(0);
+    expect((await s.previewRepo.findById(preview.id))?.consumedAt).toBeNull();
+  });
+
+  it('tarifa ilegible en la fila ⇒ CreditUnavailableError (503), NUNCA tratada como 0', async () => {
+    const s = await setup({
+      creditAmount: '10000.0000',
+      ratesPatch: {
+        currency: 'USD',
+        utilityRate: '0.0120',
+        marketingRate: 'not-a-number',
+        authenticationRate: '0.0220',
+        providerFee: '0.0050',
+      },
+    });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toBeInstanceOf(CreditUnavailableError);
+
+    expect((await s.campaignRepo.list({})).total).toBe(0);
+  });
+
+  it('overflow de punto fijo (tarifa monstruosa) ⇒ CreditUnavailableError (503), jamás un 500', async () => {
+    const s = await setup({
+      creditAmount: '10000.0000',
+      ratesPatch: {
+        currency: 'USD',
+        utilityRate: '0.0120',
+        marketingRate: '900000000000.0000',
+        authenticationRate: '0.0220',
+        providerFee: '0.0000',
+      },
+    });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: nRecipients(2) }));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toBeInstanceOf(CreditUnavailableError);
+
+    expect((await s.campaignRepo.list({})).total).toBe(0);
+  });
+});
+
+/**
+ * fix wave F1 (F7) — perilla PROPIA del guard. Apagarla es fail-OPEN por
+ * decisión EXPLÍCITA del operador: el envío sigue, sin gate de crédito.
+ */
+describe('CG-FLAG (fix wave F1, F7) — messaging-credit-guard-enabled', () => {
+  const GUARD_FLAG_KEY = 'messaging-credit-guard-enabled';
+
+  it('flag OFF ⇒ el gate SE SALTEA: saldo 0 y el envío igual se acepta, sin tocar el proveedor', async () => {
+    const s = await setup({ creditAmount: '0.0000' });
+    s.featureFlags.seed(GUARD_FLAG_KEY, false);
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    const result = await s.useCase.execute({ previewId: preview.id }, 'key-1');
+
+    expect(result.accepted).toBe(true);
+    expect(s.creditPort.calls).toBe(0);
+  });
+
+  it('flag ON explícito ⇒ el gate corre y rechaza por saldo', async () => {
+    const s = await setup({ creditAmount: '0.0000' });
+    s.featureFlags.seed(GUARD_FLAG_KEY, true);
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(InsufficientCreditError);
+  });
+
+  it('la fila del flag NO existe ⇒ guard PRENDIDO (fail-closed, al revés que el kill-switch)', async () => {
+    const s = await setup({ creditAmount: '0.0000' });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(InsufficientCreditError);
+  });
+
+  it('el repo de flags REVIENTA para ESA key ⇒ guard PRENDIDO (un repo caído no apaga una protección)', async () => {
+    const s = await setup({ creditAmount: '0.0000' });
+    const realGet = s.featureFlags.get.bind(s.featureFlags);
+    jest.spyOn(s.featureFlags, 'get').mockImplementation(async (key: string) => {
+      if (key === GUARD_FLAG_KEY) throw new Error('db down');
+      return realGet(key);
+    });
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(InsufficientCreditError);
+  });
+
+  it('el kill-switch general SIGUE mandando: guard OFF pero API externa OFF ⇒ FeatureExternalBulkDisabledError', async () => {
+    const s = await setup({ flagEnabled: false });
+    s.featureFlags.seed(GUARD_FLAG_KEY, false);
+    const preview = await s.previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+
+    await expect(s.useCase.execute({ previewId: preview.id }, 'key-1')).rejects.toThrow(FeatureExternalBulkDisabledError);
   });
 });

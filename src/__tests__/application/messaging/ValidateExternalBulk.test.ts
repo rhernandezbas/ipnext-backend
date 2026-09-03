@@ -17,6 +17,8 @@ import { InMemoryTemplateMessagingGateway } from '@infrastructure/adapters/in-me
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { bootstrapApiMessagingUser } from '@infrastructure/bootstrap/bootstrapApiMessagingUser';
+import { InMemoryCreditBalancePort } from '@infrastructure/adapters/in-memory/InMemoryCreditBalancePort';
+import { InMemoryMessagingRatesConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryMessagingRatesConfigRepository';
 import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import type {
   CampaignSegmentSource,
@@ -84,6 +86,8 @@ interface Setup {
   featureFlags: InMemoryFeatureFlagRepository;
   rbacUserRepo: InMemoryRbacUserRepository;
   apiMessagingUserId: string;
+  creditPort: InMemoryCreditBalancePort;
+  ratesRepo: InMemoryMessagingRatesConfigRepository;
 }
 
 async function setup(
@@ -109,6 +113,8 @@ async function setup(
     const bootstrap = await bootstrapApiMessagingUser(rbacUserRepo, { passwordHash: 'unusable-hash' });
     apiMessagingUserId = bootstrap.id;
   }
+  const creditPort = new InMemoryCreditBalancePort();
+  const ratesRepo = new InMemoryMessagingRatesConfigRepository({ now: () => NOW });
 
   const useCase = new ValidateExternalBulk(
     previewRepo,
@@ -119,6 +125,8 @@ async function setup(
     chatwootGateway,
     featureFlags,
     rbacUserRepo,
+    creditPort,
+    ratesRepo,
     () => NOW,
   );
 
@@ -132,6 +140,8 @@ async function setup(
     featureFlags,
     rbacUserRepo,
     apiMessagingUserId,
+    creditPort,
+    ratesRepo,
   };
 }
 
@@ -727,6 +737,231 @@ describe('ValidateExternalBulk', () => {
       const result = await useCase.execute(baseInput());
 
       expect(result.previewId).toEqual(expect.any(String));
+    });
+  });
+
+  /**
+   * twilio-credit-guard (Batch 2, task 2.5/2.6, CG-VAL-1/CG-VAL-2) — el
+   * bloque `credit` es ADVISORY: nunca convierte un 200 en error, corre
+   * DESPUÉS de los caps, y se persiste en el snapshot del preview FUERA del
+   * `payloadHash`.
+   */
+  describe('twilio-credit-guard — bloque credit ADVISORY en validate (CG-VAL-1/CG-VAL-2)', () => {
+    it('credit viaja en la respuesta 200 (categoría del template ausente ⇒ MARKETING asumida)', async () => {
+      const { useCase } = await setup();
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit).toMatchObject({
+        available: '17.8940',
+        currency: 'USD',
+        category: 'MARKETING',
+        categoryAssumed: true,
+        unitCost: '0.0668',
+        estimatedCost: '0.0668',
+        sufficient: true,
+      });
+      expect(result.warnings).toBeUndefined();
+    });
+
+    it('crédito insuficiente ⇒ 200 (NUNCA 4xx) con warnings:[INSUFFICIENT_CREDIT]', async () => {
+      const { useCase, creditPort } = await setup();
+      creditPort.amount = '0.0001';
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.sufficient).toBe(false);
+      expect(result.credit.unknown).toBeUndefined();
+      expect(result.warnings).toEqual(['INSUFFICIENT_CREDIT']);
+    });
+
+    it('creditPort.getBalance() lanza ⇒ 200 con credit.unknown:true y warnings:[CREDIT_UNAVAILABLE], JAMÁS voltea el request', async () => {
+      const { useCase, creditPort } = await setup();
+      creditPort.failNext = true;
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.unknown).toBe(true);
+      expect(result.credit.sufficient).toBe(false);
+      expect(result.warnings).toEqual(['CREDIT_UNAVAILABLE']);
+    });
+
+    /**
+     * fix wave F1 (F4) — antes este test pineaba el fallback a
+     * `MESSAGING_RATES_CONFIG_DEFAULTS`: si la DB de tarifas se caía, `validate`
+     * mostraba un costo con tarifas INVENTADAS como si fuera el real. Adivinar
+     * la tarifa es exactamente lo que D4.c prohíbe. Ahora degrada a `unknown`,
+     * que es la verdad — y sigue sin voltear el request (CG-VAL-1).
+     */
+    it('ratesRepo.get() lanza ⇒ 200 con credit.unknown:true + warnings:[CREDIT_UNAVAILABLE], SIN inventar defaults', async () => {
+      const { useCase, ratesRepo } = await setup();
+      jest.spyOn(ratesRepo, 'get').mockRejectedValue(new Error('db down'));
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.unknown).toBe(true);
+      expect(result.credit.sufficient).toBe(false);
+      expect(result.credit.unitCost).toBeNull();
+      expect(result.credit.estimatedCost).toBeNull();
+      expect(result.warnings).toEqual(['CREDIT_UNAVAILABLE']);
+    });
+
+    it('el credit de la respuesta viaja TAMBIÉN al snapshot persistido del preview', async () => {
+      const { useCase, previewRepo } = await setup();
+      const createSpy = jest.spyOn(previewRepo, 'create');
+
+      const result = await useCase.execute(baseInput());
+
+      expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ credit: result.credit }));
+      const preview = await previewRepo.findById(result.previewId);
+      expect(preview?.credit).toEqual(result.credit);
+    });
+
+    it('payloadHash IDÉNTICO al valor de antes de este change (literal hardcodeado, pin de no-regresión CG-VAL-2)', async () => {
+      const { useCase, previewRepo } = await setup();
+
+      const result = await useCase.execute(baseInput());
+
+      const preview = await previewRepo.findById(result.previewId);
+      // Literal capturado con el algoritmo de `externalBulkPayloadHash` SIN
+      // TOCAR (twilio-credit-guard no modifica ese archivo) — el crédito NUNCA
+      // participa del hash aunque las tarifas cambien.
+      expect(preview?.payloadHash).toBe('b9deaf15c46833d24da7bee0d9de80641e9038442d9f8de9583b8047499b886a');
+    });
+
+    it('el hash NO cambia si las tarifas cambian entre dos previews del MISMO payload (CG-VAL-2)', async () => {
+      const { useCase, previewRepo, ratesRepo } = await setup();
+      const input = baseInput();
+
+      const r1 = await useCase.execute(input);
+      await ratesRepo.set({
+        currency: 'USD',
+        utilityRate: '0.5000',
+        marketingRate: '0.9000',
+        authenticationRate: '0.5000',
+        providerFee: '0.5000',
+      });
+      const r2 = await useCase.execute(input);
+
+      const p1 = await previewRepo.findById(r1.previewId);
+      const p2 = await previewRepo.findById(r2.previewId);
+      expect(p1!.payloadHash).toBe(p2!.payloadHash);
+      // Y sin embargo el credit calculado SÍ cambió (prueba que el cálculo corrió de nuevo).
+      expect(p1!.credit!.unitCost).not.toBe(p2!.credit!.unitCost);
+    });
+
+    it('CG-VAL-1 — orden: crédito corre DESPUÉS de los caps (un cap excedido NUNCA llama getBalance())', async () => {
+      const { useCase, configRepo, creditPort } = await setup();
+      await configRepo.set({ maxPerRequest: 1, maxPerDay: 2000 });
+      const getBalanceSpy = jest.spyOn(creditPort, 'getBalance');
+
+      await expect(
+        useCase.execute(baseInput({ recipients: [{ phone: MOBILE_A }, { phone: MOBILE_B }] })),
+      ).rejects.toMatchObject({ code: 'CAP_EXCEEDED' });
+
+      expect(getBalanceSpy).not.toHaveBeenCalled();
+      expect(creditPort.calls).toBe(0);
+    });
+
+    /**
+     * fix wave F1 (F8) — cuando el bloque es `unknown` por TARIFA ilegible, los
+     * números no pueden decir '0.0000'. La card FE y la IA que consume la API
+     * externa leen un cero como "gratis".
+     */
+    it('tarifa ilegible en la fila ⇒ unitCost/estimatedCost null (NO "0.0000")', async () => {
+      const { useCase, ratesRepo } = await setup();
+      await ratesRepo.set({
+        currency: 'USD',
+        utilityRate: '0.0120',
+        marketingRate: 'not-a-number',
+        authenticationRate: '0.0220',
+        providerFee: '0.0050',
+      });
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.unknown).toBe(true);
+      expect(result.credit.unitCost).toBeNull();
+      expect(result.credit.estimatedCost).toBeNull();
+      expect(result.warnings).toEqual(['CREDIT_UNAVAILABLE']);
+    });
+
+    /** fix wave F1 (F6) — overflow de punto fijo: `unknown`, jamás un 500. */
+    it('tarifa monstruosa (overflow de safe-integer al multiplicar) ⇒ 200 con unknown:true, nunca revienta', async () => {
+      const { useCase, ratesRepo } = await setup();
+      await ratesRepo.set({
+        currency: 'USD',
+        utilityRate: '0.0120',
+        marketingRate: '900000000000.0000',
+        authenticationRate: '0.0220',
+        providerFee: '0.0000',
+      });
+
+      const result = await useCase.execute(
+        baseInput({ recipients: [{ phone: MOBILE_A }, { phone: MOBILE_B }] }),
+      );
+
+      expect(result.credit.unknown).toBe(true);
+      expect(result.credit.estimatedCost).toBeNull();
+      expect(result.warnings).toEqual(['CREDIT_UNAVAILABLE']);
+    });
+  });
+
+  /**
+   * fix wave F1 (F7) — perilla PROPIA del guard de crédito
+   * (`messaging-credit-guard-enabled`, sembrada en TRUE). Sin ella, el único
+   * botón ante un falso positivo del guard era apagar la API externa ENTERA
+   * (`messaging-external-bulk-enabled`) — matar el envío para arreglar el
+   * medidor. Apagarla es fail-OPEN por decisión EXPLÍCITA del operador.
+   */
+  describe('CG-FLAG — feature flag messaging-credit-guard-enabled (fix wave F1, F7)', () => {
+    const GUARD_FLAG_KEY = 'messaging-credit-guard-enabled';
+
+    it('flag OFF ⇒ credit.unknown:true + warnings:[CREDIT_GUARD_DISABLED], y NO se le pega al proveedor', async () => {
+      const { useCase, featureFlags, creditPort } = await setup();
+      featureFlags.seed(GUARD_FLAG_KEY, false);
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.unknown).toBe(true);
+      expect(result.credit.sufficient).toBe(false);
+      expect(result.credit.unitCost).toBeNull();
+      expect(result.credit.estimatedCost).toBeNull();
+      expect(result.warnings).toEqual(['CREDIT_GUARD_DISABLED']);
+      expect(creditPort.calls).toBe(0);
+    });
+
+    it('flag ON explícito ⇒ el bloque credit se calcula normalmente', async () => {
+      const { useCase, featureFlags, creditPort } = await setup();
+      featureFlags.seed(GUARD_FLAG_KEY, true);
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.unknown).toBeUndefined();
+      expect(creditPort.calls).toBe(1);
+    });
+
+    it('la fila del flag NO existe ⇒ guard PRENDIDO (fail-closed, al revés que el kill-switch)', async () => {
+      const { useCase, creditPort } = await setup();
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.unknown).toBeUndefined();
+      expect(creditPort.calls).toBe(1);
+    });
+
+    it('el repo de flags REVIENTA ⇒ guard PRENDIDO (un repo caído no apaga una protección)', async () => {
+      const { useCase, featureFlags, creditPort } = await setup();
+      const realGet = featureFlags.get.bind(featureFlags);
+      jest.spyOn(featureFlags, 'get').mockImplementation(async (key: string) => {
+        if (key === GUARD_FLAG_KEY) throw new Error('db down');
+        return realGet(key);
+      });
+
+      const result = await useCase.execute(baseInput());
+
+      expect(result.credit.unknown).toBeUndefined();
+      expect(creditPort.calls).toBe(1);
     });
   });
 

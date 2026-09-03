@@ -30,6 +30,7 @@ export class InMemoryExternalBulkPreviewRepository implements ExternalBulkPrevie
       invalid: [...data.invalid],
       validCount: data.validCount,
       invalidCount: data.invalidCount,
+      credit: data.credit ?? null,
       expiresAt: data.expiresAt,
       consumedAt: null,
       campaignId: null,

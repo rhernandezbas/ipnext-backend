@@ -27,6 +27,9 @@ import { InMemoryTemplateMessagingGateway } from '@infrastructure/adapters/in-me
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryAuditEventRepository } from '@infrastructure/adapters/in-memory/InMemoryAuditEventRepository';
+import { InMemoryCreditBalancePort } from '@infrastructure/adapters/in-memory/InMemoryCreditBalancePort';
+import { InMemoryMessagingRatesConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryMessagingRatesConfigRepository';
+import { GetMessagingCredit } from '@application/use-cases/messaging/GetMessagingCredit';
 import { FakeChatwootGateway } from '../helpers/FakeChatwootGateway';
 import type { CampaignSegmentSource, CampaignSegmentFilter } from '@domain/ports/CustomerRepository';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
@@ -114,14 +117,17 @@ function buildApp(opts: { templates?: TemplateDto[]; flagEnabled?: boolean; with
   const segmentSource = makeSegmentSource();
   const createCampaign = new CreateCampaign(campaignRepo, segmentSource, templatePort);
 
+  const creditPort = new InMemoryCreditBalancePort();
+  const ratesRepo = new InMemoryMessagingRatesConfigRepository({ now: () => NOW });
+
   const deps: ExternalMessagingRouterDeps = {
     validateExternalBulk: new ValidateExternalBulk(
       previewRepo, configRepo, campaignRepo, templatePort, segmentSource,
-      chatwootGateway, featureFlags, rbacUserRepo, () => NOW,
+      chatwootGateway, featureFlags, rbacUserRepo, creditPort, ratesRepo, () => NOW,
     ),
     sendExternalBulk: new SendExternalBulk(
       previewRepo, configRepo, campaignRepo, templatePort, chatwootGateway,
-      featureFlags, rbacUserRepo, createCampaign, new FakeCampaignStarter(), () => NOW,
+      featureFlags, rbacUserRepo, createCampaign, new FakeCampaignStarter(), creditPort, ratesRepo, () => NOW,
     ),
     getExternalBulkCampaign: new GetExternalBulkCampaign(campaignRepo, rbacUserRepo),
     listTemplates: new ListTemplates(templatePort),
@@ -129,6 +135,7 @@ function buildApp(opts: { templates?: TemplateDto[]; flagEnabled?: boolean; with
     createTemplate: new CreateTemplate(templatePort),
     submitTemplate: new SubmitTemplateForApproval(templatePort),
     featureFlags,
+    getMessagingCredit: new GetMessagingCredit(creditPort, ratesRepo),
   };
 
   const app = express();

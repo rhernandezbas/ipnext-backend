@@ -34,6 +34,30 @@ export interface ExternalBulkPreviewInvalidEntry {
   missingVariables?: string[];
 }
 
+/**
+ * twilio-credit-guard (D1.b/D4.b) — snapshot ADVISORY de lo que se le mostró
+ * a quien autorizó el `validate` ("qué costaba, con qué saldo"). Shape
+ * estructuralmente IDÉNTICA a `MessagingCreditDto`
+ * (`application/use-cases/messaging/EstimateMessagingCost.ts`) — duplicada a
+ * propósito, mismo criterio que `ExternalBulkPreviewRecipient` vs
+ * `ValidateExternalBulkValidRecipientDto`: el dominio NUNCA importa un tipo
+ * de `application/` (DIP estricto). FUERA del `payloadHash` (D1.c) — es dato
+ * del proveedor/config, no input del caller.
+ */
+export type ExternalBulkPreviewCreditCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION';
+
+export interface ExternalBulkPreviewCreditSnapshot {
+  available: string | null;
+  currency: string;
+  category: ExternalBulkPreviewCreditCategory;
+  categoryAssumed?: true;
+  /** fix wave F1 (F8) — `null` cuando la TARIFA no se pudo resolver; jamás un '0.0000' mentiroso. */
+  unitCost: string | null;
+  estimatedCost: string | null;
+  sufficient: boolean;
+  unknown?: true;
+}
+
 export interface ExternalBulkPreview {
   id: string;
   /** sha256 canónico del payload (D5) — anti-replay con payload distinto. */
@@ -49,6 +73,12 @@ export interface ExternalBulkPreview {
   invalid: ExternalBulkPreviewInvalidEntry[];
   validCount: number;
   invalidCount: number;
+  /**
+   * twilio-credit-guard (D1.b) — snapshot advisory calculado en `validate`.
+   * `null` para previews creados ANTES de este change (columna nullable, sin
+   * backfill) — nunca fabricado retroactivamente.
+   */
+  credit: ExternalBulkPreviewCreditSnapshot | null;
   /** ISO — `createdAt + 15min`. */
   expiresAt: string;
   /** ISO — seteado ATÓMICAMENTE al crear la Campaign (D8). `null` = no consumido. */

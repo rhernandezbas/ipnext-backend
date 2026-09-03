@@ -111,3 +111,59 @@ describe('InMemoryExternalBulkPreviewRepository', () => {
     expect(deletedCount).toBe(2);
   });
 });
+
+/**
+ * fix wave F1 (R2 #6) — paridad con `PrismaExternalBulkPreviewRepository`: el
+ * snapshot `credit` sobrevive el round-trip create → findById, tal cual, y la
+ * ausencia se normaliza a `null` (nunca `undefined`).
+ */
+describe('InMemoryExternalBulkPreviewRepository — round-trip del snapshot credit (fix wave F1, R2 #6)', () => {
+  const CREDIT = {
+    available: '17.8940',
+    currency: 'USD',
+    category: 'MARKETING' as const,
+    categoryAssumed: true as const,
+    unitCost: '0.0668',
+    estimatedCost: '0.2004',
+    sufficient: true,
+  };
+
+  it('create con credit ⇒ findById lo devuelve IDÉNTICO', async () => {
+    const repo = new InMemoryExternalBulkPreviewRepository();
+
+    const created = await repo.create(makeCreateData({ credit: CREDIT }));
+    const found = await repo.findById(created.id);
+
+    expect(created.credit).toEqual(CREDIT);
+    expect(found?.credit).toEqual(CREDIT);
+  });
+
+  it('un credit UNKNOWN (unitCost/estimatedCost null, F8) sobrevive sin volverse "0.0000"', async () => {
+    const repo = new InMemoryExternalBulkPreviewRepository();
+    const unknownCredit = {
+      available: null,
+      currency: 'USD',
+      category: 'MARKETING' as const,
+      unitCost: null,
+      estimatedCost: null,
+      sufficient: false,
+      unknown: true as const,
+    };
+
+    const created = await repo.create(makeCreateData({ credit: unknownCredit }));
+    const found = await repo.findById(created.id);
+
+    expect(found?.credit).toEqual(unknownCredit);
+    expect(found?.credit?.unitCost).toBeNull();
+  });
+
+  it('create SIN credit ⇒ null, nunca undefined (paridad con la columna nullable de Prisma)', async () => {
+    const repo = new InMemoryExternalBulkPreviewRepository();
+
+    const created = await repo.create(makeCreateData());
+    const found = await repo.findById(created.id);
+
+    expect(created.credit).toBeNull();
+    expect(found?.credit).toBeNull();
+  });
+});

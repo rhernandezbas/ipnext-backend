@@ -11,6 +11,7 @@
  */
 import type { CampaignStatus } from '@domain/entities/campaign';
 import type { TemplateDto } from '@domain/ports/TemplateMessagingPort';
+import type { MessagingCreditDto } from '@application/use-cases/messaging/EstimateMessagingCost';
 
 /** Un destinatario del wire — VAL-1. */
 export interface ValidateExternalBulkRecipientInput {
@@ -80,6 +81,22 @@ export interface ValidateExternalBulkCapsDto {
   remainingToday: number;
 }
 
+/**
+ * twilio-credit-guard (VAL-9 delta, CG-VAL-1) — degradaciones ADVISORY del
+ * bloque `credit`. Insuficiente o inalcanzable NUNCA convierte el 200 en un
+ * error — solo agrega un warning al body.
+ */
+export type ExternalBulkWarning =
+  | 'INSUFFICIENT_CREDIT'
+  | 'CREDIT_UNAVAILABLE'
+  /**
+   * fix wave F1 (F7) — el feature flag `messaging-credit-guard-enabled` está en
+   * OFF: el guard de crédito NO corre (ni acá ni en el `send`) por decisión
+   * EXPLÍCITA del operador. `credit.unknown:true` con esta warning significa
+   * "no se midió", que es distinto de "no se pudo medir" (CREDIT_UNAVAILABLE).
+   */
+  | 'CREDIT_GUARD_DISABLED';
+
 /** D12/VAL-9 — shape EXACTO de la respuesta 200 de `validate`. */
 export interface ValidateExternalBulkOutput {
   previewId: string;
@@ -91,6 +108,10 @@ export interface ValidateExternalBulkOutput {
   valid: ValidateExternalBulkValidRecipientDto[];
   invalid: ValidateExternalBulkInvalidRecipientDto[];
   caps: ValidateExternalBulkCapsDto;
+  /** twilio-credit-guard (CG-VAL-1) — saldo + costo estimado, SIEMPRE presente, nunca convierte el 200 en error. */
+  credit: MessagingCreditDto;
+  /** twilio-credit-guard (CG-VAL-1) — AUSENTE (no array vacío) cuando no hay degradación. */
+  warnings?: ExternalBulkWarning[];
 }
 
 /** Molde de referencia — no usado en el DTO en sí, documenta de dónde salen las keys declaradas (D4.c). */

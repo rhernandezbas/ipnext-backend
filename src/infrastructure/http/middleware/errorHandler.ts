@@ -268,6 +268,10 @@ const statusMap: Record<string, number> = {
   IDEMPOTENCY_KEY_CONFLICT: 409,
   CAMPAIGN_RUNNER_BUSY: 409,
   REPORTER_UNAVAILABLE: 503,
+  // twilio-credit-guard (D3.d) — 422 solo lo tira SendExternalBulk (gate);
+  // ValidateExternalBulk lo reporta como warning en el 200, jamás como error.
+  INSUFFICIENT_CREDIT: 422,
+  CREDIT_UNAVAILABLE: 503,
   // smartolt-provision (K2) — aprovisionamiento de ONUs fibra Huawei.
   // OltProvisioningError trae el reason tipado; acá solo vive el mapeo code→status:
   //   not_configured → 503 (envs SMARTOLT_* ausentes: feature apagada limpia)

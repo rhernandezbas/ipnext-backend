@@ -10,7 +10,10 @@ import type { Campaign, CampaignVariableSpec } from '@domain/entities/campaign';
 import type { ExternalBulkPreview } from '@domain/entities/externalBulkPreview';
 import type { SendExternalBulkInput, SendExternalBulkOutput } from '@application/dto/external-bulk-messaging.dto';
 import type { ManualContactDto } from '@application/dto/messaging-bulk.dto';
+import type { CreditBalancePort } from '@domain/ports/CreditBalancePort';
+import type { MessagingRatesConfigRepository } from '@domain/ports/MessagingRatesConfigRepository';
 import { CreateCampaign } from './CreateCampaign';
+import { estimateMessagingCost } from './EstimateMessagingCost';
 import {
   FeatureExternalBulkDisabledError,
   ExternalBulkValidationError,
@@ -23,16 +26,30 @@ import {
   IdempotencyKeyConflictError,
   CampaignRunnerBusyError,
   ReporterUnavailableError,
+  InsufficientCreditError,
+  CreditUnavailableError,
 } from '@domain/errors/external-bulk-messaging';
 import { TemplateNotApprovedError } from '@domain/errors/messaging-bulk';
 import { ChatwootUnavailableError } from '@domain/errors/messaging';
 import { externalBulkPayloadHash } from './externalBulkPayloadHash';
+import { AsyncMutex } from './asyncMutex';
 import { toArgentinaDateKey } from './reportsTimezone';
 import { API_MESSAGING_USER_LOGIN } from '@domain/constants/machineUsers';
 import { UniqueConstraintViolationError } from '@domain/errors/persistence';
 import { BULK_NUMBERS_ACTION, BULK_STATUS_ACTION } from '@domain/services/bulkRecipientAuthorization';
 
 const FEATURE_FLAG_KEY = 'messaging-external-bulk-enabled';
+/**
+ * fix wave F1 (F7) — perilla PROPIA del guard de crédito, sembrada en TRUE por
+ * la migración de este change. Sin ella, el único botón ante un falso positivo
+ * del guard (tarifas mal cargadas, Twilio devolviendo basura) era apagar la
+ * API externa ENTERA: matar el envío para arreglar el medidor. Se opera con el
+ * `PATCH /api/admin/feature-flags/:key` genérico que YA existe — cero FE nuevo.
+ *
+ * Semántica INVERSA a la del kill-switch: acá la ausencia de la fila y un repo
+ * caído resuelven a ON (fail-closed) — una protección no se apaga sola.
+ */
+const CREDIT_GUARD_FLAG_KEY = 'messaging-credit-guard-enabled';
 const RUNNER_BUSY_RETRY_AFTER_SECONDS = 60;
 
 /**
@@ -93,8 +110,18 @@ export class SendExternalBulk {
     private readonly rbacUserRepo: RbacUserRepository,
     private readonly createCampaign: CreateCampaign,
     private readonly campaignStarter: CampaignStarter,
+    private readonly creditPort: CreditBalancePort,
+    private readonly ratesRepo: MessagingRatesConfigRepository,
     private readonly now: () => Date = () => new Date(),
   ) {}
+
+  /**
+   * fix wave F1 (F3) — serializa el tramo check-then-act (gate de crédito →
+   * `CreateCampaign` → `markConsumed`). Sin esto, dos `send` concurrentes leen
+   * el MISMO saldo y ambos pasan el gate: sobregiro. Ver `asyncMutex.ts` para
+   * el alcance declarado (una instancia del proceso, no un cluster).
+   */
+  private readonly creditMutex = new AsyncMutex();
 
   async execute(input: SendExternalBulkInput, idempotencyKey: string | undefined): Promise<SendExternalBulkOutput> {
     // 0 — SEND-1, forma del input. CERO llamadas downstream si falla.
@@ -153,6 +180,32 @@ export class SendExternalBulk {
     if (preview.recipients.length > remainingToday) {
       throw new CapExceededError({ limit: 'perDay', remainingToday });
     }
+
+    // ── SECCIÓN CRÍTICA (fix wave F1, F3) ────────────────────────────────────
+    // Gate de crédito → CreateCampaign → markConsumed → start, SERIALIZADO. El
+    // gate es un check-then-act sobre plata: leer el saldo y después gastarlo.
+    // Dos `send` concurrentes leían el MISMO saldo y ambos pasaban (2 × 8 USD
+    // con 10 de saldo). `start()` entra en la sección porque es el punto donde
+    // el gasto se vuelve REAL: soltar el candado antes admitiría un segundo
+    // send contra un saldo que ya está comprometido pero todavía no drenado.
+    return this.creditMutex.runExclusive(() =>
+      this.acceptSend(input.previewId, idempotencyKey, preview, template, apiMessagingUserId),
+    );
+  }
+
+  private async acceptSend(
+    previewId: string,
+    idempotencyKey: string,
+    preview: ExternalBulkPreview,
+    template: { category?: string; variables: Record<string, string> },
+    apiMessagingUserId: string,
+  ): Promise<SendExternalBulkOutput> {
+    // 4.5 — SEND-4bis, GATE de crédito (twilio-credit-guard D4.c), fail-closed.
+    // Contra los recipients que REALMENTE se van a crear
+    // (`preview.recipients.length`) — nunca contra el snapshot del preview,
+    // mismo criterio que template/label/caps. Corre DESPUÉS de todos los caps
+    // y ANTES de `CreateCampaign`/`markConsumed` (D0, regla de oro del orden).
+    await this.assertSufficientCredit(template.category, preview.recipients.length);
 
     // 5 — SEND-5/SEND-10, crea la Campaign (REUSO de CreateCampaign, sin tocar su
     // spec). `manualContacts` pasa TODOS los recipients del preview tal cual —
@@ -238,19 +291,29 @@ export class SendExternalBulk {
     // carrera (otro `send` ya consumió ESE previewId), la Campaign recién
     // creada queda huérfana → se marca `failed` (nunca se re-envía sola) y se
     // responde 409 — el preview no se puede re-consumir para ella.
-    const consumed = await this.previewRepo.markConsumed(input.previewId, created.campaignId);
+    const consumed = await this.previewRepo.markConsumed(previewId, created.campaignId);
     if (!consumed) {
       await this.campaignRepo.update(created.campaignId, {
         status: 'failed',
         error: 'preview consumido por otro request',
       });
-      throw new PreviewAlreadyConsumedError(input.previewId);
+      throw new PreviewAlreadyConsumedError(previewId);
     }
 
     // 7 — SEND-8/SEND-9, arranca el runner.
     const startResult = await this.campaignStarter.start(created.campaignId);
     if (!startResult.accepted) {
       throw new CampaignRunnerBusyError(created.campaignId, RUNNER_BUSY_RETRY_AFTER_SECONDS);
+    }
+
+    // fix wave F1 (F1) — envío ACEPTADO ⇒ esa plata ya está comprometida. El
+    // slot de cache del port no puede seguir sirviendo el saldo de antes al
+    // próximo `validate` (que le mostraría a la IA un crédito que ya no tiene).
+    // Best-effort: invalidar una cache JAMÁS puede voltear un envío aceptado.
+    try {
+      this.creditPort.invalidate();
+    } catch {
+      // no-op — el envío ya está aceptado y corriendo.
     }
 
     // fix wave F1 (F6) — el `console.log` estructurado que vivia aca se
@@ -359,6 +422,66 @@ export class SendExternalBulk {
     }
     if (!labels.some((l) => l.title === label)) {
       throw new ChatwootLabelNotFoundError(label);
+    }
+  }
+
+  /**
+   * twilio-credit-guard (D4.c, CG-SEND-2/CG-SEND-3) — gate fail-closed. A
+   * diferencia de `resolveCredit` de `ValidateExternalBulk` (advisory, NUNCA
+   * tira), acá CUALQUIER degradación (rates ilegible/caído, balance
+   * inalcanzable, `unknown`) CIERRA el guard. `ratesRepo.get()` NO tiene
+   * fallback a defaults: si el repo revienta, sube tal cual — no se adivina
+   * una tarifa para decidir si se gasta plata real.
+   */
+  private async assertSufficientCredit(category: string | undefined, count: number): Promise<void> {
+    // fix wave F1 (F7) — perilla PROPIA: apagada, el gate NO corre (ni siquiera
+    // se le pega al proveedor). Fail-OPEN por decisión EXPLÍCITA del operador.
+    if (!(await this.resolveCreditGuardEnabled())) {
+      return;
+    }
+
+    let credit;
+    try {
+      // fix wave F1 (F4) — `ratesRepo.get()` vivía FUERA de este try: un repo
+      // de tarifas caído subía el error CRUDO y el errorHandler lo mapeaba a
+      // un 500, cuando el contrato fail-closed de CG-SEND-3 dice 503
+      // CREDIT_UNAVAILABLE. Ahora TODA lectura/cálculo del gate está adentro:
+      // rates, balance y el estimador (que puede degradar por overflow, F6).
+      const rates = await this.ratesRepo.get();
+      // fix wave F1 (F1) — `fresh:true`: el flujo normal de 2 pasos es
+      // `validate` (que llena la cache de 60s) → `send` segundos después. Con
+      // la cache, el gate comparaba contra el saldo PRE-gasto. El camino
+      // ADVISORY (validate, GET /credit) SIGUE usando la cache: ahí un número
+      // de hace 30 segundos es informativo, no una decisión de plata.
+      const balance = await this.creditPort.getBalance({ fresh: true });
+      credit = estimateMessagingCost({ category, validCount: count, rates, balance });
+    } catch {
+      throw new CreditUnavailableError();
+    }
+
+    if (credit.unknown || credit.available === null || credit.estimatedCost === null) {
+      throw new CreditUnavailableError();
+    }
+    if (!credit.sufficient) {
+      throw new InsufficientCreditError({
+        available: credit.available,
+        estimatedCost: credit.estimatedCost,
+        currency: credit.currency,
+      });
+    }
+  }
+
+  /**
+   * fix wave F1 (F7) — al REVÉS del kill-switch: fila ausente o repo caído
+   * resuelven a ON. Una protección no se apaga sola porque la DB tosió; solo
+   * la apaga un operador poniendo la fila en `false` a propósito.
+   */
+  private async resolveCreditGuardEnabled(): Promise<boolean> {
+    try {
+      const flag = await this.featureFlags.get(CREDIT_GUARD_FLAG_KEY);
+      return flag ? flag.enabled === true : true;
+    } catch {
+      return true;
     }
   }
 

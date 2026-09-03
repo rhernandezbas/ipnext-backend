@@ -31,6 +31,9 @@ import { InMemoryTemplateMessagingGateway } from '@infrastructure/adapters/in-me
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryAuditEventRepository } from '@infrastructure/adapters/in-memory/InMemoryAuditEventRepository';
+import { InMemoryCreditBalancePort } from '@infrastructure/adapters/in-memory/InMemoryCreditBalancePort';
+import { InMemoryMessagingRatesConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryMessagingRatesConfigRepository';
+import { GetMessagingCredit } from '@application/use-cases/messaging/GetMessagingCredit';
 import { bootstrapApiMessagingUser } from '@infrastructure/bootstrap/bootstrapApiMessagingUser';
 import { FakeChatwootGateway } from '../helpers/FakeChatwootGateway';
 import type { CampaignSegmentSource, CampaignRecipientCandidate, CampaignSegmentFilter } from '@domain/ports/CustomerRepository';
@@ -83,6 +86,9 @@ interface BuildAppOpts {
   withAudit?: boolean;
   configPatch?: { maxPerRequest: number; maxPerDay: number };
   writeRateLimiter?: import('express').RequestHandler;
+  creditAmount?: string;
+  creditCurrency?: string;
+  creditFails?: boolean;
 }
 
 function buildApp(opts: BuildAppOpts = {}) {
@@ -102,15 +108,25 @@ function buildApp(opts: BuildAppOpts = {}) {
   const campaignStarter = new FakeCampaignStarter();
   campaignStarter.accepted = opts.runnerAccepted !== false;
 
+  const creditPort = new InMemoryCreditBalancePort({
+    amount: opts.creditAmount ?? '10000.0000',
+    currency: opts.creditCurrency ?? 'USD',
+    fetchedAt: NOW,
+    failNext: opts.creditFails ?? false,
+  });
+  const ratesRepo = new InMemoryMessagingRatesConfigRepository({ now: () => NOW });
   const validateExternalBulk = new ValidateExternalBulk(
     previewRepo, configRepo, campaignRepo, templatePort, segmentSource,
-    chatwootGateway, featureFlags, rbacUserRepo, () => NOW,
+    chatwootGateway, featureFlags, rbacUserRepo, creditPort, ratesRepo, () => NOW,
   );
   const sendExternalBulk = new SendExternalBulk(
     previewRepo, configRepo, campaignRepo, templatePort, chatwootGateway,
-    featureFlags, rbacUserRepo, createCampaign, campaignStarter, () => NOW,
+    featureFlags, rbacUserRepo, createCampaign, campaignStarter, creditPort, ratesRepo, () => NOW,
   );
   const getExternalBulkCampaign = new GetExternalBulkCampaign(campaignRepo, rbacUserRepo);
+  // twilio-credit-guard (D6) — MISMA instancia de creditPort/ratesRepo que
+  // validate/send (cache de 60s compartida), molde app.ts.
+  const getMessagingCredit = new GetMessagingCredit(creditPort, ratesRepo);
 
   const deps: ExternalMessagingRouterDeps = {
     validateExternalBulk,
@@ -121,6 +137,7 @@ function buildApp(opts: BuildAppOpts = {}) {
     createTemplate: new CreateTemplate(templatePort),
     submitTemplate: new SubmitTemplateForApproval(templatePort),
     featureFlags,
+    getMessagingCredit,
     // fix wave F1 (F7) — el limiter de ESCRITURA entra como dep del router y
     // solo cubre los POST; los GET (status/templates) quedan libres.
     ...(opts.writeRateLimiter ? { writeRateLimiter: opts.writeRateLimiter } : {}),
@@ -141,7 +158,7 @@ function buildApp(opts: BuildAppOpts = {}) {
   );
   app.use(errorHandler);
 
-  return { app, previewRepo, configRepo, campaignRepo, rbacUserRepo, templatePort, auditRepo };
+  return { app, previewRepo, configRepo, campaignRepo, rbacUserRepo, templatePort, auditRepo, creditPort, ratesRepo };
 }
 
 async function seedApiMessagingUser(rbacUserRepo: InMemoryRbacUserRepository): Promise<string> {
@@ -298,6 +315,80 @@ describe('POST /validate', () => {
     expect(res.body.valid).toHaveLength(1);
     expect(res.body.counts.valid).toBe(1);
   });
+
+  // ─── twilio-credit-guard (CG-VAL-1, integración vía HTTP de task 2.5) ────
+  it('crédito insuficiente ⇒ SIGUE 200, con warnings:["INSUFFICIENT_CREDIT"] en el body', async () => {
+    const { app, rbacUserRepo } = buildApp({ creditAmount: '0.0010' });
+    await seedApiMessagingUser(rbacUserRepo);
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send(VALID_BODY);
+    expect(res.status).toBe(200);
+    expect(res.body.credit.sufficient).toBe(false);
+    expect(res.body.warnings).toEqual(['INSUFFICIENT_CREDIT']);
+  });
+
+  it('balance inalcanzable ⇒ SIGUE 200, con warnings:["CREDIT_UNAVAILABLE"] y credit.unknown:true', async () => {
+    const { app, rbacUserRepo } = buildApp({ creditFails: true });
+    await seedApiMessagingUser(rbacUserRepo);
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send(VALID_BODY);
+    expect(res.status).toBe(200);
+    expect(res.body.credit.unknown).toBe(true);
+    expect(res.body.warnings).toEqual(['CREDIT_UNAVAILABLE']);
+  });
+});
+
+// ─── twilio-credit-guard (D5.a, CRED-1/CRED-2, CG-AUTH-1) ──────────────────
+describe('GET /credit', () => {
+  it('200 con {available, currency, fetchedAt, cached, rates:{...}}', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/credit')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      available: '10000.0000',
+      currency: 'USD',
+      cached: false,
+      rates: {
+        currency: 'USD',
+        utilityRate: '0.0120',
+        marketingRate: '0.0618',
+        authenticationRate: '0.0220',
+        providerFee: '0.0050',
+      },
+    });
+    expect(res.body.fetchedAt).toEqual(expect.any(String));
+  });
+
+  it('503 CREDIT_UNAVAILABLE cuando Twilio cae', async () => {
+    const { app } = buildApp({ creditFails: true });
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/credit')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CREDIT_UNAVAILABLE');
+  });
+
+  it('403 FEATURE_DISABLED con el flag OFF, sin llamar a Twilio (creditPort.calls===0)', async () => {
+    const { app, creditPort } = buildApp({ flagEnabled: false });
+    const res = await request(app)
+      .get('/api/external/v1/messaging/bulk/credit')
+      .set('X-Api-Key', DEDICATED_KEY);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FEATURE_DISABLED');
+    expect(creditPort.calls).toBe(0);
+  });
+
+  it('401 sin X-Api-Key', async () => {
+    const { app } = buildApp();
+    const res = await request(app).get('/api/external/v1/messaging/bulk/credit');
+    expect(res.status).toBe(401);
+  });
 });
 
 describe('POST /send', () => {
@@ -441,6 +532,36 @@ describe('POST /send', () => {
     expect(res.body).toMatchObject({ accepted: true, total: 1 });
     expect(res.body.campaignId).toEqual(expect.any(String));
   });
+
+  // ─── twilio-credit-guard (D5.b) ─────────────────────────────────────────
+  it('INSUFFICIENT_CREDIT → 422 con details:{available,estimatedCost,currency} armado EN LA RUTA, cero Campaign', async () => {
+    const { app, previewRepo, rbacUserRepo, campaignRepo } = buildApp({ creditAmount: '0.0010' });
+    await seedApiMessagingUser(rbacUserRepo);
+    const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/send')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .set('Idempotency-Key', 'key-1')
+      .send({ previewId: preview.id });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('INSUFFICIENT_CREDIT');
+    expect(res.body.details).toEqual({ available: '0.0010', estimatedCost: '0.0668', currency: 'USD' });
+    expect((await campaignRepo.list({})).total).toBe(0);
+  });
+
+  it('CREDIT_UNAVAILABLE → 503 (solo {error,code} del statusMap, sin bloque details) cuando Twilio cae', async () => {
+    const { app, previewRepo, rbacUserRepo } = buildApp({ creditFails: true });
+    await seedApiMessagingUser(rbacUserRepo);
+    const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/send')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .set('Idempotency-Key', 'key-1')
+      .send({ previewId: preview.id });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('CREDIT_UNAVAILABLE');
+    expect(res.body.details).toBeUndefined();
+  });
 });
 
 describe('GET /campaigns/:id (STATUS-1)', () => {
@@ -542,6 +663,25 @@ describe('AUDIT-1 — validate y send quedan auditados', () => {
     expect(page.total).toBeGreaterThanOrEqual(1);
     const sendEvent = page.items.find((e) => e.path.includes('/send'));
     expect(sendEvent?.statusCode).toBe(202);
+  });
+
+  // ─── twilio-credit-guard (CG-AUDIT-1) ────────────────────────────────────
+  it('send rechazado por INSUFFICIENT_CREDIT (422) queda auditado con el mismo criterio que cualquier otro rechazo', async () => {
+    const { app, previewRepo, rbacUserRepo, auditRepo } = buildApp({ withAudit: true, creditAmount: '0.0010' });
+    await seedApiMessagingUser(rbacUserRepo);
+    const preview = await previewRepo.create(buildPreviewData({ recipients: ONE_RECIPIENT }));
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/send')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .set('Idempotency-Key', 'key-1')
+      .send({ previewId: preview.id });
+    expect(res.status).toBe(422);
+    await new Promise((resolve) => setImmediate(resolve));
+    const page = await auditRepo.list({ page: 1, pageSize: 10 });
+    const row = page.items.find((e) => e.path.includes('/send'));
+    expect(row?.statusCode).toBe(422);
+    expect(row?.actorLogin).toBe(API_MESSAGING_USER_LOGIN);
+    expect(row?.actorId).toBeTruthy();
   });
 });
 
@@ -729,5 +869,139 @@ describe('fix wave F1 (F3) — codigo HTTP del replay', () => {
     expect(replay.status).toBe(200);
     expect(replay.body.campaignId).toBe(first.body.campaignId);
     expect(replay.body.status).toBe('pending');
+  });
+});
+
+/** fix wave F1 (F5) — N destinatarios DISTINTOS, para que `estimatedCost != unitCost`. */
+function nRecipientsE164(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    phoneE164: `+54911${20000000 + i}`,
+    name: `Cliente ${i}`,
+    variables: { '1': `Cliente ${i}` },
+  }));
+}
+
+/** fix wave F1 (F5) — el mismo lote, en el formato de wire que recibe `validate`. */
+function nRecipientsWire(n: number) {
+  return Array.from({ length: n }, (_, i) => ({
+    phone: `011 15-${String(2000 + Math.floor(i / 10)).padStart(4, '0')}-${String(1000 + (i % 10) * 7).padStart(4, '0')}`,
+    variables: { '1': `Cliente ${i}` },
+  }));
+}
+
+/**
+ * fix wave F1 (F5) — FIXTURES DEGENERADOS en el borde HTTP. El único test de
+ * `INSUFFICIENT_CREDIT → 422` usaba UN destinatario: `estimatedCost` y
+ * `unitCost` coincidían (0.0668), así que el `details` del 422 no probaba NADA
+ * sobre la multiplicación. Con N > 1 el número del wire es verificable a mano.
+ */
+describe('POST /send — INSUFFICIENT_CREDIT con N > 1 (fix wave F1, F5)', () => {
+  it('3 destinatarios ⇒ details.estimatedCost = 0.2004 (3 × 0.0668), no 0.0668', async () => {
+    const { app, previewRepo, rbacUserRepo, campaignRepo } = buildApp({ creditAmount: '0.2003' });
+    await seedApiMessagingUser(rbacUserRepo);
+    const preview = await previewRepo.create(buildPreviewData({ recipients: nRecipientsE164(3) }));
+
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/send')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .set('Idempotency-Key', 'key-n3')
+      .send({ previewId: preview.id });
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('INSUFFICIENT_CREDIT');
+    expect(res.body.details).toEqual({ available: '0.2003', estimatedCost: '0.2004', currency: 'USD' });
+    expect((await campaignRepo.list({})).total).toBe(0);
+  });
+
+  it('500 destinatarios ⇒ details.estimatedCost = 33.4000 EXACTO (500 × 0.0668)', async () => {
+    const { app, previewRepo, rbacUserRepo, campaignRepo } = buildApp({ creditAmount: '33.3999' });
+    await seedApiMessagingUser(rbacUserRepo);
+    const preview = await previewRepo.create(buildPreviewData({ recipients: nRecipientsE164(500) }));
+
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/send')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .set('Idempotency-Key', 'key-n500')
+      .send({ previewId: preview.id });
+
+    expect(res.status).toBe(422);
+    expect(res.body.details.estimatedCost).toBe('33.4000');
+    expect((await campaignRepo.list({})).total).toBe(0);
+  });
+
+  it('saldo EXACTAMENTE 33.4000 con 500 destinatarios ⇒ 202 (el borde no se cierra de más)', async () => {
+    const { app, previewRepo, rbacUserRepo } = buildApp({ creditAmount: '33.4000' });
+    await seedApiMessagingUser(rbacUserRepo);
+    const preview = await previewRepo.create(buildPreviewData({ recipients: nRecipientsE164(500) }));
+
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/send')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .set('Idempotency-Key', 'key-n500-ok')
+      .send({ previewId: preview.id });
+
+    expect(res.status).toBe(202);
+    expect(res.body.total).toBe(500);
+  });
+});
+
+/**
+ * fix wave F1 (F5/F8) — el bloque `credit` del 200 de `validate`, sobre un lote
+ * de N > 1, y la forma NULLABLE de `unitCost`/`estimatedCost` cuando el bloque
+ * viaja `unknown`. Contrato de wire que la skill/FE tienen que conocer.
+ */
+describe('POST /validate — bloque credit con N > 1 y campos nullables (fix wave F1, F5/F8)', () => {
+  it('3 destinatarios válidos ⇒ credit.estimatedCost = 0.2004 = 3 × credit.unitCost', async () => {
+    const { app, rbacUserRepo } = buildApp();
+    await seedApiMessagingUser(rbacUserRepo);
+
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ ...VALID_BODY, recipients: nRecipientsWire(3) });
+
+    expect(res.status).toBe(200);
+    expect(res.body.counts.valid).toBe(3);
+    expect(res.body.credit.unitCost).toBe('0.0668');
+    expect(res.body.credit.estimatedCost).toBe('0.2004');
+  });
+
+  it('balance inalcanzable ⇒ unitCost SIGUE siendo un número (la tarifa se leyó), estimatedCost también', async () => {
+    const { app, rbacUserRepo } = buildApp({ creditFails: true });
+    await seedApiMessagingUser(rbacUserRepo);
+
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ ...VALID_BODY, recipients: nRecipientsWire(3) });
+
+    expect(res.status).toBe(200);
+    expect(res.body.credit.unknown).toBe(true);
+    expect(res.body.credit.available).toBeNull();
+    expect(res.body.credit.unitCost).toBe('0.0668');
+    expect(res.body.credit.estimatedCost).toBe('0.2004');
+  });
+
+  it('tarifa ILEGIBLE ⇒ unitCost y estimatedCost viajan NULL en el wire, jamás "0.0000"', async () => {
+    const { app, rbacUserRepo, ratesRepo } = buildApp();
+    await seedApiMessagingUser(rbacUserRepo);
+    await ratesRepo.set({
+      currency: 'USD',
+      utilityRate: '0.0120',
+      marketingRate: 'not-a-number',
+      authenticationRate: '0.0220',
+      providerFee: '0.0050',
+    });
+
+    const res = await request(app)
+      .post('/api/external/v1/messaging/bulk/validate')
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body.credit.unknown).toBe(true);
+    expect(res.body.credit.unitCost).toBeNull();
+    expect(res.body.credit.estimatedCost).toBeNull();
+    expect(res.body.warnings).toEqual(['CREDIT_UNAVAILABLE']);
   });
 });

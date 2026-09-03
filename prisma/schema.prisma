@@ -4262,6 +4262,12 @@ model ExternalBulkPreview {
   expiresAt     DateTime                     // createdAt + 15 min
   consumedAt    DateTime?                    // seteado ATÓMICAMENTE al crear la Campaign (D8)
   campaignId    String?   @unique            // lazo 1:1 al resultado; SIN FK (el preview es efímero, D1.b)
+  // twilio-credit-guard (D1.b) — snapshot ADVISORY {available, currency, category,
+  // unitCost, estimatedCost, sufficient, categoryAssumed?, unknown?} de lo que se le
+  // mostró al que autorizó. FUERA del payloadHash (D1.c) — el balance es dato del
+  // proveedor, no input del caller. Nullable: previews vivos anteriores a este change
+  // siguen válidos sin backfill.
+  credit        Json?
   createdAt     DateTime  @default(now())
 
   @@index([expiresAt])                       // TTL lazy + purga acotada (D9)
@@ -4275,6 +4281,19 @@ model ExternalBulkMessagingConfig {
   maxPerRequest Int      @default(500)
   maxPerDay     Int      @default(2000)
   updatedAt     DateTime @updatedAt
+}
+
+// twilio-credit-guard (D1.a) — tarifas configurables por categoría de template +
+// fee del proveedor, editables sin redeploy. Molde EXACTO ExternalBulkMessagingConfig:
+// id fijo "singleton", una fila, upsert perezoso en el primer get()/set().
+model MessagingRatesConfig {
+  id                 String   @id @default("singleton")
+  currency           String   @default("USD")
+  utilityRate        Decimal  @default(0.0120) @db.Decimal(10, 4)
+  marketingRate      Decimal  @default(0.0618) @db.Decimal(10, 4)
+  authenticationRate Decimal  @default(0.0220) @db.Decimal(10, 4)
+  providerFee        Decimal  @default(0.0050) @db.Decimal(10, 4)
+  updatedAt          DateTime @updatedAt
 }
 
 // =============================================

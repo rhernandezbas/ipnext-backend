@@ -27,8 +27,13 @@ import type { GetTemplate } from '@application/use-cases/messaging/GetTemplate';
 import type { CreateTemplate } from '@application/use-cases/messaging/CreateTemplate';
 import type { SubmitTemplateForApproval } from '@application/use-cases/messaging/SubmitTemplateForApproval';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import type { GetMessagingCredit } from '@application/use-cases/messaging/GetMessagingCredit';
 import type { CreateTemplateInput as CreateTemplateHttpInput, SubmitTemplateInput } from '@application/dto/messaging-templates.dto';
-import { CampaignRunnerBusyError, FeatureExternalBulkDisabledError } from '@domain/errors/external-bulk-messaging';
+import {
+  CampaignRunnerBusyError,
+  FeatureExternalBulkDisabledError,
+  InsufficientCreditError,
+} from '@domain/errors/external-bulk-messaging';
 
 const FEATURE_FLAG_KEY = 'messaging-external-bulk-enabled';
 
@@ -95,6 +100,8 @@ export interface ExternalMessagingRouterDeps {
   submitTemplate: SubmitTemplateForApproval;
   /** TPL-0 — kill-switch gate para las 4 rutas de templates (D4.f, sin use case propio). */
   featureFlags: FeatureFlagRepository;
+  /** twilio-credit-guard (D5.a) — alimenta `GET /credit` (CRED-1/CRED-2). */
+  getMessagingCredit: GetMessagingCredit;
   /**
    * fix wave F1 (finding F7) — rate limiter de ESCRITURA, aplicado SOLO a los
    * POST. Antes vivia en el mount (`app.use(prefix, limiter, router)`), asi que
@@ -161,6 +168,31 @@ export function createExternalMessagingRouter(deps: ExternalMessagingRouterDeps)
         });
         return;
       }
+      // twilio-credit-guard (D5.b) — el `errorHandler` global solo serializa
+      // `{error, code}` de un DomainError: el `details` del 422 se arma ACÁ,
+      // mismo criterio que el bloque de arriba. `CreditUnavailableError` (503)
+      // no necesita nada extra — `{error, code}` del statusMap alcanzan.
+      if (err instanceof InsufficientCreditError) {
+        res.status(422).json({
+          error: err.message,
+          code: err.code,
+          details: { available: err.available, estimatedCost: err.estimatedCost, currency: err.currency },
+        });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  // ─── GET /credit (twilio-credit-guard D5.a, CRED-1/CRED-2) — ruta HERMANA
+  // de GET /campaigns/:id, sin writeRateLimiter (es una lectura). Kill-switch
+  // explícito ANTES de tocar Twilio, mismo molde que las rutas de templates. ──
+  router.get('/credit', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!(await isFeatureEnabled())) throw new FeatureExternalBulkDisabledError();
+      const result = await deps.getMessagingCredit.execute();
+      res.status(200).json(result);
+    } catch (err) {
       next(err);
     }
   });

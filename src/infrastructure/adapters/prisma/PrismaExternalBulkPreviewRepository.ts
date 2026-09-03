@@ -16,6 +16,7 @@ interface ExternalBulkPreviewRow {
   invalid: unknown;
   validCount: number;
   invalidCount: number;
+  credit: unknown;
   expiresAt: Date;
   consumedAt: Date | null;
   campaignId: string | null;
@@ -34,6 +35,7 @@ function toEntity(row: ExternalBulkPreviewRow): ExternalBulkPreview {
     invalid: (row.invalid as ExternalBulkPreview['invalid']) ?? [],
     validCount: row.validCount,
     invalidCount: row.invalidCount,
+    credit: (row.credit as ExternalBulkPreview['credit']) ?? null,
     expiresAt: row.expiresAt.toISOString(),
     consumedAt: row.consumedAt ? row.consumedAt.toISOString() : null,
     campaignId: row.campaignId ?? null,
@@ -68,6 +70,7 @@ export class PrismaExternalBulkPreviewRepository implements ExternalBulkPreviewR
         invalid: data.invalid,
         validCount: data.validCount,
         invalidCount: data.invalidCount,
+        credit: data.credit ?? null,
         expiresAt: new Date(data.expiresAt),
       },
     });
