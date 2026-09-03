@@ -135,6 +135,17 @@ Los cinco viven uno al lado del otro bajo `C:\Users\ronald\projects\ipnext\`.
 - Para backend sin UI todavia, basta el run verde en `gh` + el log del step de migraciones.
 - Para features con UI, ademas se verifica con **Playwright** contra la app real (`http://190.7.234.37:7778`, login admin): se recorre el flujo real (crear/editar/borrar) y se limpian los datos de prueba. **Credenciales del user de debug (`superadmin`) para ese login: en [`CREDENCIALES-LOCAL.md`](./CREDENCIALES-LOCAL.md) (gitignored, NO commiteado — la clave NUNCA va en este archivo) y en engram. La pagina "Gestion de red" (NAS/pools/sesiones) esta en `/admin/networking/routers/list`.**
 
+### Procesos de Node (jest / vitest / tsc) — NUNCA dejarlos colgados (INNEGOCIABLE, 2026-09-03)
+
+> **Incidente (2026-09-02):** un `npm test` lanzado en background que el harness reportó "killed" NO mató a `npm-cli.js test` → `jest.js` → `jest-worker/processChild.js`. Se relanzó tres veces "porque no terminaba" y quedaron **4 suites completas en paralelo (42 procesos node)** compitiendo por la CPU: ninguna terminó dentro del límite de 10 min y hasta un `--shard=1/3` tardó más que la suite entera sola. La suite del BE tarda ~10-14 min SOLA; bajo contención el ciclo se retroalimenta.
+>
+> **Reglas (aplican al orquestador Y a todo sub-agente que corra tests):**
+> 1. **Una sola suite completa por repo a la vez.** Antes de lanzar `npm test`/`npx vitest run`, verificar que no haya otra corriendo: `wmic process where "name='node.exe'" get CommandLine | rg -c 'jest|vitest'` debe dar 0. Si no da 0, NO relanzar.
+> 2. **"killed"/timeout del harness ≠ proceso muerto.** Ante un background que aparece como killed o un foreground que se pasa a background por timeout, ASUMIR que los workers siguen vivos. Matar SOLO los de tests antes de cualquier relanzada (script PowerShell): `Get-CimInstance Win32_Process -Filter "name='node.exe'" | Where-Object { $_.CommandLine -match 'jest|vitest' -or $_.CommandLine -match 'npm-cli\.js"? test' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }` y volver a contar hasta 0. **Nunca `taskkill /IM node.exe`**: mata también los MCP de Playwright/Chrome y cualquier `npm run dev`.
+> 3. **Cómo correr la suite completa sin que la mate el timeout:** en background con la salida a un archivo del scratchpad (`npm test > <scratch>/jest.log 2>&1 &`) y **pollear el archivo** en primer plano con sleeps cortos hasta que aparezca `Tests:`; o `--shard=i/N` en primer plano si cada shard cabe en 10 min. Los sub-agentes NO "esperan un monitor" y se van: leen el archivo y reportan los números exactos.
+> 4. **Al terminar cualquier tarea que haya lanzado tests, dejar el conteo en 0** y decirlo en el reporte ("jest_left=0"). Un agente que termina con workers vivos deja la CPU inservible para el siguiente gate.
+> 5. **Suite bajo contención no es una medición.** Si un gate tardó el doble que la vez anterior o dio timeouts raros, primero contar procesos; recién después leer los fallos.
+
 ### Testear el SEAM completo, no solo las puntas (lección #28/#27)
 
 Cuando un dato cruza capas (control FE → URL/query → ruta → use case → repo), los tests por capa pueden dar todos verde con la feature ROTA: los tests de ruta **mockean** el use case, los tests de filtros pegan **directo al repo**, y el passthrough del medio queda sin cobertura. Pasó dos veces el 2026-06-07:
