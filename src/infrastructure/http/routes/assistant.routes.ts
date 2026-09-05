@@ -82,6 +82,17 @@ const CreateIntentSchema = z.object({
   dataSourceKeys: z.array(z.string().min(1)).max(32).optional(),
   responseGuide: z.string().max(5000).optional(),
   actionKey: z.string().min(1),
+  // ai-assistant-cobranzas (D2) — labels de Chatwoot que `handoff` aplica.
+  labels: z.array(z.string().min(1).max(120)).max(32).optional(),
+  // ai-assistant-cobranzas (D5) — pre-chequeo determinístico. La restricción "sólo con
+  // actionKey:'handoff'" (CFG-2 modificado) la valida el use case, no zod: depende de OTRO
+  // campo del mismo body y de un `actionKey` efectivo que en el update puede venir del
+  // registro existente, no del request.
+  triggerPatterns: z.array(z.string().min(1).max(500)).max(32).optional(),
+  // ai-assistant-cobranzas (D10) — desasignar tras ejecutar la acción.
+  unassign: z.boolean().optional(),
+  // ai-assistant-cobranzas (D11) — rol estable para los selectores determinísticos.
+  roleKey: z.string().min(1).max(120).nullable().optional(),
 });
 
 const UpdateIntentSchema = z.object({
@@ -92,6 +103,10 @@ const UpdateIntentSchema = z.object({
   dataSourceKeys: z.array(z.string().min(1)).max(32).optional(),
   responseGuide: z.string().max(5000).optional(),
   actionKey: z.string().min(1).optional(),
+  labels: z.array(z.string().min(1).max(120)).max(32).optional(),
+  triggerPatterns: z.array(z.string().min(1).max(500)).max(32).optional(),
+  unassign: z.boolean().optional(),
+  roleKey: z.string().min(1).max(120).nullable().optional(),
 });
 
 /**

@@ -61,4 +61,17 @@ export interface UpdateBalanceAndInvoicesParams {
   /** `null` ⇒ no tocar el espejo de facturas (payload no autoritativo). */
   invoices: GrInvoice[] | null;
   at: Date;
+  /**
+   * ai-assistant-cobranzas (DAT-3/D8) — link "pagar todo junto", de
+   * `balance.paymentUrls.MercadoPago`. Se escribe en la MISMA transacción que el saldo y las
+   * facturas para que nunca divierja del saldo citado en el mismo mensaje del bot.
+   *
+   * Mismo molde que `UpdateAssistantProfileInput.classifierModel` (patch parcial): `undefined`
+   * ⇒ NO TOCAR `Client.grPaymentUrl` — éste es el caso de callers existentes que no conocen el
+   * campo, Y el de un payload sin `payments_url_saldos` (schema drift, DAT-3 scenario 2): el
+   * caller que arma estos params simplemente omite la key. `null` explícito ⇒ vaciar el link a
+   * propósito (GR confirmó que no hay uno). La implementación (4.5) decide cuál emitir según
+   * lo que trae el payload de GR.
+   */
+  paymentUrl?: string | null;
 }

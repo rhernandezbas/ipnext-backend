@@ -77,6 +77,29 @@ export interface FetchReceiptsResult {
 }
 
 /**
+ * ai-assistant-cobranzas (D9) — params for `cliente.recibos_hoy`: a LIVE, per-client GR call,
+ * NOT the global `fetchReceipts` delta sync. `grClienteId` is MANDATORY IN THE SIGNATURE
+ * (precedent `PortalPaymentsReader`) — an optional anchor would let a caller forget it and leak
+ * every client's receipts (PII by omission). Dates use the same `DD-MM-AAAA` convention as
+ * `fetchReceipts`/`fetchContractsModifiedSince`.
+ */
+export interface FetchClientReceiptsParams {
+  /** GR client id — REQUIRED, never optional (anti-leak anchor). */
+  grClienteId: string;
+  /** Lower bound, format "DD-MM-AAAA". */
+  fechaDesde: string;
+  /** Upper bound, format "DD-MM-AAAA". */
+  fechaHasta: string;
+}
+
+export interface FetchClientReceiptsResult {
+  /** Total rows matching the date range for this client (GR "resultados"). */
+  total: number;
+  /** Already excludes receipts with a REAL annulment, reusing `parseReceiptsResponse`. */
+  receipts: GrReceipt[];
+}
+
+/**
  * Upstream port for the Gestión Real external API. The adapter owns auth,
  * transport and payload normalization; the application layer only sees this.
  */
@@ -100,4 +123,11 @@ export interface GestionRealPort {
    * client al día), not a historical feed.
    */
   fetchReceipts(params: FetchReceiptsParams): Promise<FetchReceiptsResult>;
+  /**
+   * ai-assistant-cobranzas (D9) — `cliente.recibos_hoy`: live, per-client receipt lookup
+   * (action:recibos + cliente_id) used to verify a payment proof against GR in real time.
+   * NEVER a substitute for `fetchReceipts` (the global delta sync) — this is a separate,
+   * per-call, anchored path. Does NOT alter `fetchReceipts`/`FetchReceiptsParams`.
+   */
+  fetchClientReceipts(params: FetchClientReceiptsParams): Promise<FetchClientReceiptsResult>;
 }

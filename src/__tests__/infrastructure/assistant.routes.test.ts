@@ -104,8 +104,10 @@ describe('GET /api/assistant/catalogs', () => {
 
     const res = await request(app).get('/api/assistant/catalogs').expect(200);
 
-    expect(res.body.data.dataSources).toHaveLength(4);
-    expect(res.body.data.actions).toHaveLength(5);
+    // ai-assistant-cobranzas (D2/D8/D9) — +2 fuentes (cliente.facturas/cliente.recibos_hoy)
+    // y +1 acción (handoff), espejo de las 2 migraciones aditivas de este change.
+    expect(res.body.data.dataSources).toHaveLength(6);
+    expect(res.body.data.actions).toHaveLength(6);
   });
 
   it('D2: noc.cortes llega deshabilitada al FE', async () => {
@@ -710,7 +712,7 @@ describe('PATCH /api/assistant/catalogs/data-sources/:key', () => {
       .expect(400);
 
     const catalogs = await request(app).get('/api/assistant/catalogs');
-    expect(catalogs.body.data.dataSources).toHaveLength(4);
+    expect(catalogs.body.data.dataSources).toHaveLength(6);
   });
 
   it('togglear exige manage', async () => {

@@ -211,6 +211,7 @@ import { PrismaClientMirrorReadRepository } from '../adapters/prisma/PrismaClien
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { PrismaClientMirrorRepository } from '../adapters/prisma/PrismaClientMirrorRepository';
 import { GestionRealClient } from '../adapters/gestion-real/GestionRealClient';
+import type { GestionRealPort } from '@domain/ports/GestionRealPort';
 import { GetGestionRealSyncStatus } from '@application/use-cases/GetGestionRealSyncStatus';
 import { PrismaSyncStateRepository } from '../adapters/prisma/PrismaSyncStateRepository';
 import { PrismaMirrorCountsRepository } from '../adapters/prisma/PrismaMirrorCountsRepository';
@@ -1317,6 +1318,18 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
 
   // On-demand balance refresh collaborator — only wired when GR is configured
   let balanceRefresh: RefreshClientBalanceIfStale | undefined;
+  /**
+   * ai-assistant-cobranzas (6.2 / D9) — el MISMO `GestionRealClient` del refresh, expuesto
+   * para `cliente.recibos_hoy`.
+   *
+   * Es la MISMA instancia a propósito, no una nueva: los dos consumidores corren en el mismo
+   * camino caliente (dentro de un mensaje de WhatsApp) y ese carril ya está afinado
+   * (`maxRetries: 1`, `balanceRefreshTimeoutMs`). Un cliente propio para el bot volvería a los
+   * 3 reintentos con backoff del default — hasta ~16 s de llamadas huérfanas a GR por mensaje,
+   * que es justo lo que la fix wave F6 cerró. Pineado por identidad en
+   * `assistant-composition.test.ts`.
+   */
+  let grAssistantPort: GestionRealPort | undefined;
   // Read-only reconcile diagnostic — only wired when GR is configured (else route 503s).
   let reconcileGrClients: ReconcileGrClients | undefined;
   if (config.gestionReal.enabled && config.gestionReal.cuit && config.gestionReal.secret) {
@@ -1365,6 +1378,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       timeoutMs: config.gestionReal.balanceRefreshTimeoutMs,
     });
     reconcileGrClients = new ReconcileGrClients(grReconcileClient, new PrismaClientMirrorReadRepository());
+    grAssistantPort = grRefreshClient;
   }
 
   // Wire up use cases
@@ -3353,6 +3367,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // de esta línea la rama de refresco de `ClienteSaldoResolver` era código MUERTO en
     // prod — el bot podía citar un saldo stale sin intentar refrescarlo primero.
     // Pineado por P1 (`assistant-composition.test.ts`, boot real de `createApp()`).
+    // F1.5-C2 — `AssignConversation` se construye ANTES del motor porque ahora tiene DOS
+    // consumidores: el router de mensajería (agentes humanos) y el `unassign` del bot
+    // (ai-assistant-cobranzas D10/ACT-4). Una sola instancia: dos objetos con el mismo repo
+    // no romperían nada hoy, pero el día que este use case tenga estado (cache, dedupe) el
+    // bot y los humanos verían mundos distintos.
+    const assignConversation = new AssignConversation(conversationRepo, userLookupForScheduling, conversationEventRepo);
+
     const assistantEngine = composeAssistantEngine({
       conversationRepo,
       customerRepo: customerAdapter,
@@ -3361,9 +3382,25 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       setConversationArea: new SetConversationArea(conversationRepo, ticketAreaRepo, conversationEventRepo),
       setConversationStatus: new SetConversationStatus(conversationRepo, chatwootGateway, conversationEventRepo),
       listTasks,
-      threadReader: new ChatMessageThreadReader(chatMessageRepo),
+      // ai-assistant-cobranzas (6.2):
+      //  · 2º arg `chatAttachmentRepo` (D11/DAT-4) — sin el espejo de adjuntos,
+      //    `attachmentFilenames` queda vacío y la excepción del comprobante
+      //    (`comprobante_<op>.pdf`) NUNCA se activa: el pre-chequeo no tendría de dónde sacar
+      //    el número de operación. Misma instancia que el resto del bloque de mensajería.
+      //  · 3º arg `assistantSenderNames` (D4/SEC-6) — lista blanca de los nombres con los que
+      //    el bot aparece como remitente en el espejo. Viene de `ASSISTANT_SENDER_NAMES` y su
+      //    default es VACÍO: sin la env, todo saliente cuenta como agente humano y la guarda
+      //    queda del lado cauto (el bot se calla de más). Ver `config.assistant.senderNames`.
+      threadReader: new ChatMessageThreadReader(chatMessageRepo, chatAttachmentRepo, {
+        assistantSenderNames: config.assistant.senderNames,
+      }),
       clientResolver: new CustomerAssistantClientResolver(customerAdapter, customerAdapter),
       refreshBalance: balanceRefresh,
+      // D9 — `undefined` cuando GR no está configurado: la fuente `cliente.recibos_hoy` no se
+      // registra y el bot deriva, en vez de arriesgar un "no encontramos tu pago" sin datos.
+      gestionReal: grAssistantPort,
+      // D10/ACT-4 — el lado LOCAL del `unassign` (el de Chatwoot ya va por `chatwootGateway`).
+      assignConversation,
     });
 
     app.use('/api/messaging', createMessagingRouter(
@@ -3410,7 +3447,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // recapture) — sin duplicar wiring. `ticketAreaRepo`/`listTicketAreas` (línea
       // ~1081) también son las MISMAS instancias que /api/tickets/areas.
       // conversation-events (Ola 2) — 3er arg: registra assigned/unassigned / area_changed.
-      new AssignConversation(conversationRepo, userLookupForScheduling, conversationEventRepo),
+      assignConversation,
       new SetConversationArea(conversationRepo, ticketAreaRepo, conversationEventRepo),
       new ListAssignableUsers(rbacUserRepo, roleLookupForRecapture),
       listTicketAreas,

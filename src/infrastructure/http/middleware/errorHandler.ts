@@ -21,6 +21,9 @@ const statusMap: Record<string, number> = {
   // request que referencia algo que no existe en el catálogo.
   UNKNOWN_ASSISTANT_DATA_SOURCE: 400,
   UNKNOWN_ASSISTANT_ACTION: 400,
+  // ai-assistant-cobranzas (D5, CFG-2 modificado) — triggerPatterns sólo en intents `handoff`.
+  ASSISTANT_TRIGGER_PATTERNS_REQUIRE_HANDOFF: 400,
+  ASSISTANT_ROLE_KEY_CONFLICT: 400,
   // 409: el request es válido, pero el estado del sistema (sin eval registrado) lo bloquea.
   ASSISTANT_ACTION_REQUIRES_EVAL: 409,
   INVALID_ASSISTANT_EVAL_RUN: 422,

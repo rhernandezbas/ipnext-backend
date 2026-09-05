@@ -2,6 +2,8 @@ import {
   GestionRealPort,
   FetchClientsParams,
   FetchClientsResult,
+  FetchClientReceiptsParams,
+  FetchClientReceiptsResult,
   FetchContractsDeltaParams,
   FetchContractsDeltaResult,
   FetchReceiptsParams,
@@ -15,6 +17,7 @@ import {
   GrReceipt,
   GrServiceOrder,
 } from '@domain/entities/gestionReal';
+import { isRealAnnulment } from '@application/use-cases/finance/financeDates';
 
 /**
  * Test double for the GR upstream. Holds an in-memory client/contract dataset
@@ -44,6 +47,10 @@ export class InMemoryGestionRealPort implements GestionRealPort {
   receipts: GrReceipt[] = [];
   /** Records every fetchReceipts call for assertions. */
   receiptsCalls: FetchReceiptsParams[] = [];
+  /** ai-assistant-cobranzas (D9) — records every per-client `fetchClientReceipts` call. */
+  clientReceiptsCalls: FetchClientReceiptsParams[] = [];
+  /** When set, `fetchClientReceipts` throws it — el carril `recibos_no_disponibles` (D9). */
+  clientReceiptsError?: Error;
 
   async fetchClients(params: FetchClientsParams): Promise<FetchClientsResult> {
     this.calls.push(params);
@@ -136,6 +143,36 @@ export class InMemoryGestionRealPort implements GestionRealPort {
     });
     const page = matched.slice(p.offset, p.offset + p.cantidad);
     return { total: matched.length, receipts: page };
+  }
+
+  /**
+   * ai-assistant-cobranzas (4.7 / D9) — gemelo de la llamada per-cliente EN VIVO.
+   *
+   * Replica campo a campo la semántica del adapter real, incluidos los DOS filtros que en el
+   * real no son opcionales: el ancla por `cliente_id` (sin ella GR devuelve los recibos de
+   * todos — fuga de PII por omisión) y la exclusión de los ANULADOS. Un twin más permisivo
+   * dejaría verde un resolver que en producción cuenta un recibo dado de baja como un pago.
+   */
+  async fetchClientReceipts(p: FetchClientReceiptsParams): Promise<FetchClientReceiptsResult> {
+    this.clientReceiptsCalls.push(p);
+    if (this.clientReceiptsError) throw this.clientReceiptsError;
+
+    const from = parseGrDate(p.fechaDesde);
+    const toExclusive = parseGrDate(p.fechaHasta) + 24 * 60 * 60 * 1000;
+
+    const matched = this.receipts.filter((r) => {
+      if (r.clienteGrId !== p.grClienteId) return false;
+      if (!r.fechaRecibo) return false;
+      const ts = parseGrDateTime(r.fechaRecibo);
+      return ts >= from && ts < toExclusive;
+    });
+
+    return {
+      // `total` = lo que GR dice haber encontrado, ANTES del filtro de anulados (igual que
+      // el `resultados` del real).
+      total: matched.length,
+      receipts: matched.filter((r) => !isRealAnnulment(r.fechaAnulacion, r.grReceiptId)),
+    };
   }
 }
 

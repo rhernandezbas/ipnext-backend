@@ -576,6 +576,22 @@ export class HttpChatwootGateway implements ChatwootGateway {
       });
     });
   }
+
+  /**
+   * ai-assistant-cobranzas (4.10 / D10 / ACT-4) — desasigna en Chatwoot.
+   *
+   * `assignee_id: 0` (el cero, no `null` ni el campo ausente) es la forma en que la API de
+   * Chatwoot expresa "sin asignar" en `/assignments`: mandar `null` deja la asignación como
+   * está, que sería un no-op silencioso — la peor variante posible acá, porque el motor
+   * reportaría "desasignada" sobre una conversación que el agente sigue viendo suya.
+   */
+  async unassignConversation(chatwootConversationId: number): Promise<void> {
+    await this.call(() =>
+      this.http.post(this.accountPath(`/conversations/${chatwootConversationId}/assignments`), {
+        assignee_id: 0,
+      }),
+    );
+  }
 }
 
 /**

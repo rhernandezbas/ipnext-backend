@@ -37,6 +37,12 @@ export const ASSISTANT_DATA_SOURCE_SEED: ReadonlyArray<{
   { key: 'cliente.servicio', label: 'Estado del servicio y plan', enabled: true },
   { key: 'os.abiertas', label: 'Órdenes de servicio abiertas', enabled: true },
   { key: 'noc.cortes', label: 'Cortes activos en la zona', enabled: false },
+  // ai-assistant-cobranzas (D8) — espejo de la migración
+  // 20261114000000_assistant_cobranzas_labels_triggers.
+  { key: 'cliente.facturas', label: 'Facturas y links de pago', enabled: true },
+  // ai-assistant-cobranzas (D9) — espejo de la migración
+  // 20261115000000_assistant_cobranzas_unassign_rolekey.
+  { key: 'cliente.recibos_hoy', label: 'Recibos de hoy y match de comprobante', enabled: true },
 ];
 
 /**
@@ -63,6 +69,10 @@ export const ASSISTANT_ACTION_SEED: ReadonlyArray<{
   // 🔴 Marcar resuelta una conversación cuyo pedido seguía vivo entierra el reclamo y el
   // cliente queda sin respuesta. Requiere eval registrado (EVAL-2).
   { key: 'resolve_conversation', label: 'Marcar la conversación como resuelta', riskLevel: 'red' },
+  // ai-assistant-cobranzas (D2) — espejo de la migración
+  // 20261114000000_assistant_cobranzas_labels_triggers. Deriva con etiqueta y NUNCA le habla
+  // al cliente (ver `ai-assistant` ACT-3).
+  { key: 'handoff', label: 'Derivar a un humano con etiqueta', riskLevel: 'green' },
 ];
 
 export interface AssistantCatalogRepository {

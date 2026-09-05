@@ -23,6 +23,7 @@ function makeGateway(overrides: Partial<ChatwootGateway> = {}): ChatwootGateway 
     listAccountLabels: jest.fn().mockResolvedValue([]),
     createAccountLabel: jest.fn(),
     addConversationLabels: jest.fn(),
+    unassignConversation: jest.fn(),
     ...overrides,
   };
 }

@@ -41,6 +41,10 @@ interface IntentRow {
   dataSourceKeys: string[];
   responseGuide: string;
   actionKey: string;
+  labels: string[];
+  triggerPatterns: string[];
+  unassign: boolean;
+  roleKey: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -72,6 +76,11 @@ function toIntent(row: IntentRow): AssistantIntent {
     dataSourceKeys: [...row.dataSourceKeys],
     responseGuide: row.responseGuide,
     actionKey: row.actionKey,
+    // ai-assistant-cobranzas (D2/D5/D10/D11) — passthrough directo de las columnas aditivas.
+    labels: [...row.labels],
+    triggerPatterns: [...row.triggerPatterns],
+    unassign: row.unassign,
+    roleKey: row.roleKey,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -176,6 +185,10 @@ export class PrismaAssistantIntentRepository implements AssistantIntentRepositor
         dataSourceKeys: input.dataSourceKeys ?? [],
         responseGuide: input.responseGuide ?? '',
         actionKey: input.actionKey,
+        ...(input.labels === undefined ? {} : { labels: input.labels }),
+        ...(input.triggerPatterns === undefined ? {} : { triggerPatterns: input.triggerPatterns }),
+        ...(input.unassign === undefined ? {} : { unassign: input.unassign }),
+        ...(input.roleKey === undefined ? {} : { roleKey: input.roleKey }),
       },
     });
     return toIntent(row as IntentRow);
@@ -195,6 +208,10 @@ export class PrismaAssistantIntentRepository implements AssistantIntentRepositor
         ...(input.dataSourceKeys === undefined ? {} : { dataSourceKeys: input.dataSourceKeys }),
         responseGuide: input.responseGuide,
         actionKey: input.actionKey,
+        ...(input.labels === undefined ? {} : { labels: input.labels }),
+        ...(input.triggerPatterns === undefined ? {} : { triggerPatterns: input.triggerPatterns }),
+        unassign: input.unassign,
+        ...(input.roleKey === undefined ? {} : { roleKey: input.roleKey }),
       },
     });
     return toIntent(row as IntentRow);

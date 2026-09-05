@@ -449,3 +449,307 @@ describe('composeAssistantEngine — pin de tipos de ComposeAssistantEngineDeps.
     expect(typeof wrongType.refreshBalance).toBe('string');
   });
 });
+
+/**
+ * ai-assistant-cobranzas (Lote F 6.1 / Lote G3 6.3) — composición de las fuentes nuevas.
+ *
+ * ⚠️ **Por qué estos pins son de RUNTIME y no de texto.** Todo el batch anterior
+ * (`ClienteFacturasResolver`, `ClienteRecibosHoyResolver`, `PrismaAssistantInvoicesReader`,
+ * `fetchClientReceipts`, el `unassign` de dos lados, la lista blanca de `senderName`) está
+ * verde en sus tests de unidad y era, hasta acá, **INERTE en producción**: nadie lo registraba
+ * ni lo inyectaba. Es exactamente la lección "feature sin perilla = inerte" y el bug W6 otra
+ * vez. Un `expect(SOURCE).toContain(...)` lo satisface un comentario; estos tests construyen
+ * la composición REAL y miran las instancias que llegan a cada constructor.
+ */
+describe('composición ai-assistant-cobranzas — fuentes nuevas registradas (6.1 / 6.3)', () => {
+  const ORIGINAL_ENV = process.env;
+  const REGISTRY_PATH = '../../infrastructure/adapters/assistant/AssistantDataSourceRegistryImpl';
+  const SALDO_PATH = '../../infrastructure/adapters/assistant/ClienteSaldoResolver';
+  const FACTURAS_PATH = '../../infrastructure/adapters/assistant/ClienteFacturasResolver';
+  const RECIBOS_PATH = '../../infrastructure/adapters/assistant/ClienteRecibosHoyResolver';
+  const GATEWAY_PATH = '../../infrastructure/adapters/assistant/ChatwootAssistantConversationGateway';
+
+  const baseEnv = {
+    SPLYNX_API_URL: 'http://x',
+    SPLYNX_API_KEY: 'k',
+    SPLYNX_API_SECRET: 's',
+    JWT_SECRET: 'j',
+    PORT: '3000',
+  };
+
+  function fakeDeps(extra: Record<string, unknown> = {}) {
+    return {
+      conversationRepo: { marker: 'conversationRepo' },
+      customerRepo: { marker: 'customerRepo' },
+      chatwootGateway: { marker: 'chatwootGateway' },
+      sendMessage: { marker: 'sendMessage' },
+      setConversationArea: {},
+      setConversationStatus: {},
+      listTasks: {},
+      threadReader: { marker: 'threadReader' },
+      clientResolver: {},
+      refreshBalance: { execute: jest.fn() },
+      ...extra,
+    };
+  }
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+    for (const p of [REGISTRY_PATH, SALDO_PATH, FACTURAS_PATH, RECIBOS_PATH, GATEWAY_PATH]) {
+      jest.dontMock(p);
+    }
+    jest.resetModules();
+  });
+
+  it('6.1/6.3 — el registry expone cliente.facturas y cliente.recibos_hoy junto a las 3 fuentes viejas', () => {
+    jest.resetModules();
+    process.env = { ...ORIGINAL_ENV, ...baseEnv };
+
+    let registered: Array<{ key: string }> = [];
+    jest.doMock(REGISTRY_PATH, () => ({
+      AssistantDataSourceRegistryImpl: class {
+        constructor(resolvers: Array<{ key: string }>) {
+          registered = resolvers;
+        }
+        get() {
+          return undefined;
+        }
+      },
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { composeAssistantEngine } = require('../../infrastructure/http/composeAssistantEngine');
+    composeAssistantEngine(fakeDeps({ gestionReal: { fetchClientReceipts: jest.fn() } }));
+
+    expect(registered.map((r) => r.key).sort()).toEqual([
+      'cliente.facturas',
+      'cliente.recibos_hoy',
+      'cliente.saldo',
+      'cliente.servicio',
+      'os.abiertas',
+    ]);
+  });
+
+  it('6.1 (pin D8) — ClienteFacturasResolver recibe LA MISMA instancia de refreshBalance que cliente.saldo, y un PrismaAssistantInvoicesReader real', () => {
+    jest.resetModules();
+    process.env = { ...ORIGINAL_ENV, ...baseEnv };
+
+    const saldoSpy = jest.fn();
+    const facturasSpy = jest.fn();
+    jest.doMock(SALDO_PATH, () => ({
+      ClienteSaldoResolver: class {
+        readonly key = 'cliente.saldo';
+        constructor(...args: unknown[]) {
+          saldoSpy(...args);
+        }
+        async resolve() {
+          return {};
+        }
+      },
+    }));
+    jest.doMock(FACTURAS_PATH, () => ({
+      ClienteFacturasResolver: class {
+        readonly key = 'cliente.facturas';
+        constructor(...args: unknown[]) {
+          facturasSpy(...args);
+        }
+        async resolve() {
+          return {};
+        }
+      },
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { composeAssistantEngine } = require('../../infrastructure/http/composeAssistantEngine');
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { PrismaAssistantInvoicesReader } = require('../../infrastructure/adapters/prisma/PrismaAssistantInvoicesReader');
+
+    const deps = fakeDeps();
+    composeAssistantEngine(deps);
+
+    expect(facturasSpy).toHaveBeenCalledTimes(1);
+    const [customers, invoices, refresh] = facturasSpy.mock.calls[0];
+    expect(customers).toBe(deps.customerRepo);
+    expect(invoices).toBeInstanceOf(PrismaAssistantInvoicesReader);
+    // ⚠️ EL PIN de D8: identidad, no tipo. Dos instancias de RefreshClientBalanceIfStale ⇒
+    // dos vuelos a GR en la misma corrida ⇒ saldo y facturas de payloads distintos.
+    expect(refresh).toBe(deps.refreshBalance);
+    expect(saldoSpy.mock.calls[0][1]).toBe(refresh);
+  });
+
+  it('6.3 — ClienteRecibosHoyResolver recibe el MISMO GestionRealPort y el MISMO threadReader del motor', () => {
+    jest.resetModules();
+    process.env = { ...ORIGINAL_ENV, ...baseEnv };
+
+    const recibosSpy = jest.fn();
+    jest.doMock(RECIBOS_PATH, () => ({
+      ClienteRecibosHoyResolver: class {
+        readonly key = 'cliente.recibos_hoy';
+        constructor(...args: unknown[]) {
+          recibosSpy(...args);
+        }
+        async resolve() {
+          return {};
+        }
+      },
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { composeAssistantEngine } = require('../../infrastructure/http/composeAssistantEngine');
+    const gr = { fetchClientReceipts: jest.fn() };
+    const deps = fakeDeps({ gestionReal: gr });
+    composeAssistantEngine(deps);
+
+    expect(recibosSpy).toHaveBeenCalledTimes(1);
+    const [customers, port, thread] = recibosSpy.mock.calls[0];
+    expect(customers).toBe(deps.customerRepo);
+    expect(port).toBe(gr);
+    // El hilo del resolver es el MISMO puerto angosto del motor (SEC-1): un segundo lector
+    // con otra config leería el adjunto con otras reglas.
+    expect(thread).toBe(deps.threadReader);
+  });
+
+  it('6.3 (D9) — sin GestionRealPort, cliente.recibos_hoy NO se registra (mejor ausente que respondiendo "no encontramos tu pago")', () => {
+    jest.resetModules();
+    process.env = { ...ORIGINAL_ENV, ...baseEnv };
+
+    let registered: Array<{ key: string }> = [];
+    jest.doMock(REGISTRY_PATH, () => ({
+      AssistantDataSourceRegistryImpl: class {
+        constructor(resolvers: Array<{ key: string }>) {
+          registered = resolvers;
+        }
+        get() {
+          return undefined;
+        }
+      },
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { composeAssistantEngine } = require('../../infrastructure/http/composeAssistantEngine');
+    composeAssistantEngine(fakeDeps());
+
+    expect(registered.map((r) => r.key)).not.toContain('cliente.recibos_hoy');
+    // Control: el resto SÍ está — sin esto el test pasaría con un registry vacío.
+    expect(registered.map((r) => r.key)).toContain('cliente.facturas');
+  });
+
+  it('6.3 (D10/ACT-4) — el gateway recibe el AssignConversation real, no un stub: unassign espeja los DOS lados', () => {
+    jest.resetModules();
+    process.env = { ...ORIGINAL_ENV, ...baseEnv };
+
+    const gatewaySpy = jest.fn();
+    jest.doMock(GATEWAY_PATH, () => ({
+      ChatwootAssistantConversationGateway: class {
+        constructor(...args: unknown[]) {
+          gatewaySpy(...args);
+        }
+      },
+    }));
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { composeAssistantEngine } = require('../../infrastructure/http/composeAssistantEngine');
+    const assignConversation = { execute: jest.fn() };
+    const deps = fakeDeps({ assignConversation });
+    composeAssistantEngine(deps);
+
+    expect(gatewaySpy).toHaveBeenCalledTimes(1);
+    const args = gatewaySpy.mock.calls[0];
+    expect(args[0]).toBe(deps.conversationRepo);
+    expect(args[4]).toBe(deps.chatwootGateway);
+    // 6º arg — sin esto `unassign` desasigna sólo en Chatwoot y el espejo local queda mintiendo.
+    expect(args[5]).toBe(assignConversation);
+  });
+});
+
+/**
+ * ai-assistant-cobranzas (6.2) — boot REAL de `createApp()`: lo que app.ts LE DA al motor.
+ * Complementa a los tests de arriba (que prueban qué hace `composeAssistantEngine` con lo que
+ * recibe) cerrando el camino entero app.ts → compose → resolvers.
+ */
+describe('composition root — 6.2: app.ts inyecta gestionReal, assignConversation y la lista blanca de senders', () => {
+  const ORIGINAL_ENV = process.env;
+  const ENGINE_MODULE_PATH = '../../infrastructure/http/composeAssistantEngine';
+
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+    jest.dontMock(ENGINE_MODULE_PATH);
+    jest.resetModules();
+  });
+
+  function boot(env: Record<string, string>): Record<string, unknown> | undefined {
+    jest.resetModules();
+    let capturedDeps: Record<string, unknown> | undefined;
+    jest.doMock(ENGINE_MODULE_PATH, () => ({
+      composeAssistantEngine: (deps: Record<string, unknown>) => {
+        capturedDeps = deps;
+        return {};
+      },
+    }));
+    process.env = {
+      ...process.env,
+      SPLYNX_API_URL: 'http://x',
+      SPLYNX_API_KEY: 'k',
+      SPLYNX_API_SECRET: 's',
+      JWT_SECRET: 'j',
+      PORT: '3000',
+      ...env,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createApp } = require('../../infrastructure/http/app');
+    createApp();
+    return capturedDeps;
+  }
+
+  const GR_ENV = {
+    GR_SYNC_ENABLED: 'true',
+    GR_CUIT: '30-12345678-9',
+    GR_SECRET: 'a-secret',
+  };
+
+  it('6.2 — con GR configurado, deps.gestionReal es EL MISMO GestionRealClient del refresh (no un segundo cliente)', () => {
+    process.env = { ...ORIGINAL_ENV };
+    const deps = boot(GR_ENV);
+    expect(deps?.gestionReal).toBeDefined();
+    // Identidad: el carril del bot ya está afinado (maxRetries 1, timeout del refresh).
+    // Un cliente nuevo acá volvería a los 3 reintentos con backoff dentro del camino caliente.
+    const refresh = deps?.refreshBalance as { gr: unknown };
+    expect(deps?.gestionReal).toBe(refresh.gr);
+  });
+
+  it('6.2 control — SIN env de GR, deps.gestionReal es undefined (el pin de arriba no discriminaría sin esto)', () => {
+    process.env = { ...ORIGINAL_ENV };
+    delete process.env.GR_SYNC_ENABLED;
+    delete process.env.GR_CUIT;
+    delete process.env.GR_SECRET;
+    const deps = boot({});
+    expect(deps).toBeDefined();
+    expect(deps?.gestionReal).toBeUndefined();
+  });
+
+  it('6.2 — deps.assignConversation es una instancia REAL de AssignConversation', () => {
+    process.env = { ...ORIGINAL_ENV };
+    const deps = boot(GR_ENV);
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { AssignConversation } = require('../../application/use-cases/messaging/AssignConversation');
+    expect(deps?.assignConversation).toBeInstanceOf(AssignConversation);
+  });
+
+  it('6.2 (SEC-6) — ASSISTANT_SENDER_NAMES llega al ChatMessageThreadReader como lista blanca normalizada', () => {
+    process.env = { ...ORIGINAL_ENV };
+    const deps = boot({ ...GR_ENV, ASSISTANT_SENDER_NAMES: 'Asistente IPNEXT, Bot IA ' });
+    const reader = deps?.threadReader as { assistantSenders: Set<string>; attachments?: unknown };
+    expect(reader.assistantSenders).toBeInstanceOf(Set);
+    expect([...reader.assistantSenders].sort()).toEqual(['asistente ipnext', 'bot ia']);
+    // D11 — sin el espejo de adjuntos, la excepción del comprobante nunca se activa.
+    expect(reader.attachments).toBeDefined();
+  });
+
+  it('6.2 control (SEC-6) — sin ASSISTANT_SENDER_NAMES la lista queda VACÍA: el lado cauto (todo saliente = humano)', () => {
+    process.env = { ...ORIGINAL_ENV };
+    delete process.env.ASSISTANT_SENDER_NAMES;
+    const deps = boot({ ...GR_ENV });
+    const reader = deps?.threadReader as { assistantSenders: Set<string> };
+    expect(reader.assistantSenders.size).toBe(0);
+  });
+});

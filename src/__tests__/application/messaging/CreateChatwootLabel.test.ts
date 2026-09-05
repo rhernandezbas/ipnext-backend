@@ -35,6 +35,7 @@ function makeGateway(overrides: Partial<ChatwootGateway> = {}): ChatwootGateway 
       async (params: { title: string; color: string }): Promise<ChatwootLabelDto> => ({ ...params }),
     ),
     addConversationLabels: jest.fn(),
+    unassignConversation: jest.fn(),
     ...overrides,
   };
 }

@@ -41,6 +41,14 @@ export interface CreateAssistantIntentInput {
   dataSourceKeys?: string[];
   responseGuide?: string;
   actionKey: string;
+  /** ai-assistant-cobranzas (D2) — nace `[]` si se omite. */
+  labels?: string[];
+  /** ai-assistant-cobranzas (D5) — nace `[]` si se omite. Validado por CFG-2 en el use case. */
+  triggerPatterns?: string[];
+  /** ai-assistant-cobranzas (D10) — nace `false` si se omite. */
+  unassign?: boolean;
+  /** ai-assistant-cobranzas (D11) — nace `null` si se omite. */
+  roleKey?: string | null;
 }
 
 export interface UpdateAssistantIntentInput {
@@ -51,6 +59,14 @@ export interface UpdateAssistantIntentInput {
   dataSourceKeys?: string[];
   responseGuide?: string;
   actionKey?: string;
+  /** ai-assistant-cobranzas (D2) — `undefined` = no tocar. */
+  labels?: string[];
+  /** ai-assistant-cobranzas (D5) — `undefined` = no tocar. Validado por CFG-2 en el use case. */
+  triggerPatterns?: string[];
+  /** ai-assistant-cobranzas (D10) — `undefined` = no tocar. */
+  unassign?: boolean;
+  /** ai-assistant-cobranzas (D11) — `undefined` = no tocar; `null` = limpiar. */
+  roleKey?: string | null;
 }
 
 export interface AssistantProfileRepository {

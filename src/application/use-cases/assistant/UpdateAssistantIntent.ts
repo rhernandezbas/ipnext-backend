@@ -5,7 +5,7 @@ import {
   AssistantIntentNotFoundError,
 } from '@domain/errors/assistant';
 import { toAssistantIntentDto, type AssistantIntentDto } from '@application/dto/assistant.dto';
-import { assertCatalogKeysExist } from './CreateAssistantIntent';
+import { assertCatalogKeysExist, assertRoleKeyIsFree, assertTriggerPatternsAllowed } from './CreateAssistantIntent';
 
 export interface UpdateAssistantIntentCommand {
   name?: string;
@@ -15,6 +15,14 @@ export interface UpdateAssistantIntentCommand {
   dataSourceKeys?: string[];
   responseGuide?: string;
   actionKey?: string;
+  /** ai-assistant-cobranzas (D2) — `undefined` = no tocar. */
+  labels?: string[];
+  /** ai-assistant-cobranzas (D5) — `undefined` = no tocar. Validado por CFG-2 (ver abajo). */
+  triggerPatterns?: string[];
+  /** ai-assistant-cobranzas (D10) — `undefined` = no tocar. */
+  unassign?: boolean;
+  /** ai-assistant-cobranzas (D11) — `undefined` = no tocar; `null` = limpiar. */
+  roleKey?: string | null;
 }
 
 /**
@@ -40,13 +48,28 @@ export class UpdateAssistantIntent {
     }
 
     await assertCatalogKeysExist(this.catalog, command.dataSourceKeys, command.actionKey);
+    // CFG-2 (D5) — valida el resultado EFECTIVO del patch, no sólo lo que este request toca:
+    // cambiar `actionKey` a uno no-handoff mientras quedan `triggerPatterns` vigentes de un
+    // patch anterior es el MISMO incumplimiento que setearlos ahora.
+    const effectiveActionKey = command.actionKey ?? existing.actionKey;
+    const effectiveTriggerPatterns = command.triggerPatterns ?? existing.triggerPatterns;
+    assertTriggerPatternsAllowed(effectiveTriggerPatterns, effectiveActionKey);
 
     // El rename tiene que respetar `@@unique([profileId, name])`, y no chocar consigo mismo.
-    if (command.name !== undefined && command.name !== existing.name) {
+    // CFG-2 (D11) — y el `roleKey` tiene que seguir siendo único DENTRO del perfil: el
+    // selector 4b resuelve por rol y se queda con la primera fila que matchea.
+    const needsSiblings =
+      (command.name !== undefined && command.name !== existing.name) || command.roleKey !== undefined;
+    if (needsSiblings) {
       const siblings = await this.intents.listByProfileId(existing.profileId);
-      if (siblings.some((i) => i.id !== id && i.name === command.name)) {
+      if (
+        command.name !== undefined &&
+        command.name !== existing.name &&
+        siblings.some((i) => i.id !== id && i.name === command.name)
+      ) {
         throw new AssistantIntentNameConflictError();
       }
+      assertRoleKeyIsFree(command.roleKey, siblings, id);
     }
 
     const updated = await this.intents.update(id, command);

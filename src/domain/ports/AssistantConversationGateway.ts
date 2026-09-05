@@ -37,6 +37,19 @@ export interface AssistantConversationGateway {
    * pedido del cliente seguía vivo, esto entierra el reclamo y nadie se entera.
    */
   resolve(conversationId: string): Promise<void>;
+
+  /**
+   * 🟢 ai-assistant-cobranzas (D10/ACT-4) — desasignar la conversación DESPUÉS de ejecutar la
+   * acción (`whatsapp_reply`, `private_note` o `handoff`), cuando `intent.unassign` es `true`.
+   * La implementación MUST desasignar en LOS DOS LADOS donde vive la asignación: el espejo
+   * local (`Conversation.assigneeId`, delegando en el use case humano `AssignConversation` con
+   * `assigneeId: null` — `AssignConversation` NUNCA llama a Chatwoot, verificado) Y Chatwoot
+   * (`POST /conversations/:id/assignments {assignee_id: 0}`), porque los agentes trabajan en
+   * Chatwoot y la guarda SEC-6 lee `conversation.meta.assignee` del payload de Chatwoot.
+   * Desasignar en uno solo de los dos lados es incumplimiento. Best-effort (`safely`): un
+   * fallo NUNCA tumba una respuesta ya enviada ni la nota privada, y queda logueado.
+   */
+  unassign(conversationId: string): Promise<void>;
 }
 
 /** Labels canónicos del rastro en Chatwoot (D11). No configurables: son el contrato visual. */

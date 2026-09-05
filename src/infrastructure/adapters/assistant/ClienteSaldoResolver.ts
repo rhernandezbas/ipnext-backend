@@ -116,7 +116,20 @@ export class ClienteSaldoResolver implements AssistantDataSourceResolver {
         estadoCliente: customer.status,
         // Sólo el crédito lleva guía: es el único caso donde queda algo sin
         // responder ("¿cuánto tengo a favor?") y el bot no lo puede decir.
-        ...(customer.balanceDue < 0 ? { guia: GUIA_SALDO_A_FAVOR } : {}),
+        ...(customer.balanceDue < 0
+          ? {
+              guia: GUIA_SALDO_A_FAVOR,
+              /**
+               * fix wave C4 — **hecho INTERNO** (prefijo `_`): el importe del crédito, en
+               * positivo. Lo consume SÓLO el renderizado determinístico del motor
+               * (`renderBalanceSignMessage`, anexado DESPUÉS de SEC-4) para poder cumplir
+               * RSP-1 "mencioná el saldo a favor". `toPublicFacts` lo saca antes del prompt
+               * y antes del whitelist del verificador, así que el peligro que cerró FW2-1
+               * —"tenés una deuda de 5000" sobre plata a favor, verificada— sigue cerrado.
+               */
+              _aFavor: Math.abs(customer.balanceDue),
+            }
+          : {}),
       };
     }
 

@@ -48,6 +48,7 @@ class RawPayloadGestionRealPort implements GestionRealPort {
   fetchClientBalance = (): never => { throw new Error('not used in this seam'); };
   getServiceOrders = (): never => { throw new Error('not used in this seam'); };
   fetchContractsModifiedSince = (): never => { throw new Error('not used in this seam'); };
+  fetchClientReceipts = (): never => { throw new Error('not used in this seam'); };
 }
 
 /**

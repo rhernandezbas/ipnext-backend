@@ -175,6 +175,55 @@ describe('InMemoryAssistantIntentRepository', () => {
     expect(intent.dataSourceKeys).toEqual([]);
     expect(intent.examples).toEqual([]);
   });
+
+  // ── D2/D5 (ai-assistant-cobranzas) ──────────────────────────────────────
+  it('labels y triggerPatterns nacen vacíos (mismo default que la columna del schema)', async () => {
+    const intent = await intents.create({ ...base, name: 'estado de cuenta' });
+
+    expect(intent.labels).toEqual([]);
+    expect(intent.triggerPatterns).toEqual([]);
+  });
+
+  // ── Gap fix (2.9/3.9) — labels/triggerPatterns/unassign/roleKey vía CRUD ────
+  it('gap-fix: create() persiste labels, triggerPatterns, unassign y roleKey cuando vienen', async () => {
+    const intent = await intents.create({
+      ...base,
+      name: 'promesa_pago',
+      actionKey: 'handoff',
+      labels: ['administracion'],
+      triggerPatterns: ['te pago el lunes'],
+      unassign: true,
+      roleKey: 'promesa_pago',
+    });
+
+    expect(intent.labels).toEqual(['administracion']);
+    expect(intent.triggerPatterns).toEqual(['te pago el lunes']);
+    expect(intent.unassign).toBe(true);
+    expect(intent.roleKey).toBe('promesa_pago');
+  });
+
+  it('gap-fix: unassign y roleKey nacen en false/null si no se especifican', async () => {
+    const intent = await intents.create({ ...base, name: 'estado de cuenta' });
+
+    expect(intent.unassign).toBe(false);
+    expect(intent.roleKey).toBeNull();
+  });
+
+  it('gap-fix: update() persiste labels, triggerPatterns, unassign y roleKey', async () => {
+    const intent = await intents.create({ ...base, name: 'estado de cuenta', actionKey: 'handoff' });
+
+    const updated = await intents.update(intent.id, {
+      labels: ['soporte'],
+      triggerPatterns: ['no tengo internet'],
+      unassign: true,
+      roleKey: 'comprobante_mp',
+    });
+
+    expect(updated?.labels).toEqual(['soporte']);
+    expect(updated?.triggerPatterns).toEqual(['no tengo internet']);
+    expect(updated?.unassign).toBe(true);
+    expect(updated?.roleKey).toBe('comprobante_mp');
+  });
 });
 
 describe('InMemoryAssistantCatalogRepository', () => {
@@ -185,9 +234,9 @@ describe('InMemoryAssistantCatalogRepository', () => {
   });
 
   // ── CFG-3 ────────────────────────────────────────────────────────────────
-  it('CFG-3: el seed trae las 4 fuentes y las 5 acciones', async () => {
-    await expect(catalog.listDataSources()).resolves.toHaveLength(4);
-    await expect(catalog.listActions()).resolves.toHaveLength(5);
+  it('CFG-3: el seed trae las 6 fuentes y las 6 acciones (D2/D8/D9)', async () => {
+    await expect(catalog.listDataSources()).resolves.toHaveLength(6);
+    await expect(catalog.listActions()).resolves.toHaveLength(6);
   });
 
   it('D11: todas las acciones operan sobre la conversación de Chatwoot', async () => {
@@ -195,6 +244,7 @@ describe('InMemoryAssistantCatalogRepository', () => {
 
     expect(actions.map((a) => a.key).sort()).toEqual([
       'apply_label',
+      'handoff',
       'private_note',
       'resolve_conversation',
       'suggest_area',

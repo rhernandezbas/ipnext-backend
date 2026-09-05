@@ -45,6 +45,38 @@ export class AssistantIntentNameConflictError extends DomainError {
 }
 
 /**
+ * ai-assistant-cobranzas (D5, CFG-2 modificado) — `triggerPatterns` no vacío en una intent
+ * cuyo `actionKey` NO es `handoff`. Sólo las intents de STOP llevan pre-chequeo (RTR-4): un
+ * patrón en una intent que sí responde correría ANTES del clasificador y podría secuestrar
+ * conversaciones que debían redactarse, no derivarse en seco.
+ */
+export class TriggerPatternsRequireHandoffActionError extends DomainError {
+  constructor(message = "triggerPatterns solo se permite cuando actionKey es 'handoff'") {
+    super(message, 'ASSISTANT_TRIGGER_PATTERNS_REQUIRE_HANDOFF');
+    this.name = 'TriggerPatternsRequireHandoffActionError';
+  }
+}
+
+/**
+ * ai-assistant-cobranzas (CFG-2 / D11) — dos intents del MISMO perfil con el mismo `roleKey`.
+ *
+ * El selector determinístico (4b) resuelve la intent de destino POR `roleKey` y se queda con
+ * la PRIMERA que encuentra: con dos filas empatadas, cuál gana depende del orden en que la
+ * base devolvió las filas — el bot contestaría una cosa u otra según el día. No se arregla
+ * con un desempate arbitrario en el runtime, se rechaza al configurar.
+ *
+ * Sin índice único en la base a propósito (design D11): la unicidad que importa es POR
+ * PERFIL, y una constraint global impediría que dos perfiles tengan su propia
+ * `comprobante_mp` — además de obligar a un backfill sobre una columna nullable.
+ */
+export class AssistantRoleKeyConflictError extends DomainError {
+  constructor(roleKey: string) {
+    super(`ya existe otra intencion con roleKey "${roleKey}" en este perfil`, 'ASSISTANT_ROLE_KEY_CONFLICT');
+    this.name = 'AssistantRoleKeyConflictError';
+  }
+}
+
+/**
  * CFG-3 — una `dataSourceKey` que no existe en el catálogo. Se rechaza en CONFIGURACIÓN,
  * nunca se ejecuta: cada fuente es una puerta a la base, y una key inventada que llegara al
  * runtime sería, en el mejor caso, un silencio raro y en el peor una superficie inesperada.

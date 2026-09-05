@@ -216,6 +216,12 @@ model Client {
   lat              Float?
   lng              Float?
   plusCode         String?
+  // ai-assistant-cobranzas (D8/DAT-3) — link "pagar todo junto", de
+  // `balance.paymentUrls.MercadoPago`. Se escribe SIEMPRE en la MISMA transacción que
+  // `updateBalanceAndInvoices` (saldo + facturas): nunca de una llamada GR separada, para
+  // que jamás divierja del saldo citado en el mismo mensaje. Payload sin el campo (schema
+  // drift) NO lo vacía — conserva el valor anterior.
+  grPaymentUrl     String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   // messaging-bulk (F2) — null = contactable. IS NOT NULL = excluido SIEMPRE del bulk
@@ -4565,6 +4571,23 @@ model AssistantIntent {
   responseGuide  String   @default("")
   // Qué hace. MUST existir en AssistantAction Y estar en profile.enabledActions (ACT-1).
   actionKey      String
+  // ai-assistant-cobranzas (D2) — labels de Chatwoot que `executeAction('handoff')` aplica
+  // junto a `necesita-humano`. String[] porque un label de Chatwoot no tiene integridad
+  // referencial posible desde acá (ADR 0003: catálogo editable, no enum).
+  labels          String[] @default([])
+  // ai-assistant-cobranzas (D5) — pre-chequeo determinístico (`matchTriggerIntent`, RTR-4).
+  // Sólo debería llevar contenido en intents con `actionKey:'handoff'` (CFG-2 modificado);
+  // la validación de esa regla vive en la capa de configuración, no acá.
+  triggerPatterns String[] @default([])
+  // ai-assistant-cobranzas (D10) — desasignar la conversación DESPUÉS de ejecutar la acción
+  // (whatsapp_reply/private_note/handoff). Booleano por fila, no derivado del nombre de un
+  // label (ver AssistantConversationGateway.unassign).
+  unassign Boolean @default(false)
+  // ai-assistant-cobranzas (D11) — rol estable para los selectores determinísticos
+  // (`selectComprobanteOutcome`), inmune a que el operador renombre `name` desde la UI.
+  // NULLABLE, sin índice único global: la unicidad que importa es POR PERFIL y se valida en
+  // la ruta de config (CFG-2 modificado), no acá.
+  roleKey String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -1,4 +1,5 @@
 import type { AssistantOutcome } from '@domain/entities/assistant';
+import type { AssistantThreadMessage } from '@domain/ports/AssistantThreadReader';
 
 /**
  * ai-assistant-multiagent (SEC-2/SEC-3/SEC-5/RUN-4/ACT-1) — guardas del motor.
@@ -17,7 +18,9 @@ export type AssistantSkipReason =
   | 'private_note'
   | 'no_profile'
   | 'profile_disabled'
-  | 'opt_out';
+  | 'opt_out'
+  // ai-assistant-cobranzas (D4/SEC-6/OBS-3) — un agente humano ya está en la conversación.
+  | 'agent_active';
 
 export interface AssistantPreconditionInput {
   /** RUN-4 — kill-switch global, leído POR INVOCACIÓN (no cacheado al boot). */
@@ -98,6 +101,60 @@ export function evaluateProfilePreconditions(
   if (input.optedOut) return stop('opt_out');
 
   return CONTINUE;
+}
+
+/** ai-assistant-cobranzas (fix wave W1) — ventana por defecto de "hay un humano atendiendo". */
+export const DEFAULT_AGENT_ACTIVE_WINDOW_MINUTES = 60;
+
+export interface AgentActivityOptions {
+  /** Instante de evaluación. Inyectable para testear la ventana sin relojes falsos globales. */
+  now?: Date;
+  /** Minutos hacia atrás que cuentan como "un humano está atendiendo". Default: 60. */
+  windowMinutes?: number;
+}
+
+/**
+ * ai-assistant-cobranzas (3.4 / D4 / SEC-6, reescrita en el fix wave W1) — guarda "agente
+ * activo": no responder encima de un humano.
+ *
+ * `stop('agent_active')` si existe CUALQUIER turno `role:'agent'` con
+ * `generatedByAssistant:false` dentro de la VENTANA (default 60 min), sin importar el orden
+ * de los turnos.
+ *
+ * ⚠️ **Por qué el orden no alcanzaba.** La versión original sólo miraba los turnos POSTERIORES
+ * al último `customer`. Si el agente contestaba y el cliente volvía a escribir, el índice se
+ * corría y la guarda pasaba: el bot le hablaba encima a una persona que había respondido hace
+ * 30 segundos. El orden de los turnos no dice nada sobre si hay alguien atendiendo AHORA — eso
+ * lo dice el reloj.
+ *
+ * **Sin `at` ⇒ ACTIVO (fail-closed).** Un turno de agente humano sin timestamp no se puede
+ * ubicar en el tiempo, y la asimetría de esta señal es total: callarse de más cuesta un
+ * silencio recuperable; hablar de más interrumpe a una persona frente a un cliente.
+ *
+ * Función PURA sobre el hilo que el motor YA carga (`readRecentTurns`) — cero queries nuevas,
+ * cero puerto nuevo. `generatedByAssistant` NUNCA llega al prompt del modelo: sólo esta guarda
+ * lo consume (D4).
+ */
+export function evaluateAgentActivity(
+  thread: AssistantThreadMessage[],
+  options: AgentActivityOptions = {},
+): AssistantPreconditionResult {
+  const now = (options.now ?? new Date()).getTime();
+  const windowMs = Math.max(0, options.windowMinutes ?? DEFAULT_AGENT_ACTIVE_WINDOW_MINUTES) * 60_000;
+
+  const humanActive = thread.some(
+    (m) => m.role === 'agent' && !m.generatedByAssistant && isWithinWindow(m.at, now, windowMs),
+  );
+
+  return humanActive ? stop('agent_active') : CONTINUE;
+}
+
+/** `null`/ausente/ilegible ⇒ `true`: la ausencia de dato NUNCA apaga una guarda de seguridad. */
+function isWithinWindow(at: string | null | undefined, now: number, windowMs: number): boolean {
+  if (typeof at !== 'string' || at.trim().length === 0) return true;
+  const ms = Date.parse(at);
+  if (!Number.isFinite(ms)) return true;
+  return now - ms <= windowMs;
 }
 
 export interface ActionPermissionInput {

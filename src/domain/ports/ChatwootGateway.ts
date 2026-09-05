@@ -231,4 +231,15 @@ export interface ChatwootGateway {
    * (unión de un set consigo mismo = no-op) — reintentos/re-aplicaciones seguras.
    */
   addConversationLabels(chatwootConversationId: number, labels: string[]): Promise<void>;
+
+  /**
+   * ai-assistant-cobranzas (4.10 / D10 / ACT-4) — desasigna la conversación EN CHATWOOT
+   * (`POST /conversations/:id/assignments` con `assignee_id: 0`, que es como Chatwoot
+   * expresa "sin asignar").
+   *
+   * Existe porque `AssignConversation` —el use case humano— escribe SÓLO el espejo local
+   * (`Conversation.assigneeId`) y jamás llama a Chatwoot. Los agentes trabajan en Chatwoot,
+   * así que sin este método el "desasignar" del bot sería invisible justo donde importa.
+   */
+  unassignConversation(chatwootConversationId: number): Promise<void>;
 }

@@ -85,6 +85,37 @@ export interface AssistantIntent {
   responseGuide: string;
   /** MUST existir en el catálogo de acciones Y estar en `profile.enabledActions` (ACT-1). */
   actionKey: string;
+  /**
+   * ai-assistant-cobranzas (D2) — labels de Chatwoot que `executeAction('handoff')` aplica
+   * junto a `ASSISTANT_LABEL_NEEDS_HUMAN`. `String[]` porque un label de Chatwoot es una
+   * string de un sistema externo: no hay integridad referencial posible desde acá (ADR 0003
+   * exige catálogo editable en runtime, no un enum ni una tabla `AssistantLabel` con FK sobre
+   * un vocabulario cuya autoridad vive en Chatwoot).
+   */
+  labels: string[];
+  /**
+   * ai-assistant-cobranzas (D5) — pre-chequeo determinístico (`matchTriggerIntent`, RTR-4):
+   * corre ANTES de `runtime.classify`, así que cobrarle a un cliente sin servicio no depende
+   * de que el clasificador acierte. Sólo debería tener contenido en intents con
+   * `actionKey:'handoff'` — la validación de esa regla (400 si no) vive en la capa de
+   * configuración (CFG-2 modificado), no en esta entidad.
+   */
+  triggerPatterns: string[];
+  /**
+   * ai-assistant-cobranzas (D10) — desasignar la conversación DESPUÉS de ejecutar la acción
+   * (`whatsapp_reply`, `private_note` o `handoff`), en los DOS lados donde vive la asignación
+   * (`AssistantConversationGateway.unassign`, ACT-4). Booleano por fila: el motor MUST NOT
+   * derivar el desasignado del NOMBRE de un label — `soporte` no debe desasignar aunque
+   * `administracion` sí.
+   */
+  unassign: boolean;
+  /**
+   * ai-assistant-cobranzas (D11) — rol estable para los selectores determinísticos
+   * (`selectComprobanteOutcome`): el operador puede renombrar `name` desde la UI sin romper
+   * la referencia. `null` ⇒ la intent no participa de ningún selector. MUST ser único POR
+   * PERFIL (validado con 400 en la ruta de config, no acá).
+   */
+  roleKey: string | null;
   createdAt: string;
   updatedAt: string;
 }

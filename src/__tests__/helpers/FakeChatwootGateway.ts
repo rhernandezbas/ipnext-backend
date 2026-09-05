@@ -263,4 +263,13 @@ export class FakeChatwootGateway implements ChatwootGateway {
     this.addConversationLabelsCalls.push({ chatwootConversationId, labels: [...labels] });
     if (this.failAddConversationLabels) throw new Error('fake: Chatwoot unreachable (addConversationLabels)');
   }
+
+  // ─── ai-assistant-cobranzas (D10/ACT-4) — unassignConversation ────────────────
+  public unassignConversationCalls: number[] = [];
+  public failUnassignConversation = false;
+
+  async unassignConversation(chatwootConversationId: number): Promise<void> {
+    this.unassignConversationCalls.push(chatwootConversationId);
+    if (this.failUnassignConversation) throw new Error('fake: Chatwoot unreachable (unassignConversation)');
+  }
 }

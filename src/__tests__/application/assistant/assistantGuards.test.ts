@@ -1,7 +1,9 @@
 import {
   evaluateActionPermission,
+  evaluateAgentActivity,
   evaluateAssistantPreconditions,
 } from '@application/use-cases/assistant/assistantGuards';
+import type { AssistantThreadMessage } from '@domain/ports/AssistantThreadReader';
 
 /**
  * ai-assistant-multiagent — las guardas del motor.
@@ -179,5 +181,115 @@ describe('evaluateActionPermission', () => {
         evaluateActionPermission({ actionKey: key, enabledActions: [], canReply: true }).allowed,
       ).toBe(false);
     }
+  });
+});
+
+// ── SEC-6 (ai-assistant-cobranzas, D4) — guarda "agente activo" ───────────────
+describe('evaluateAgentActivity', () => {
+  function msg(overrides: Partial<AssistantThreadMessage> = {}): AssistantThreadMessage {
+    return { role: 'customer', text: '', generatedByAssistant: false, attachmentFilenames: [], ...overrides };
+  }
+
+  /** ai-assistant-cobranzas (fix wave W1) — instante fijo para la ventana de SEC-6. */
+  const NOW = new Date('2026-09-05T12:00:00.000Z');
+  const iso = (minutos: number) => new Date(NOW.getTime() + minutos * 60_000).toISOString();
+
+  it('SEC-6: un agente humano respondió DESPUÉS del último customer ⇒ stop(agent_active)', () => {
+    const thread = [
+      msg({ role: 'customer', text: '¿cuánto debo?' }),
+      msg({ role: 'agent', text: 'ya te ayudo yo', generatedByAssistant: false }),
+    ];
+
+    expect(evaluateAgentActivity(thread)).toMatchObject({ proceed: false, reason: 'agent_active' });
+  });
+
+  // ── Fix wave W1 — la guarda es por VENTANA, no por ordenamiento de turnos ──
+  // El orden no protege: si el agente contesta y el cliente vuelve a escribir, el índice del
+  // "último customer" se corre y la guarda pasaba — el bot hablaba encima de un humano que
+  // había respondido hace 30 segundos.
+  it('W1: un agente humano respondió ANTES del último customer pero DENTRO de la ventana ⇒ stop', () => {
+    const thread = [
+      msg({ role: 'agent', text: 'dale, avisame', generatedByAssistant: false, at: iso(-2) }),
+      msg({ role: 'customer', text: 'listo, ya te mando el comprobante', at: iso(-1) }),
+    ];
+
+    expect(evaluateAgentActivity(thread, { now: NOW })).toMatchObject({
+      proceed: false,
+      reason: 'agent_active',
+    });
+  });
+
+  it('W1: un agente humano FUERA de la ventana (hace 3 h) ⇒ continúa', () => {
+    const thread = [
+      msg({ role: 'agent', text: 'dale, avisame', generatedByAssistant: false, at: iso(-180) }),
+      msg({ role: 'customer', text: 'listo, ya te mando el comprobante', at: iso(-1) }),
+    ];
+
+    expect(evaluateAgentActivity(thread, { now: NOW })).toMatchObject({ proceed: true });
+  });
+
+  it('W1: la ventana es configurable — con 240 min, el mismo turno de hace 3 h sí frena', () => {
+    const thread = [
+      msg({ role: 'agent', text: 'dale, avisame', generatedByAssistant: false, at: iso(-180) }),
+      msg({ role: 'customer', text: 'listo', at: iso(-1) }),
+    ];
+
+    expect(evaluateAgentActivity(thread, { now: NOW, windowMinutes: 240 })).toMatchObject({
+      proceed: false,
+      reason: 'agent_active',
+    });
+  });
+
+  it('W1: turno de agente humano SIN timestamp ⇒ ACTIVO (fail-closed)', () => {
+    const thread = [
+      msg({ role: 'agent', text: 'ya te ayudo', generatedByAssistant: false }),
+      msg({ role: 'customer', text: 'gracias', at: iso(-1) }),
+    ];
+
+    expect(evaluateAgentActivity(thread, { now: NOW })).toMatchObject({
+      proceed: false,
+      reason: 'agent_active',
+    });
+  });
+
+  it('W1: un turno del BOT dentro de la ventana NO cuenta, tenga o no timestamp', () => {
+    const thread = [
+      msg({ role: 'agent', text: 'tu saldo es...', generatedByAssistant: true, at: iso(-1) }),
+      msg({ role: 'agent', text: 'algo más', generatedByAssistant: true }),
+      msg({ role: 'customer', text: '¿y las facturas?', at: iso(0) }),
+    ];
+
+    expect(evaluateAgentActivity(thread, { now: NOW })).toMatchObject({ proceed: true });
+  });
+
+  it('un turno del propio bot (generatedByAssistant:true) NO cuenta como agente activo', () => {
+    const thread = [
+      msg({ role: 'customer', text: '¿cuánto debo?' }),
+      msg({ role: 'agent', text: 'tu saldo es...', generatedByAssistant: true }),
+    ];
+
+    expect(evaluateAgentActivity(thread)).toMatchObject({ proceed: true });
+  });
+
+  it('sin señales de actividad humana, la guarda no frena la corrida', () => {
+    const thread = [msg({ role: 'customer', text: 'hola' })];
+
+    expect(evaluateAgentActivity(thread)).toMatchObject({ proceed: true, reason: null });
+  });
+
+  it('hilo vacío no rompe la guarda', () => {
+    expect(evaluateAgentActivity([])).toMatchObject({ proceed: true });
+  });
+
+  it('todo lo que rebota acá es reason=agent_active, un identificador fijo sin texto del cliente (OBS-3)', () => {
+    const thread = [
+      msg({ role: 'customer', text: 'información sensible del cliente' }),
+      msg({ role: 'agent', text: 'otra información', generatedByAssistant: false }),
+    ];
+
+    const result = evaluateAgentActivity(thread);
+
+    expect(result.reason).toBe('agent_active');
+    expect(JSON.stringify(result)).not.toContain('información');
   });
 });

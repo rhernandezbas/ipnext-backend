@@ -22,7 +22,12 @@ export type AssistantMotivo =
   | 'cliente_no_identificado'
   | 'saldo_nunca_consultado'
   | 'saldo_desactualizado'
-  | 'moneda_no_confirmada';
+  | 'moneda_no_confirmada'
+  // ai-assistant-cobranzas (4.2 / DAT-1 / D7-D8) — el espejo de facturas no es confiable en
+  // esta corrida (sigue stale tras el intento de refresh, o el cliente no está espejado).
+  | 'facturas_no_disponibles'
+  // ai-assistant-cobranzas (4.9 / D9) — GR no respondió la consulta de recibos de hoy.
+  | 'recibos_no_disponibles';
 
 /**
  * Copy EXACTO que el bot debe seguir para cada motivo.
@@ -41,6 +46,17 @@ export const MOTIVO_GUIA: Record<AssistantMotivo, string> = {
     'El saldo que figura puede estar desactualizado y no lo podemos confirmar ahora. Decile que un asesor le confirma el saldo enseguida. No menciones ningun importe.',
   moneda_no_confirmada:
     'Tenemos un importe pero no la moneda confirmada, asi que no se puede informar. Decile que un asesor le confirma el saldo enseguida. No menciones ningun importe.',
+  // ai-assistant-cobranzas (DAT-1) — ⚠️ la trampa de este motivo es la INVERSA de los de
+  // saldo: no es sólo "no digas un número", es **no digas que esta al dia**. Una lista de
+  // facturas vacía o no confiable NO prueba que el cliente no deba nada (D7/DFT-2:
+  // `cliente.saldo` es la única fuente autorizada para eso). Sin esta frase explícita, el
+  // modelo lee "no hay facturas" y concluye lo más amable, que es justo lo peor.
+  facturas_no_disponibles:
+    'No tenemos confirmado el detalle de facturas en esta consulta. NO concluyas que esta al dia por no ver facturas: eso solo lo define el saldo. Si pide el detalle, decile que un asesor se lo pasa enseguida. No menciones ningun importe.',
+  // ai-assistant-cobranzas (D9) — GR caído NO es "no vemos tu pago". Mandar a Administración
+  // a alguien que SÍ pagó (con el comprobante en la mano) es el peor modo de falla de R1.
+  recibos_no_disponibles:
+    'No pudimos verificar los pagos del dia contra el sistema. NO le digas que no vemos su pago ni que no figura: no lo pudimos consultar. Decile que un asesor lo verifica enseguida. No menciones ningun importe.',
 };
 
 /**

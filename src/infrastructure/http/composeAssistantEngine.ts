@@ -9,6 +9,8 @@ import type { SetConversationArea } from '@application/use-cases/messaging/SetCo
 import type { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
 import type { ListTasks } from '@application/use-cases/ListTasks';
 import type { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
+import type { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
+import type { GestionRealPort } from '@domain/ports/GestionRealPort';
 import { ReplyWithAssistant } from '@application/use-cases/assistant/ReplyWithAssistant';
 import { ResolveAssistantFacts } from '@application/use-cases/assistant/ResolveAssistantFacts';
 import {
@@ -23,6 +25,9 @@ import { AssistantDataSourceRegistryImpl } from '@infrastructure/adapters/assist
 import { ClienteSaldoResolver } from '@infrastructure/adapters/assistant/ClienteSaldoResolver';
 import { ClienteServicioResolver } from '@infrastructure/adapters/assistant/ClienteServicioResolver';
 import { OsAbiertasResolver } from '@infrastructure/adapters/assistant/OsAbiertasResolver';
+import { ClienteFacturasResolver } from '@infrastructure/adapters/assistant/ClienteFacturasResolver';
+import { ClienteRecibosHoyResolver } from '@infrastructure/adapters/assistant/ClienteRecibosHoyResolver';
+import { PrismaAssistantInvoicesReader } from '@infrastructure/adapters/prisma/PrismaAssistantInvoicesReader';
 import { ChatwootAssistantConversationGateway } from '@infrastructure/adapters/assistant/ChatwootAssistantConversationGateway';
 import { HttpDeepSeekAssistant } from '@infrastructure/adapters/deepseek/HttpDeepSeekAssistant';
 import { PrismaAssistantProviderConfigRepository } from '@infrastructure/adapters/prisma/PrismaAssistantProviderConfigRepository';
@@ -39,6 +44,22 @@ export interface ComposeAssistantEngineDeps {
   threadReader: AssistantThreadReader;
   clientResolver: AssistantClientResolver;
   refreshBalance?: RefreshClientBalanceIfStale;
+  /**
+   * ai-assistant-cobranzas (6.3 / D9) — puerto de Gestión Real para `cliente.recibos_hoy`.
+   *
+   * OPCIONAL porque GR es opt-in (`GR_SYNC_ENABLED`): sin él la fuente **no se registra**, y
+   * `ResolveAssistantFacts` omite las keys sin resolver. Ese es el lado seguro: una fuente
+   * ausente hace que el bot derive, mientras que una fuente registrada contra un puerto roto
+   * podría terminar respondiendo "no encontramos tu pago" — el peor modo de falla de R1.
+   */
+  gestionReal?: GestionRealPort;
+  /**
+   * ai-assistant-cobranzas (6.3 / D10 / ACT-4) — desasignación en el espejo LOCAL.
+   *
+   * Sin esto `unassign` desasigna sólo en Chatwoot y el espejo de Prominense sigue mostrando
+   * un agente asignado que ya no está: los dos lados tienen que moverse juntos.
+   */
+  assignConversation?: AssignConversation;
 }
 
 /**
@@ -60,10 +81,27 @@ export function composeAssistantEngine(deps: ComposeAssistantEngineDeps): ReplyW
   const catalogRepo = new PrismaAssistantCatalogRepository();
   const providerRepo = new PrismaAssistantProviderConfigRepository();
 
+  // ai-assistant-cobranzas (6.1 / DAT-2 / D8) — lector del ESPEJO de facturas. Se instancia
+  // acá, como el resto de los adapters Prisma de este módulo: no tiene configuración ni
+  // colaboradores, y hacerlo una dep de `app.ts` sólo agregaría un lugar más donde olvidarse.
+  const invoicesReader = new PrismaAssistantInvoicesReader();
+
   const registry = new AssistantDataSourceRegistryImpl([
     new ClienteSaldoResolver(deps.customerRepo, deps.refreshBalance),
     new ClienteServicioResolver(deps.customerRepo),
     new OsAbiertasResolver(deps.listTasks),
+    // ⚠️ **LA MISMA instancia de `refreshBalance` que `cliente.saldo`** (D8). Es un
+    // single-flight con TTL por carril: dos instancias = dos vuelos a GR dentro de la misma
+    // corrida, y un saldo y unas facturas que pueden venir de payloads distintos. Pineado por
+    // identidad (`toBe`), no por tipo, en `assistant-composition.test.ts`.
+    // fix wave W9 (REN-1) — el alias de pago sale de la config (`ASSISTANT_PAY_ALIAS`). Sin
+    // env, el bloque no menciona alias: un alias equivocado manda la plata del cliente a otra
+    // cuenta, así que el default seguro es el silencio.
+    new ClienteFacturasResolver(deps.customerRepo, invoicesReader, deps.refreshBalance, config.assistant.payAlias),
+    // `cliente.recibos_hoy` sólo existe si GR está configurado (ver `deps.gestionReal`).
+    ...(deps.gestionReal
+      ? [new ClienteRecibosHoyResolver(deps.customerRepo, deps.gestionReal, deps.threadReader)]
+      : []),
   ]);
 
   return new ReplyWithAssistant(
@@ -92,7 +130,12 @@ export function composeAssistantEngine(deps: ComposeAssistantEngineDeps): ReplyW
       deps.setConversationArea,
       deps.setConversationStatus,
       deps.chatwootGateway,
+      // D10/ACT-4 — el lado LOCAL del `unassign`. Los dos lados corren aislados entre sí:
+      // que falle uno no puede saltear el otro.
+      deps.assignConversation,
     ),
     new PrismaAssistantRunRepository(),
+    // fix wave W1 (SEC-6) — la ventana de "hay un humano atendiendo", configurable por env.
+    { agentActiveWindowMinutes: config.assistant.agentActiveWindowMinutes },
   );
 }

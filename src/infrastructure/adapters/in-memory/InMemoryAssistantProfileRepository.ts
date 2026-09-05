@@ -98,7 +98,13 @@ export class InMemoryAssistantIntentRepository implements AssistantIntentReposit
   private readonly intents = new Map<string, AssistantIntent>();
 
   private clone(intent: AssistantIntent): AssistantIntent {
-    return { ...intent, examples: [...intent.examples], dataSourceKeys: [...intent.dataSourceKeys] };
+    return {
+      ...intent,
+      examples: [...intent.examples],
+      dataSourceKeys: [...intent.dataSourceKeys],
+      labels: [...intent.labels],
+      triggerPatterns: [...intent.triggerPatterns],
+    };
   }
 
   async listByProfileId(profileId: string): Promise<AssistantIntent[]> {
@@ -139,6 +145,12 @@ export class InMemoryAssistantIntentRepository implements AssistantIntentReposit
       dataSourceKeys: input.dataSourceKeys ? [...input.dataSourceKeys] : [],
       responseGuide: input.responseGuide ?? '',
       actionKey: input.actionKey,
+      // ai-assistant-cobranzas (D2/D5/D10/D11) — passthrough del CRUD de configuración;
+      // nace en el mismo default que la columna del schema si el caller no los especifica.
+      labels: input.labels ? [...input.labels] : [],
+      triggerPatterns: input.triggerPatterns ? [...input.triggerPatterns] : [],
+      unassign: input.unassign ?? false,
+      roleKey: input.roleKey ?? null,
       createdAt: now,
       updatedAt: now,
     };
@@ -159,6 +171,10 @@ export class InMemoryAssistantIntentRepository implements AssistantIntentReposit
       dataSourceKeys: input.dataSourceKeys ? [...input.dataSourceKeys] : existing.dataSourceKeys,
       responseGuide: input.responseGuide ?? existing.responseGuide,
       actionKey: input.actionKey ?? existing.actionKey,
+      labels: input.labels ? [...input.labels] : existing.labels,
+      triggerPatterns: input.triggerPatterns ? [...input.triggerPatterns] : existing.triggerPatterns,
+      unassign: input.unassign ?? existing.unassign,
+      roleKey: input.roleKey === undefined ? existing.roleKey : input.roleKey,
       updatedAt: new Date().toISOString(),
     };
     this.intents.set(id, updated);

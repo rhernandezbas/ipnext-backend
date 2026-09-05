@@ -7,6 +7,7 @@ import { MOTIVO_GUIA, GUIA_SALDO_A_FAVOR, type AssistantMotivo } from '@infrastr
 import { RefreshClientBalanceIfStale } from '@application/use-cases/RefreshClientBalanceIfStale';
 import { GetClientDetail } from '@application/use-cases/GetClientDetail';
 import { buildNumberWhitelist, findUnbackedNumbers } from '@application/use-cases/assistant/assistantNumberVerifier';
+import { toPublicFacts } from '@application/use-cases/assistant/ReplyWithAssistant';
 import { InMemoryGestionRealPort } from '@infrastructure/adapters/in-memory/InMemoryGestionRealPort';
 import { InMemoryClientMirrorRepository } from '@infrastructure/adapters/in-memory/InMemoryClientMirrorRepository';
 import { parseClientBalanceResponse } from '@infrastructure/adapters/gestion-real/GestionRealClient';
@@ -131,8 +132,11 @@ describe('ClienteSaldoResolver', () => {
       // manda a un asesor en vez de dejar al modelo improvisando.
       guia: GUIA_SALDO_A_FAVOR,
     });
-    // El pin que importa: el monto no está, ni con signo ni sin él.
-    expect(JSON.stringify(facts)).not.toContain('5000');
+    // El pin que importa: el monto no llega ni al prompt ni al whitelist. Desde el fix wave
+    // C4 el crédito SÍ viaja en el hecho INTERNO `_aFavor` (para que el bloque
+    // determinístico pueda decir "$X a favor"), y `toPublicFacts` es el que lo saca del
+    // camino del modelo — que es donde FW2-1 hacía daño.
+    expect(JSON.stringify(toPublicFacts({ 'cliente.saldo': facts }))).not.toContain('5000');
     // Y la guía misma no puede meter cifras por la puerta de al lado
     // (todo texto de los hechos alimenta el whitelist del verificador).
     expect(GUIA_SALDO_A_FAVOR).not.toMatch(/\d{3,}/);
@@ -164,7 +168,11 @@ describe('ClienteSaldoResolver', () => {
     const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-5000.00', FRESH_AT) });
 
     const facts = await new ClienteSaldoResolver(repoOf(aFavor)).resolve(ctx);
-    const whitelist = buildNumberWhitelist({ facts, profileTexts: [], customerMessages: [] });
+    const whitelist = buildNumberWhitelist({
+      facts: toPublicFacts({ 'cliente.saldo': facts }),
+      profileTexts: [],
+      customerMessages: [],
+    });
 
     expect(whitelist.has('5000')).toBe(false);
     expect(findUnbackedNumbers('Tenés una deuda de 5000 pesos', whitelist)).toContain('5000');
@@ -187,7 +195,9 @@ describe('ClienteSaldoResolver', () => {
     const ficha = await new GetClientDetail(repo).execute('client-1');
 
     expect(facts).toMatchObject({ saldo: 0 });
-    expect(JSON.stringify(facts)).not.toContain('5000');
+    // El `saldo` que ven el prompt y el whitelist sigue clampeado (el crédito viaja aparte,
+    // en el hecho INTERNO que `toPublicFacts` filtra — fix wave C4).
+    expect(JSON.stringify(toPublicFacts({ 'cliente.saldo': facts }))).not.toContain('5000');
     // El humano SÍ ve el crudo, con signo.
     expect(ficha.balanceDue).toBe(-5000);
   });
@@ -599,5 +609,52 @@ describe('ClienteSaldoResolver', () => {
       saldo: 1000,
       moneda: 'ARS',
     });
+  });
+});
+
+/**
+ * ═══ FIX WAVE C4 ════════════════════════════════════════════════════════════
+ *
+ * FW2-1 clampea TODO `balanceDue <= 0` a `saldo: 0`, y con eso la rama "saldo A FAVOR" del
+ * mensaje quedó INALCANZABLE en el camino real: `renderBalanceSignMessage` tiene el `else`
+ * escrito y testeado en aislamiento, pero el motor nunca le puede pasar un `debt < 0`.
+ *
+ * La salida es un hecho INTERNO (`_aFavor`, prefijo `_`): lo consume sólo el renderizado
+ * determinístico del motor, y `toPublicFacts` lo saca antes del prompt y antes del whitelist
+ * de SEC-4 — o sea, el peligro que FW2-1 cerró sigue cerrado.
+ */
+describe('ClienteSaldoResolver — C4: el crédito viaja como hecho INTERNO', () => {
+  const ctxC4: AssistantSubjectContext = { clientId: 'client-1', conversationId: 'conv-1', areaId: 'area-1' };
+
+  function repo(customer: Customer): CustomerRepository {
+    return { findById: async () => customer } as unknown as CustomerRepository;
+  }
+
+  it('C4: `balanceDue` negativo ⇒ `_aFavor` con el importe ABSOLUTO', async () => {
+    const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-77997.19', FRESH_AT) });
+
+    const facts = await new ClienteSaldoResolver(repo(aFavor)).resolve(ctxC4);
+
+    expect(facts).toMatchObject({ disponible: true, saldo: 0, tieneDeuda: false, _aFavor: 77997.19 });
+  });
+
+  it('C4: el cliente exactamente al día NO lleva `_aFavor` (no hay crédito que mencionar)', async () => {
+    const alDia = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('0.00', FRESH_AT) });
+
+    const facts = await new ClienteSaldoResolver(repo(alDia)).resolve(ctxC4);
+
+    expect(facts._aFavor).toBeUndefined();
+  });
+
+  it('C4: el hecho interno NO llega al modelo ni al whitelist de SEC-4 (FW2-1 sigue en pie)', async () => {
+    const aFavor = customerFrom({ ...CUSTOMER_ROW, ...grBalanceRow('-5000.00', FRESH_AT) });
+
+    const facts = await new ClienteSaldoResolver(repo(aFavor)).resolve(ctxC4);
+    const publicos = toPublicFacts({ 'cliente.saldo': facts });
+
+    expect(JSON.stringify(publicos)).not.toContain('5000');
+    const whitelist = buildNumberWhitelist({ facts: publicos, profileTexts: [], customerMessages: [] });
+    expect(whitelist.has('5000')).toBe(false);
+    expect(findUnbackedNumbers('Tenés una deuda de 5000 pesos', whitelist)).toContain('5000');
   });
 });

@@ -56,6 +56,16 @@ const BALANCE_BATCH_INTERVAL_MS = parseIntervalMs(process.env.GR_BALANCE_BATCH_I
   max: 7_200_000,
 });
 
+/**
+ * ai-assistant-cobranzas (fix wave W1) — entero POSITIVO o el default. Basura (vacío, texto,
+ * negativo, 0) cae al valor SEGURO —el default—, nunca a 0: un 0 apagaría la guarda que la env
+ * existe para afinar.
+ */
+function positiveIntOr(raw: string | undefined, fallback: number): number {
+  const n = parseInt(raw ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 export const config = {
   splynxApiUrl: process.env.SPLYNX_API_URL as string,
   splynxApiKey: process.env.SPLYNX_API_KEY as string,
@@ -231,6 +241,38 @@ export const config = {
     baseUrl: process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com',
     apiKey: process.env.DEEPSEEK_API_KEY ?? '',
     timeoutMs: parseInt(process.env.DEEPSEEK_TIMEOUT_MS || '20000', 10),
+    /**
+     * ai-assistant-cobranzas (6.2 / D4 / SEC-6) — nombres con los que el PROPIO bot aparece
+     * como remitente en el espejo de mensajes (CSV). Es la lista blanca que le permite a la
+     * guarda "hay un agente humano atendiendo" distinguir un saliente del bot de uno de una
+     * persona.
+     *
+     * ⚠️ **El default VACÍO es deliberado y es el lado seguro.** El espejo no guarda ninguna
+     * señal que diga "esto lo escribió el bot" (`origin` es 'chatwoot' para los dos), así que
+     * esto no se puede derivar: se declara. Sin la env, todo saliente cuenta como humano y el
+     * asistente se calla de más. Declarar de MÁS es el modo peligroso: apagaría la guarda y
+     * el bot hablaría ENCIMA de un agente. Por eso no hay heurística ni fallback "inteligente".
+     *
+     * NO es fail-fast (mismo criterio que `apiKey`): sin esto el bot queda cauto, no roto.
+     */
+    senderNames: (process.env.ASSISTANT_SENDER_NAMES ?? '')
+      .split(',')
+      .map((n) => n.trim())
+      .filter((n) => n.length > 0),
+    /**
+     * ai-assistant-cobranzas (fix wave W1 / SEC-6) — ventana, en minutos, dentro de la cual un
+     * turno de un agente HUMANO cuenta como "hay alguien atendiendo" y el bot se calla.
+     *
+     * Default 60. Un valor inválido o ≤ 0 cae al default (no al 0): un cero apagaría la guarda
+     * entera por un typo en una env. NO es fail-fast — como el resto del bloque `assistant`.
+     */
+    agentActiveWindowMinutes: positiveIntOr(process.env.ASSISTANT_AGENT_ACTIVE_WINDOW_MIN, 60),
+    /**
+     * ai-assistant-cobranzas (fix wave W9 / REN-1) — alias de pago que el bloque determinístico
+     * ofrece junto a los links. Vacío (default) ⇒ el bloque NO menciona ningún alias, que es el
+     * lado seguro: un alias equivocado en un mensaje de cobranza es plata a la cuenta de otro.
+     */
+    payAlias: (process.env.ASSISTANT_PAY_ALIAS ?? '').trim(),
   },
 
   /**

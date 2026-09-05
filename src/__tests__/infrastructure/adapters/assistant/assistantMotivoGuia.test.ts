@@ -43,6 +43,29 @@ describe('MOTIVO_GUIA (F5)', () => {
   });
 
   /**
+   * ai-assistant-cobranzas (4.2 / DAT-1) — la lista vacía de facturas NUNCA es "al día".
+   * `cliente.saldo` es la única fuente autorizada para afirmarlo (D7/DFT-2), así que la guía
+   * de este motivo tiene que decir explícitamente que no se afirme nada sobre la deuda.
+   */
+  it('DAT-1 — `facturas_no_disponibles` tiene guía y NO habilita afirmar "al día"', () => {
+    expect(Object.keys(MOTIVO_GUIA)).toContain('facturas_no_disponibles');
+    const guia = MOTIVO_GUIA.facturas_no_disponibles.toLowerCase();
+    expect(guia).toMatch(/no menciones ningun importe/);
+    expect(guia).toMatch(/al dia/); // debe hablar EXPLÍCITAMENTE de no afirmar que está al día
+  });
+
+  /**
+   * ai-assistant-cobranzas (4.9 / D9) — GR caído NO es "no encontramos tu pago". Mandar a
+   * Administración a alguien que SÍ pagó es el peor modo de falla de esta regla.
+   */
+  it('D9 — `recibos_no_disponibles` NUNCA habilita decir que no se ve el pago', () => {
+    expect(Object.keys(MOTIVO_GUIA)).toContain('recibos_no_disponibles');
+    const guia = MOTIVO_GUIA.recibos_no_disponibles.toLowerCase();
+    expect(guia).toMatch(/no menciones ningun importe/);
+    expect(guia).toMatch(/no (le )?(digas|afirmes)/);
+  });
+
+  /**
    * ⚠️ El pin que caza al resolver futuro. Assertion sobre el TEXTO del fuente,
    * misma decisión (y mismo precio) que `assistant-composition.test.ts`: es feo,
    * y es lo único que ve un `motivo:` escrito a mano fuera del union.

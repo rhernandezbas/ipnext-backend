@@ -4,6 +4,7 @@ import type { ChatwootGateway } from '@domain/ports/ChatwootGateway';
 import type { SendMessage } from '@application/use-cases/messaging/SendMessage';
 import type { SetConversationArea } from '@application/use-cases/messaging/SetConversationArea';
 import type { SetConversationStatus } from '@application/use-cases/messaging/SetConversationStatus';
+import type { AssignConversation } from '@application/use-cases/messaging/AssignConversation';
 
 /**
  * ai-assistant-multiagent (RUN-3 / D11) — salida del motor hacia la conversación.
@@ -33,6 +34,12 @@ export class ChatwootAssistantConversationGateway implements AssistantConversati
     private readonly setAreaUseCase: SetConversationArea,
     private readonly setStatus: SetConversationStatus,
     private readonly chatwoot: ChatwootGateway,
+    /**
+     * ai-assistant-cobranzas (D10/ACT-4) — OPCIONAL para no romper los call sites que
+     * todavía no lo pasan: sin él, `unassign` desasigna sólo en Chatwoot y lo deja logueado
+     * (mejor un lado que ninguno, y el log dice cuál falta). La composición real lo inyecta.
+     */
+    private readonly assign?: AssignConversation,
   ) {}
 
   /** 🟡 Mensaje al cliente. Va por `SendMessage` ⇒ se espeja y bumpea el preview. */
@@ -68,5 +75,46 @@ export class ChatwootAssistantConversationGateway implements AssistantConversati
   /** 🔴 Marcar resuelta. Requiere eval registrado para habilitarse (EVAL-2). */
   async resolve(conversationId: string): Promise<void> {
     await this.setStatus.execute(conversationId, 'resolved', null);
+  }
+
+  /**
+   * 🟢 ai-assistant-cobranzas (4.10 / D10 / ACT-4) — desasigna la conversación EN LOS DOS
+   * LADOS, y ése es todo el punto del método.
+   *
+   * ⚠️ Verificado: `AssignConversation` escribe `Conversation.assigneeId`, un campo LOCAL del
+   * espejo — **nunca llama a Chatwoot**. Y los agentes trabajan en Chatwoot (D11), donde la
+   * guarda SEC-6 lee `conversation.meta.assignee`. Sólo local ⇒ el agente la sigue viendo
+   * suya y la regla no cumple su fin; sólo Chatwoot ⇒ el inbox de Prominense muestra un dueño
+   * fantasma. Por eso son dos llamadas, y por eso ninguna puede impedir la otra.
+   *
+   * BEST-EFFORT y AISLADO por lado: esto corre DESPUÉS de que el mensaje ya salió (orden
+   * acción → labels → unassign, D10). Un fallo de infraestructura acá no puede tumbar una
+   * respuesta enviada (RUN-1), y el fallo de UN lado no puede saltearse el otro.
+   */
+  async unassign(conversationId: string): Promise<void> {
+    // Lado 1 — espejo local (inbox de Prominense). `actorId: null`: el bot no es RBAC.
+    await this.safely('local', () => this.assign?.execute(conversationId, null, null));
+
+    // Lado 2 — Chatwoot, que es donde el agente humano la ve asignada.
+    await this.safely('chatwoot', async () => {
+      const conversation = await this.conversations.findById(conversationId);
+      // Sin `chatwootConversationId` la conversación no existe upstream todavía (bulk
+      // pre-adopción): no hay a quién desasignar. No es un error, es un no-op.
+      if (!conversation?.chatwootConversationId) return;
+      await this.chatwoot.unassignConversation(conversation.chatwootConversationId);
+    });
+  }
+
+  /** Cada lado del `unassign` se aísla: un fallo no impide el otro ni propaga (RUN-1). */
+  private async safely(lado: string, fn: () => Promise<unknown> | undefined): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[assistant] unassign falló de un lado (best-effort)', {
+        lado,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 }

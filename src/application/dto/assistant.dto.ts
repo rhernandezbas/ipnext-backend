@@ -38,6 +38,14 @@ export interface AssistantIntentDto {
   dataSourceKeys: string[];
   responseGuide: string;
   actionKey: string;
+  /** ai-assistant-cobranzas (D2) — labels de Chatwoot que aplica `executeAction`. */
+  labels: string[];
+  /** ai-assistant-cobranzas (D5) — pre-chequeo determinístico (sólo con `actionKey:'handoff'`). */
+  triggerPatterns: string[];
+  /** ai-assistant-cobranzas (D10) — desasignar la conversación tras ejecutar la acción. */
+  unassign: boolean;
+  /** ai-assistant-cobranzas (D11) — rol estable para los selectores determinísticos. */
+  roleKey: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +94,10 @@ export function toAssistantIntentDto(intent: AssistantIntent): AssistantIntentDt
     dataSourceKeys: [...intent.dataSourceKeys],
     responseGuide: intent.responseGuide,
     actionKey: intent.actionKey,
+    labels: [...intent.labels],
+    triggerPatterns: [...intent.triggerPatterns],
+    unassign: intent.unassign,
+    roleKey: intent.roleKey,
     createdAt: intent.createdAt,
     updatedAt: intent.updatedAt,
   };

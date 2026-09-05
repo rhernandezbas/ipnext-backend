@@ -24,6 +24,7 @@ import { InMemoryWebhookDeliveryRepository } from '@infrastructure/adapters/in-m
 import { InMemoryChatMessageAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemoryChatMessageAttachmentRepository';
 import type { ChatMediaDownloadTrigger } from '@domain/ports/ChatMediaDownloadTrigger';
 import { MessageNotMirroredYetError } from '@domain/errors/messaging';
+import type { ReplyWithAssistantCommand } from '@application/use-cases/assistant/ReplyWithAssistant';
 
 function makeUseCase() {
   const conversationRepo = new InMemoryConversationRepository();
@@ -1208,5 +1209,146 @@ describe('ReceiveChatwootWebhook', () => {
       // RECHAZA → la ruta real respondería 500 → Chatwoot reintenta; la delivery NO queda vista
       expect(await deliveryRepo.hasSeen('chatwoot', 'd-mu-5')).toBe(false);
     });
+  });
+});
+
+/**
+ * ai-assistant-cobranzas (5.5 / D4.2 / SEC-6) — `conversation.meta.assignee` del payload de
+ * Chatwoot viaja al comando del asistente.
+ *
+ * Por qué del PAYLOAD y no de una columna espejo: el payload es la verdad del instante (cero
+ * latencia, cero staleness). Hoy el webhook no procesa `assignee_changed` ni
+ * `conversation_updated` (switch de 4 eventos verificado), así que una columna espejo sólo se
+ * escribiría desde `message_created` — la MISMA información, más una migración y una columna
+ * que puede quedar vieja APARENTANDO que protege.
+ */
+describe('ReceiveChatwootWebhook — assignee → ReplyWithAssistantCommand (D4.2)', () => {
+  function makeUseCaseWithAssistant() {
+    const conversationRepo = new InMemoryConversationRepository();
+    const messageRepo = new InMemoryChatMessageRepository();
+    const deliveryRepo = new InMemoryWebhookDeliveryRepository();
+    const commands: ReplyWithAssistantCommand[] = [];
+    const uc = new ReceiveChatwootWebhook(
+      conversationRepo,
+      messageRepo,
+      deliveryRepo,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        execute: async (command: ReplyWithAssistantCommand) => {
+          commands.push(command);
+          return 'noop';
+        },
+      },
+    );
+    return { uc, commands };
+  }
+
+  function payload(assignee: unknown, extraMeta: Record<string, unknown> = {}) {
+    return {
+      event: 'message_created',
+      id: 9001,
+      content: 'te paso el comprobante',
+      message_type: 'incoming',
+      created_at: '2026-09-04T10:00:00.000Z',
+      conversation: {
+        id: 4242,
+        can_reply: true,
+        meta: {
+          sender: { name: 'Juan Pérez', phone_number: '+5492964123456' },
+          ...(assignee === undefined ? {} : { assignee }),
+          ...extraMeta,
+        },
+      },
+    };
+  }
+
+  it('5.5: `conversation.meta.assignee` presente ⇒ se propaga como `assigneeName`', async () => {
+    const { uc, commands } = makeUseCaseWithAssistant();
+
+    await uc.execute('delivery-assignee-1', payload({ id: 7, name: 'Vanesa', available_name: 'Vanesa' }));
+
+    expect(commands).toHaveLength(1);
+    expect(commands[0].assigneeName).toBe('Vanesa');
+  });
+
+  /**
+   * ⚠️ FIX WAVE W2 — **la ausencia del campo es fail-CLOSED**, no "sin asignar".
+   *
+   * El comportamiento anterior (ausente ⇒ `null` ⇒ sin asignar) apagaba en SILENCIO la señal
+   * (b) de SEC-6 ante cualquier drift de versión de Chatwoot o un evento con otra forma de
+   * payload: el bot se ponía a hablar sobre conversaciones que podían estar en manos de un
+   * agente. `null` explícito SÍ es "sin asignar" — eso lo dice Chatwoot, no lo suponemos.
+   */
+  it('W2: sin `assignee` en el payload ⇒ `undefined` + warning, y el motor lo trata como ASIGNADO', async () => {
+    const { uc, commands } = makeUseCaseWithAssistant();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await uc.execute('delivery-assignee-2', payload(undefined));
+
+    expect(commands[0].assigneeName).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('5.5: `assignee: null` explícito de Chatwoot ⇒ `null`', async () => {
+    const { uc, commands } = makeUseCaseWithAssistant();
+
+    await uc.execute('delivery-assignee-3', payload(null));
+
+    expect(commands[0].assigneeName).toBeNull();
+  });
+
+  /**
+   * ⚠️ **Forma REAL del webhook, verificada contra el fuente de Chatwoot v4.13 del contenedor
+   * de producción**: `app/presenters/conversations/event_data_presenter.rb#push_meta` arma
+   * `{ sender, assignee: assigned_entity&.push_event_data, assignee_type, team, hmac_verified }`.
+   *
+   * O sea: una conversación SIN ASIGNAR llega con `assignee: null` y `assignee_type: null` —
+   * **la clave está presente**. (La vista jbuilder de la REST API sí omite la clave, pero el
+   * motor no consume esa vista.) Este test existe para que nadie "arregle" el mapeo de W2
+   * creyendo que Chatwoot omite la clave y deje al bot mudo al 100%.
+   */
+  it('N4: forma REAL del payload de Chatwoot v4.13 sin asignar ⇒ `null`, el bot puede hablar', async () => {
+    const { uc, commands } = makeUseCaseWithAssistant();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await uc.execute('delivery-assignee-real-1', payload(null, { assignee_type: null, team: null, hmac_verified: false }));
+
+    expect(commands[0].assigneeName).toBeNull();
+    // Y NO se loguea el warning de "no sabemos": la clave vino, con valor null.
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('no trae `conversation.meta.assignee`'),
+    );
+    warn.mockRestore();
+  });
+
+  /**
+   * SEC-6 protege a las PERSONAS. Si un `AgentBot` asignado contara como "hay alguien
+   * atendiendo", el propio asistente se auto-silenciaría en cuanto Chatwoot le asignara la
+   * conversación — la feature se apagaría sola, y el silencio es indistinguible del éxito.
+   */
+  it('N4: `assignee_type: "AgentBot"` NO cuenta como humano asignado', async () => {
+    const { uc, commands } = makeUseCaseWithAssistant();
+
+    await uc.execute(
+      'delivery-assignee-bot',
+      payload({ id: 99, name: 'IPNEXT Bot', available_name: 'IPNEXT Bot' }, { assignee_type: 'AgentBot' }),
+    );
+
+    expect(commands[0].assigneeName).toBeNull();
+  });
+
+  it('N4: `assignee_type: "User"` con nombre SÍ es un humano asignado', async () => {
+    const { uc, commands } = makeUseCaseWithAssistant();
+
+    await uc.execute(
+      'delivery-assignee-user',
+      payload({ id: 7, name: 'Vanesa', available_name: 'Vanesa' }, { assignee_type: 'User' }),
+    );
+
+    expect(commands[0].assigneeName).toBe('Vanesa');
   });
 });

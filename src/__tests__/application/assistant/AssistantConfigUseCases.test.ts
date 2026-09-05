@@ -14,6 +14,7 @@ import {
   AssistantIntentNotFoundError,
   AssistantProfileAlreadyExistsError,
   AssistantProfileNotFoundError,
+  TriggerPatternsRequireHandoffActionError,
   UnknownAssistantActionError,
   UnknownAssistantDataSourceError,
 } from '@domain/errors/assistant';
@@ -238,6 +239,57 @@ describe('CreateAssistantIntent', () => {
 
     expect(intent.dataSourceKeys).toEqual(['noc.cortes']);
   });
+
+  // ── Gap fix (2.9) — labels/triggerPatterns/unassign/roleKey vía CRUD (D2/D5/D10/D11) ──
+  it('gap-fix: crea con labels, unassign y roleKey', async () => {
+    const intent = await useCase.execute({
+      ...base,
+      profileId,
+      actionKey: 'handoff',
+      labels: ['soporte'],
+      unassign: true,
+      roleKey: 'reclamo_servicio',
+    });
+
+    expect(intent.labels).toEqual(['soporte']);
+    expect(intent.unassign).toBe(true);
+    expect(intent.roleKey).toBe('reclamo_servicio');
+  });
+
+  it('CFG-2: triggerPatterns con actionKey handoff se acepta', async () => {
+    const intent = await useCase.execute({
+      ...base,
+      profileId,
+      actionKey: 'handoff',
+      triggerPatterns: ['no tengo (internet|servicio)'],
+    });
+
+    expect(intent.triggerPatterns).toEqual(['no tengo (internet|servicio)']);
+  });
+
+  it('CFG-2: triggerPatterns con actionKey distinto de handoff se rechaza (400) y NO persiste', async () => {
+    await expect(
+      useCase.execute({
+        ...base,
+        profileId,
+        actionKey: 'whatsapp_reply',
+        triggerPatterns: ['no tengo internet'],
+      }),
+    ).rejects.toBeInstanceOf(TriggerPatternsRequireHandoffActionError);
+
+    expect(await intents.listByProfileId(profileId)).toEqual([]);
+  });
+
+  it('CFG-2: triggerPatterns vacío es válido con cualquier actionKey', async () => {
+    const intent = await useCase.execute({
+      ...base,
+      profileId,
+      actionKey: 'whatsapp_reply',
+      triggerPatterns: [],
+    });
+
+    expect(intent.triggerPatterns).toEqual([]);
+  });
 });
 
 describe('UpdateAssistantIntent', () => {
@@ -284,6 +336,50 @@ describe('UpdateAssistantIntent', () => {
       UnknownAssistantActionError,
     );
   });
+
+  // ── Gap fix (2.9) — labels/triggerPatterns/unassign/roleKey vía CRUD ────────
+  it('gap-fix: edita labels, unassign y roleKey', async () => {
+    const updated = await useCase.execute(intentId, {
+      labels: ['administracion'],
+      unassign: true,
+      roleKey: 'comprobante_mp',
+    });
+
+    expect(updated.labels).toEqual(['administracion']);
+    expect(updated.unassign).toBe(true);
+    expect(updated.roleKey).toBe('comprobante_mp');
+  });
+
+  it('CFG-2: setear triggerPatterns en una intent con actionKey whatsapp_reply se rechaza (400)', async () => {
+    // intentId fue creada con actionKey:'whatsapp_reply' en el beforeEach.
+    await expect(
+      useCase.execute(intentId, { triggerPatterns: ['no tengo internet'] }),
+    ).rejects.toBeInstanceOf(TriggerPatternsRequireHandoffActionError);
+  });
+
+  it('CFG-2: cambiar actionKey a uno no-handoff mientras quedan triggerPatterns vigentes se rechaza', async () => {
+    const withPatterns = await intents.create({
+      profileId: 'profile-1',
+      name: 'reclamo_servicio',
+      description: 'no tiene servicio',
+      actionKey: 'handoff',
+      triggerPatterns: ['no tengo (internet|servicio)'],
+    });
+
+    await expect(
+      useCase.execute(withPatterns.id, { actionKey: 'whatsapp_reply' }),
+    ).rejects.toBeInstanceOf(TriggerPatternsRequireHandoffActionError);
+  });
+
+  it('CFG-2: setear triggerPatterns junto con actionKey:handoff en el mismo patch se acepta', async () => {
+    const updated = await useCase.execute(intentId, {
+      actionKey: 'handoff',
+      triggerPatterns: ['no tengo internet'],
+    });
+
+    expect(updated.actionKey).toBe('handoff');
+    expect(updated.triggerPatterns).toEqual(['no tengo internet']);
+  });
 });
 
 describe('ListAssistantCatalogs', () => {
@@ -292,10 +388,149 @@ describe('ListAssistantCatalogs', () => {
 
     const { dataSources, actions } = await useCase.execute();
 
-    expect(dataSources).toHaveLength(4);
-    expect(actions).toHaveLength(5);
+    // ai-assistant-cobranzas (D2/D8/D9) — el mirror in-memory debe llevar `handoff` y las
+    // fuentes `cliente.facturas`/`cliente.recibos_hoy`, espejo de las migraciones aditivas.
+    expect(dataSources).toHaveLength(6);
+    expect(actions).toHaveLength(6);
     expect(dataSources.find((s) => s.key === 'noc.cortes')?.enabled).toBe(false);
+    expect(dataSources.find((s) => s.key === 'cliente.facturas')?.enabled).toBe(true);
+    expect(dataSources.find((s) => s.key === 'cliente.recibos_hoy')?.enabled).toBe(true);
     expect(actions.find((a) => a.key === 'resolve_conversation')?.riskLevel).toBe('red');
     expect(actions.find((a) => a.key === 'private_note')?.riskLevel).toBe('green');
+    expect(actions.find((a) => a.key === 'handoff')?.riskLevel).toBe('green');
+  });
+});
+
+/** Harness compartido por los tests de unicidad de `roleKey` (CFG-2). */
+async function roleKeyHarness() {
+  const profiles = new InMemoryAssistantProfileRepository();
+  const intents = new InMemoryAssistantIntentRepository();
+  const catalog = new InMemoryAssistantCatalogRepository();
+  const create = new CreateAssistantIntent(profiles, intents, catalog);
+  const update = new UpdateAssistantIntent(intents, catalog);
+  const profile = await profiles.create({ areaId: 'area-1', persona: 'Cordial' });
+  return { profiles, intents, catalog, create, update, profile };
+}
+
+/**
+ * ai-assistant-cobranzas (CFG-2 / D11) — `roleKey` es ÚNICO POR PERFIL.
+ *
+ * El selector determinístico (4b) busca la intent de destino POR `roleKey`
+ * (`findByRoleKey`, que devuelve LA PRIMERA). Dos filas con el mismo rol en el mismo perfil
+ * hacen que cuál gana dependa del orden de la query: el bot respondería una cosa o la otra
+ * según cómo salieron las filas ese día. Por eso no se resuelve con "la primera gana", se
+ * rechaza al configurar.
+ *
+ * Sin índice único en la base a propósito (design D11): la unicidad que importa es POR
+ * PERFIL, y una constraint global impediría que dos perfiles tengan su propia
+ * `comprobante_mp`.
+ */
+describe('AssistantIntent — roleKey único por perfil (CFG-2)', () => {
+  it('CREATE: un `roleKey` ya usado en el MISMO perfil se rechaza con 400', async () => {
+    const { create, profile } = await roleKeyHarness();
+
+    await create.execute({
+      profileId: profile.id,
+      name: 'comprobante mp',
+      description: 'acusa el pago verificado',
+      actionKey: 'private_note',
+      roleKey: 'comprobante_mp',
+    });
+
+    await expect(
+      create.execute({
+        profileId: profile.id,
+        name: 'otra distinta',
+        description: 'duplicada por accidente',
+        actionKey: 'private_note',
+        roleKey: 'comprobante_mp',
+      }),
+    ).rejects.toMatchObject({ code: 'ASSISTANT_ROLE_KEY_CONFLICT' });
+  });
+
+  it('CREATE: el MISMO `roleKey` en OTRO perfil es válido (la unicidad es por perfil)', async () => {
+    const { create, profiles, profile } = await roleKeyHarness();
+    const otro = await profiles.create({ areaId: 'area-2', persona: 'Otro' });
+
+    await create.execute({
+      profileId: profile.id,
+      name: 'comprobante mp',
+      description: 'x',
+      actionKey: 'private_note',
+      roleKey: 'comprobante_mp',
+    });
+
+    await expect(
+      create.execute({
+        profileId: otro.id,
+        name: 'comprobante mp',
+        description: 'x',
+        actionKey: 'private_note',
+        roleKey: 'comprobante_mp',
+      }),
+    ).resolves.toMatchObject({ roleKey: 'comprobante_mp' });
+  });
+
+  it('CREATE: `roleKey` null/ausente nunca choca (la mayoría de las intents no tienen rol)', async () => {
+    const { create, profile } = await roleKeyHarness();
+
+    await create.execute({ profileId: profile.id, name: 'a', description: 'x', actionKey: 'private_note' });
+
+    await expect(
+      create.execute({ profileId: profile.id, name: 'b', description: 'x', actionKey: 'private_note' }),
+    ).resolves.toMatchObject({ roleKey: null });
+  });
+
+  it('UPDATE: mover un `roleKey` a una fila cuando otra ya lo tiene se rechaza', async () => {
+    const { create, update, profile } = await roleKeyHarness();
+
+    await create.execute({
+      profileId: profile.id,
+      name: 'comprobante mp',
+      description: 'x',
+      actionKey: 'private_note',
+      roleKey: 'comprobante_mp',
+    });
+    const otra = await create.execute({
+      profileId: profile.id,
+      name: 'otra',
+      description: 'x',
+      actionKey: 'private_note',
+    });
+
+    await expect(update.execute(otra.id, { roleKey: 'comprobante_mp' })).rejects.toMatchObject({
+      code: 'ASSISTANT_ROLE_KEY_CONFLICT',
+    });
+  });
+
+  it('UPDATE: re-guardar la MISMA fila con su propio `roleKey` no choca consigo misma', async () => {
+    const { create, update, profile } = await roleKeyHarness();
+
+    const fila = await create.execute({
+      profileId: profile.id,
+      name: 'comprobante mp',
+      description: 'x',
+      actionKey: 'private_note',
+      roleKey: 'comprobante_mp',
+    });
+
+    await expect(update.execute(fila.id, { roleKey: 'comprobante_mp', enabled: false })).resolves.toMatchObject({
+      roleKey: 'comprobante_mp',
+      enabled: false,
+    });
+  });
+
+  it('UPDATE: limpiar el rol con `roleKey: null` siempre se permite', async () => {
+    const { create, update, profile } = await roleKeyHarness();
+
+    const fila = await create.execute({
+      profileId: profile.id,
+      name: 'comprobante mp',
+      description: 'x',
+      actionKey: 'private_note',
+      roleKey: 'comprobante_mp',
+    });
+
+    await expect(update.execute(fila.id, { roleKey: null })).resolves.toMatchObject({ roleKey: null });
   });
 });

@@ -80,7 +80,32 @@ export interface ChatwootWebhookPayload {
     /** M2 — Chatwoot's live 24h-window flag, only present on message-level events. */
     can_reply?: boolean;
     /** M1 — the REAL wire path for contact identity on a message-level event. */
-    meta?: { sender?: { name?: string | null; phone_number?: string | null } | null };
+    meta?: {
+      sender?: { name?: string | null; phone_number?: string | null } | null;
+      /**
+       * ai-assistant-cobranzas (D4.2 / SEC-6) — el agente que TIENE la conversación en
+       * Chatwoot.
+       *
+       * ⚠️ **Forma REAL verificada contra el fuente de Chatwoot v4.13 del contenedor de
+       * producción** (`app/presenters/conversations/event_data_presenter.rb#push_meta`):
+       * `{ sender, assignee: assigned_entity&.push_event_data, assignee_type, team,
+       * hmac_verified }`. O sea: en el WEBHOOK, una conversación SIN ASIGNAR llega con
+       * `assignee: null` — **la clave está presente**. (La vista jbuilder de la REST API sí
+       * omite la clave cuando no hay asignado, pero el motor NO consume esa vista.)
+       *
+       * Por eso el mapeo de `assigneeNameFrom` es correcto y NO hay que "arreglarlo":
+       * `null` ⇒ sin asignar; clave AUSENTE ⇒ no sabemos ⇒ fail-closed. Ver el test
+       * "forma REAL del payload de Chatwoot v4.13".
+       */
+      assignee?: { name?: string | null; available_name?: string | null } | null;
+      /**
+       * ai-assistant-cobranzas (SEC-6) — qué TIPO de entidad tiene la conversación:
+       * `'User'` (una persona) o `'AgentBot'` (un bot, incluido el nuestro). Un bot asignado
+       * NO es "hay un humano atendiendo": si contara, el propio asistente se auto-silenciaría
+       * en cuanto Chatwoot le asigne la conversación.
+       */
+      assignee_type?: string | null;
+    };
   };
   sender?: { name?: string | null } | null;
   /** Only meaningful on CONVERSATION-level events (`conversation_created`/`conversation_status_changed`). */
@@ -412,6 +437,8 @@ export class ReceiveChatwootWebhook {
       isPrivate: isPrivateNote,
       canReply: payload.conversation?.can_reply ?? conversation.canReply ?? false,
       contactPhone: sender?.phone_number ?? null,
+      // D4.2/SEC-6 — quien tiene la conversación EN CHATWOOT, en el instante del webhook.
+      assigneeName: assigneeNameFrom(payload.conversation?.meta),
     });
   }
 
@@ -434,6 +461,11 @@ export class ReceiveChatwootWebhook {
       isPrivate: boolean;
       canReply: boolean;
       contactPhone: string | null;
+      /**
+       * ai-assistant-cobranzas (D4.2 + fix wave W2) — `null` = sin asignar (lo dijo Chatwoot);
+       * `undefined` = el payload no trae el campo ⇒ el motor asume ASIGNADO.
+       */
+      assigneeName: string | null | undefined;
     },
   ): Promise<void> {
     if (!this.assistant) return;
@@ -446,6 +478,7 @@ export class ReceiveChatwootWebhook {
         isPrivate: input.isPrivate,
         canReply: input.canReply,
         contactPhone: input.contactPhone,
+        assigneeName: input.assigneeName,
       });
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -698,4 +731,50 @@ export class ReceiveChatwootWebhook {
       });
     }
   }
+}
+
+/**
+ * ai-assistant-cobranzas (D4.2 / SEC-6, reescrita en el fix wave W2) — nombre del agente
+ * asignado.
+ *
+ * Tres estados, y la diferencia entre dos de ellos es de SEGURIDAD:
+ *  - `string`    ⇒ hay un humano con la conversación asignada;
+ *  - `null`      ⇒ Chatwoot dijo explícitamente que NO hay asignado (`assignee: null`);
+ *  - `undefined` ⇒ **no sabemos**: el payload no trae el campo (drift de versión, otro tipo de
+ *    evento). El motor lo trata como ASIGNADO (fail-closed) y lo loguea.
+ *
+ * La versión anterior colapsaba el tercer caso en `null` "para no dejar un `undefined`
+ * ambiguo", y con eso apagaba en silencio la señal (b) de SEC-6: el bot se ponía a hablar
+ * sobre conversaciones que podían estar en manos de una persona. La ambigüedad no se resuelve
+ * eligiendo el lado cómodo — se resuelve eligiendo el lado seguro y dejando rastro.
+ *
+ * `available_name` es el fallback documentado de Chatwoot cuando `name` viene vacío.
+ */
+function assigneeNameFrom(
+  meta:
+    | {
+        assignee?: { name?: string | null; available_name?: string | null } | null;
+        assignee_type?: string | null;
+      }
+    | null
+    | undefined,
+): string | null | undefined {
+  if (!meta || !('assignee' in meta)) {
+    // eslint-disable-next-line no-console
+    console.warn('[messaging] el payload de Chatwoot no trae `conversation.meta.assignee` — el asistente lo trata como ASIGNADO');
+    return undefined;
+  }
+
+  // SEC-6 — un `AgentBot` asignado NO es un humano atendiendo. Si contara, el propio
+  // asistente se auto-silenciaría en cuanto Chatwoot le asignara la conversación: la guarda
+  // existe para no pisar a una PERSONA.
+  if (typeof meta.assignee_type === 'string' && meta.assignee_type.trim().toLowerCase() === 'agentbot') {
+    return null;
+  }
+
+  const assignee = meta.assignee;
+  const name = assignee?.name ?? assignee?.available_name ?? null;
+  if (typeof name !== 'string') return null;
+  const trimmed = name.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }

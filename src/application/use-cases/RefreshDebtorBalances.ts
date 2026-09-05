@@ -173,6 +173,10 @@ export class RefreshDebtorBalances {
           currency: balance.currency,
           invoices,
           at,
+          // ai-assistant-cobranzas (DAT-3/D8) — mismo criterio que el carril de
+          // `RefreshClientBalanceIfStale`: la key se omite si GR no trajo el link (el
+          // hermano, `fix-wave-buscar-el-hermano`).
+          ...(balance.paymentUrls?.MercadoPago ? { paymentUrl: balance.paymentUrls.MercadoPago } : {}),
         });
         refreshed++;
       } catch (err) {

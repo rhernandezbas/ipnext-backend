@@ -5,6 +5,8 @@ import {
   GestionRealPort,
   FetchClientsParams,
   FetchClientsResult,
+  FetchClientReceiptsParams,
+  FetchClientReceiptsResult,
   FetchContractsDeltaParams,
   FetchContractsDeltaResult,
   FetchReceiptsParams,
@@ -22,6 +24,8 @@ import {
   GrReceiptRetencion,
   GrServiceOrder,
 } from '@domain/entities/gestionReal';
+import { isRealAnnulment } from '@application/use-cases/finance/financeDates';
+
 export interface GestionRealClientOptions {
   baseUrl: string;
   cuit: string;
@@ -211,6 +215,41 @@ export class GestionRealClient implements GestionRealPort {
       offset: params.offset,
     });
     return parseReceiptsResponse(data, params.offset);
+  }
+
+  /**
+   * ai-assistant-cobranzas (4.7 / D9) — `cliente.recibos_hoy`: los recibos de UN cliente, EN
+   * VIVO, para verificar contra GR el comprobante que el cliente acaba de mandar.
+   *
+   * Es la MISMA `action:'recibos'` de la ingesta global, con dos diferencias que son la razón
+   * de ser del método:
+   *
+   *  - **`cliente_id` es obligatorio en la firma** (`FetchClientReceiptsParams`). Un
+   *    `clienteId` opcional sobre `fetchReceipts` habría alcanzado técnicamente, y un caller
+   *    que se lo olvidara se llevaría los recibos de TODOS los clientes: una fuga de PII por
+   *    omisión. El ancla no se delega al llamador.
+   *  - **Los anulados se excluyen ACÁ.** `parseReceiptsResponse` pasa `fecha_anulacion` en
+   *    crudo a propósito (es `infrastructure/`, no decide reglas de negocio) y deja que
+   *    `mapGrReceipt` derive `anulado` río abajo — pero este camino NO pasa por el mapper:
+   *    sus recibos van directo a "¿entró este pago?". Contar un recibo dado de baja como un
+   *    pago recibido es decirle "listo, ya está" a alguien cuyo pago se anuló.
+   *
+   * Las fechas viajan EXACTAMENTE como se las pasaron (DD-MM-AAAA): `recibos` responde HTTP
+   * 500 —no un error 91— ante una fecha ISO. `total` es el `resultados` de GR, ANTES del
+   * filtro de anulados: es lo que GR dice haber encontrado, no lo que nosotros conservamos.
+   */
+  async fetchClientReceipts(params: FetchClientReceiptsParams): Promise<FetchClientReceiptsResult> {
+    const { data } = await this.postWithRetry({
+      action: 'recibos',
+      cliente_id: Number(params.grClienteId),
+      fecha_desde: params.fechaDesde,
+      fecha_hasta: params.fechaHasta,
+    });
+    const parsed = parseReceiptsResponse(data);
+    return {
+      total: parsed.total,
+      receipts: parsed.receipts.filter((r) => !isRealAnnulment(r.fechaAnulacion, r.grReceiptId)),
+    };
   }
 }
 

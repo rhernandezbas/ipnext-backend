@@ -214,6 +214,10 @@ export class RefreshClientBalanceIfStale {
         currency: balance.currency,
         invoices,
         at,
+        // ai-assistant-cobranzas (DAT-3/D8) — el link "pagar todo junto" del MISMO payload.
+        // Se OMITE la key cuando GR no lo trae: mandar `null` vaciaría un link vigente por
+        // una simple ausencia en la respuesta.
+        ...(balance.paymentUrls?.MercadoPago ? { paymentUrl: balance.paymentUrls.MercadoPago } : {}),
       });
       return true;
     } catch {

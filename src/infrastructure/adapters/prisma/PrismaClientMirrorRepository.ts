@@ -42,15 +42,27 @@ function parseGrDate(s: string | null): Date | null {
 type Db = typeof prisma | Prisma.TransactionClient;
 
 /** Escribe SÓLO las tres columnas de balance — nunca customAttributes, status ni catálogo. */
-async function writeBalance(db: Db, grClienteId: string, amount: number, currency: string | null, at: Date): Promise<void> {
-  await db.client.updateMany({
-    where: { grClienteId },
-    data: {
-      balanceDue: amount,
-      balanceCurrency: currency,
-      lastBalanceAt: at,
-    },
-  });
+async function writeBalance(
+  db: Db,
+  grClienteId: string,
+  amount: number,
+  currency: string | null,
+  at: Date,
+  // ai-assistant-cobranzas (DAT-3/D8) — `undefined` ⇒ la key NO se manda. En Prisma
+  // `{grPaymentUrl: undefined}` y omitir la key se comportan igual, pero construir el objeto
+  // explícitamente deja el contrato a la vista: un payload de GR sin `payments_url_saldos`
+  // (drift, o simplemente un cliente sin link) JAMÁS puede vaciar el que ya teníamos, y
+  // `null` explícito SÍ lo vacía porque eso es una afirmación, no una ausencia.
+  paymentUrl?: string | null,
+): Promise<void> {
+  const data: Record<string, unknown> = {
+    balanceDue: amount,
+    balanceCurrency: currency,
+    lastBalanceAt: at,
+  };
+  if (paymentUrl !== undefined) data.grPaymentUrl = paymentUrl;
+
+  await db.client.updateMany({ where: { grClienteId }, data });
 }
 
 /** Replace-all de las facturas GR del cliente (borra las que GR ya no trae, upsertea las actuales). */
@@ -147,7 +159,7 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
    * `lastBalanceAt` fresco.
    */
   async updateBalanceAndInvoices(params: UpdateBalanceAndInvoicesParams): Promise<void> {
-    const { grClienteId, amount, currency, invoices, at } = params;
+    const { grClienteId, amount, currency, invoices, at, paymentUrl } = params;
 
     // La resolución del cliente local va FUERA de la tx: es una lectura y no
     // participa del rollback (mismo criterio que `upsertInvoices`, que ya la
@@ -159,7 +171,10 @@ export class PrismaClientMirrorRepository implements ClientMirrorRepository {
       : await prisma.client.findUnique({ where: { grClienteId }, select: { id: true, name: true } });
 
     await prisma.$transaction(async (tx) => {
-      await writeBalance(tx, grClienteId, amount, currency, at);
+      // DAT-3/D8 — el link "pagar todo junto" viaja en la MISMA transacción que el saldo y
+      // las facturas: el bot cita las tres cosas en un solo mensaje y no pueden venir de
+      // momentos distintos.
+      await writeBalance(tx, grClienteId, amount, currency, at, paymentUrl);
       if (invoices !== null && client) {
         await replaceGrInvoices(tx, client, invoices, at);
       }
