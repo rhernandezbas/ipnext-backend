@@ -376,21 +376,21 @@ no paralelizar)
 ## Fase 8 — CONFIG post-deploy (NO es código; ejecuta el usuario tras mergear y deployar Fases
 1–7; estrictamente secuencial, cada paso depende del anterior)
 
-- [ ] 8.1 Chatwoot (usuario): crear los labels `soporte` y `administracion` si no existen.
+- [x] 8.1 Chatwoot (usuario): crear los labels `soporte` y `administracion` si no existen.
 - [ ] 8.2 UI de config del proveedor (`UpdateAssistantProviderConfig`, ya existente): cargar la
   API key de DeepSeek para este entorno, si no está cargada.
-- [ ] 8.3 Config (`UpdateAssistantRoutingConfig`, ya existente): `defaultAreaId =
+- [x] 8.3 Config (`UpdateAssistantRoutingConfig`, ya existente): `defaultAreaId =
   e09fac32-34eb-46cc-8ec0-c809039eb8ea` (Facturación) (D1/CFG-1).
-- [ ] 8.4 Config (`CreateAssistantProfile`, ya existente): crear el único perfil de este change en
+- [x] 8.4 Config (`CreateAssistantProfile`, ya existente): crear el único perfil de este change en
   Facturación, `enabled:true`, `enabledActions` incluye `handoff` y `private_note` — **sin**
   `whatsapp_reply` todavía (D6/DFT-1).
-- [ ] 8.5 Config (`CreateAssistantIntent` × 7, ya existente): sembrar las intents STOP de INT-1,
+- [x] 8.5 Config (`CreateAssistantIntent` × 7, ya existente): sembrar las intents STOP de INT-1,
   todas `actionKey:'handoff'`: `reclamo_servicio` (`labels:['soporte']`, triggerPattern p.ej.
   `no tengo (internet|servicio)`), `plan_pago` (`labels:[]`), `disputa_monto` (`labels:[]`),
   `baja` (`labels:[]`), `enojo` (`labels:[]`), `comprobante_transferencia`
   (`labels:['administracion']`, triggerPattern p.ej. `transferenc|comprobante`),
   `equivocado`/`auto-responder` (`labels:[]`, handoff silencioso, no cierra la conversación).
-- [ ] 8.6 Config (`CreateAssistantIntent` × 4, ya existente): crear las intents de cobranza que sí
+- [x] 8.6 Config (`CreateAssistantIntent` × 4, ya existente): crear las intents de cobranza que sí
   redactan contenido (usan `cliente.facturas` + `cliente.saldo`), `actionKey:'private_note'`,
   `responseGuide` con la instrucción explícita de NO escribir montos ni links (SEC-4/REN-1). El
   copy exacto (nombres, `examples`, texto del `responseGuide`, aclaración de alias) lo define el
@@ -402,24 +402,24 @@ no paralelizar)
   `actionKey` a `whatsapp_reply` y habilitarla en `enabledActions` del perfil (D6, sin deploy).
 
 ### Lote G4 — CONFIG de las 3 intents nuevas (usuario; va entre 8.6 y 8.7 en el orden real)
-- [ ] 8.10 `CreateAssistantIntent` — `promesa_pago`: `roleKey:'promesa_pago'`,
+- [x] 8.10 `CreateAssistantIntent` — `promesa_pago`: `roleKey:'promesa_pago'`,
   `actionKey:'handoff'`, `labels:['administracion']`, `unassign:true`, `dataSourceKeys:[]`,
   `triggerPatterns` con las frases de promesa: `pago (luego|mas tarde|despues)`,
   `(te )?pago (mañana|el lunes|el martes|…)`, `la (proxima )?semana( que viene)?`, `a fin de mes`,
   `cuando (cobre|me paguen|cobro)`, `no puedo (pagar )?(ahora|hoy)`, `me esperas`. Esta lista es la
   ÚNICA fuente de frases de promesa — 8.11 la reusa (INT-2/D11).
-- [ ] 8.11 `CreateAssistantIntent` — `pago_parcial_con_promesa`: `roleKey` homónimo,
+- [x] 8.11 `CreateAssistantIntent` — `pago_parcial_con_promesa`: `roleKey` homónimo,
   `labels:['administracion']`, `unassign:true`,
   `dataSourceKeys:['cliente.recibos_hoy','cliente.saldo','cliente.facturas']`,
   `actionKey:'private_note'` (nace en borrador, D6). SIN `triggerPatterns` (la elige el selector
   4b, no el pre-chequeo — guardarlos daría 400 por CFG-2). `responseGuide`: UN solo mensaje,
   reconocer el pago, saldo restante y N facturas, mencionar la fecha prometida si la dijo, NO
   escribir montos ni links (los pone el código) (INT-3).
-- [ ] 8.12 `CreateAssistantIntent` — `comprobante_mp`: `roleKey` homónimo, `labels:[]`,
+- [x] 8.12 `CreateAssistantIntent` — `comprobante_mp`: `roleKey` homónimo, `labels:[]`,
   `unassign:false`, mismos `dataSourceKeys` que 8.11, `actionKey:'private_note'`. `responseGuide`
   con las tres ramas del signo del saldo (RSP-1) y la mención de doble pago cuando el hecho
   `posibleDoblePago` viene en `true`, sin prometer devolución ni plazo (INT-4).
-- [ ] 8.13 Revisar que `comprobante_transferencia` (sembrada en 8.5) tenga `roleKey` homónimo,
+- [x] 8.13 Revisar que `comprobante_transferencia` (sembrada en 8.5) tenga `roleKey` homónimo,
   `unassign:true` y `labels:['administracion']` — es el destino del selector cuando no hay match.
 - [ ] 8.14 Prueba en vivo (borrador) con los 3 casos reales del 04-09 antes de soltar nada:
   comprobante con deuda restante (Vargas, op 177332834792), pago parcial + promesa de fin de mes
@@ -524,3 +524,15 @@ no paralelizar)
 - [ ] 10.7 (N4, ROLLOUT) Confirmar en el primer mensaje real que el `console.warn` de
       `ReceiveChatwootWebhook` NO se dispara antes de prender `ai-assistant-enabled`.
 
+
+> **Fase 8 ejecutada en vivo el 2026-09-05** (perfil `45286e0e-63ae-4111-8c3f-fe36f89c6601`, 12 intents).
+> Desvíos respecto del orden escrito: 8.3 (`PUT /routing`) exige que el área ya tenga perfil → va DESPUÉS de 8.4;
+> `CreateAssistantProfile` no acepta `enabled`/`enabledActions` → hace falta un `PATCH` posterior; el login
+> admin es `POST /api/auth/login`. Pendientes: 8.2 (key DeepSeek, no existe), envs `ASSISTANT_PAY_ALIAS` /
+> `ASSISTANT_SENDER_NAMES` en Easypanel, usuario propio del bot en Chatwoot (el token actual es de un humano),
+> 8.7, 8.8, 8.14, 8.9.
+
+> **ESTACIONADO 2026-09-06 (decisión del dueño):** no se va a usar el motor in-app para cobranzas; la operación
+> se hace como sesión de Claude + skill `operation_administracion` (`~/.claude/skills/`). El código queda en main
+> deployado con `ai-assistant-enabled=false` (perfil y 12 intents cargados, inertes). No archivar ni continuar
+> 8.2/8.7/8.9 salvo que se reabra. Si se reabre, retomar por `asistente-cobranzas-estado-rollout` (memoria).
