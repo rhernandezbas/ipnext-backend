@@ -256,6 +256,44 @@ describe('POST /templates (TPL-3)', () => {
     const messages = JSON.stringify(res.body.details ?? []);
     expect(messages.toLowerCase()).not.toContain('es requerido');
   });
+
+  // ── whatsapp-template-buttons — probar que el Zod NO stripea `button` (D7.d / TPL-3) ──
+  it('con button válido → 201, templatePort.createCalls[0].button poblado (Zod no lo stripea)', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({
+        friendlyName: 'recordatorio_deuda',
+        language: 'es',
+        body: 'Hola {{1}}, mirá tu factura',
+        button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+    expect(res.status).toBe(201);
+    expect(templatePort.createCalls[0].button).toEqual({ title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
+  });
+
+  it('con button inválido (url ftp://) → 400 VALIDATION_ERROR, no llega al create call', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url: 'ftp://example.com/x' } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(templatePort.createCalls).toHaveLength(0);
+  });
+
+  it('con button url con newline INTERIOR → 400 VALIDATION_ERROR, no llega al create call', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url: 'https://a.com/x\ny' } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(templatePort.createCalls).toHaveLength(0);
+  });
 });
 
 describe('POST /templates/:sid/submit (TPL-4)', () => {

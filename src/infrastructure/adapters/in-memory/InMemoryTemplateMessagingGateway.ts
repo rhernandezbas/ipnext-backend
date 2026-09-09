@@ -23,6 +23,8 @@ export interface TemplateCreateCallRecord {
   language: string;
   variables: Record<string, string>;
   body: string;
+  /** whatsapp-template-buttons — pass-through del botón CTA, `undefined` si no vino. */
+  button?: { title: string; url: string };
 }
 export interface TemplateDeleteCallRecord {
   contentSid: string;
@@ -101,6 +103,7 @@ export class InMemoryTemplateMessagingGateway implements TemplateMessagingPort, 
       language: input.language,
       variables: { ...input.variables },
       body: input.body,
+      button: input.button ? { ...input.button } : undefined,
     });
     this.createCount += 1;
     const dto: TemplateDto = {

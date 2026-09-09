@@ -81,6 +81,22 @@ export interface CreateTemplateInput {
   variables: Record<string, string>;
   /** Texto plano del body (`types: {"twilio/text": {body}}`). */
   body: string;
+  /**
+   * whatsapp-template-buttons — botón Call-to-Action (URL) OPCIONAL y ADITIVO.
+   * Cuando viene, el adapter emite `types: {'twilio/call-to-action': {...}}` en
+   * vez de `twilio/text`. `title`/`url` YA validados por el use case
+   * (`CreateTemplate.assertValidButton`) antes de llegar acá.
+   */
+  button?: TemplateButton;
+}
+
+/**
+ * whatsapp-template-buttons — botón CTA singular (no `buttons[]`, design
+ * decisión #1: widening a plural después es backward-compatible, narrowing no).
+ */
+export interface TemplateButton {
+  title: string;
+  url: string;
 }
 
 /**

@@ -77,6 +77,71 @@ describe('TwilioContentGateway — createTemplate (T2)', () => {
 
     await expect(gateway.createTemplate({ friendlyName: 'x', language: 'es', variables: {}, body: 'b' })).rejects.toBeInstanceOf(TemplateProviderUnavailableError);
   });
+
+  // ── whatsapp-template-buttons — payload branch por `input.button` ─────────
+  it('sin button → payload sigue byte-idéntico {twilio/text:{body}} (regresión)', async () => {
+    const post = jest.fn().mockResolvedValueOnce({
+      data: { sid: 'HXtxt', friendly_name: 'promo', language: 'es', variables: {}, types: { 'twilio/text': { body: 'Hola' } } },
+    });
+    const { gateway } = makeGateway({ post });
+
+    await gateway.createTemplate({ friendlyName: 'promo', language: 'es', variables: {}, body: 'Hola' });
+
+    const [, body] = post.mock.calls[0];
+    expect(body).toEqual({ friendly_name: 'promo', language: 'es', variables: {}, types: { 'twilio/text': { body: 'Hola' } } });
+  });
+
+  it('con button → payload types es twilio/call-to-action con actions[{type:URL,title,url}]', async () => {
+    const post = jest.fn().mockResolvedValueOnce({
+      data: {
+        sid: 'HXcta',
+        friendly_name: 'recordatorio_deuda',
+        language: 'es',
+        variables: {},
+        types: { 'twilio/call-to-action': { body: 'Hola {{1}}', actions: [{ type: 'URL', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' }] } },
+      },
+    });
+    const { gateway } = makeGateway({ post });
+
+    await gateway.createTemplate({
+      friendlyName: 'recordatorio_deuda',
+      language: 'es',
+      variables: {},
+      body: 'Hola {{1}}',
+      button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+    });
+
+    const [, body] = post.mock.calls[0];
+    expect(body).toEqual({
+      friendly_name: 'recordatorio_deuda',
+      language: 'es',
+      variables: {},
+      types: {
+        'twilio/call-to-action': {
+          body: 'Hola {{1}}',
+          actions: [{ type: 'URL', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' }],
+        },
+      },
+    });
+  });
+
+  it('GOTCHA: url con placeholder {{1}} se envía SIN percent-encoding', async () => {
+    const post = jest.fn().mockResolvedValueOnce({
+      data: { sid: 'HXph', friendly_name: 'x', language: 'es', variables: {}, types: {} },
+    });
+    const { gateway } = makeGateway({ post });
+
+    await gateway.createTemplate({
+      friendlyName: 'x',
+      language: 'es',
+      variables: {},
+      body: 'b',
+      button: { title: 'Ver más', url: 'https://portal.ipnext.com.ar/{{1}}' },
+    });
+
+    const [, body] = post.mock.calls[0] as [string, { types: { 'twilio/call-to-action': { actions: Array<{ url: string }> } } }];
+    expect(body.types['twilio/call-to-action'].actions[0].url).toBe('https://portal.ipnext.com.ar/{{1}}');
+  });
 });
 
 describe('TwilioContentGateway — getTemplate (T2)', () => {

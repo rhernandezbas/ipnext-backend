@@ -67,4 +67,180 @@ describe('CreateTemplate (T3)', () => {
     expect(gw.createCalls[0]).toMatchObject({ variables: {} });
     expect(dto.variables).toEqual([]);
   });
+
+  // ── whatsapp-template-buttons — botón CTA opcional (design §2/#2, #3) ──────
+  describe('button (CTA opcional)', () => {
+    it('botón válido → llega al port RAW (createCalls[0].button)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      const dto = await uc.execute({
+        friendlyName: 'recordatorio_deuda',
+        language: 'es',
+        body: 'Hola {{1}}, mirá tu factura',
+        button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+
+      expect(gw.createCalls[0].button).toEqual({ title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
+      expect(dto.contentSid).toMatch(/^HX/);
+    });
+
+    it('sin botón → createCalls[0].button es undefined (regresión, no se inventa nada)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({ friendlyName: 'promo', language: 'es', body: 'Hola' });
+
+      expect(gw.createCalls[0].button).toBeUndefined();
+    });
+
+    it('title whitespace-only → InvalidTemplateInputError, NO llama al port', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({ friendlyName: 'x', language: 'es', body: 'b', button: { title: '   ', url: 'https://example.com' } }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('title > 25 chars → InvalidTemplateInputError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      const longTitle = 'a'.repeat(26);
+      await expect(
+        uc.execute({ friendlyName: 'x', language: 'es', body: 'b', button: { title: longTitle, url: 'https://example.com' } }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('url relativa (no absoluta) → InvalidTemplateInputError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url: '/facturas' } }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('url con protocolo ftp:// → InvalidTemplateInputError (solo http/https)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url: 'ftp://example.com/x' } }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('falta la key title → InvalidTemplateInputError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { url: 'https://example.com' } as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('falta la key url → InvalidTemplateInputError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { title: 'Ver más' } as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('GOTCHA gateway: url con placeholder {{1}} llega RAW al port, sin percent-encoding', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: 'Ver más', url: 'https://portal.ipnext.com.ar/{{1}}' },
+      });
+
+      expect(gw.createCalls[0].button?.url).toBe('https://portal.ipnext.com.ar/{{1}}');
+    });
+
+    // ── fix wave (review adversarial) ────────────────────────────────────────
+    it('url con whitespace alrededor → se guarda TRIMEADA (no el raw)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: '  Ver más  ', url: '  https://portal.ipnext.com.ar/facturas  ' },
+      });
+
+      expect(gw.createCalls[0].button).toEqual({
+        title: 'Ver más',
+        url: 'https://portal.ipnext.com.ar/facturas',
+      });
+    });
+
+    it('url con whitespace en el BORDE (newline de padding) → el valor almacenado queda limpio', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: ' \n Ver \n ', url: ' \n https://a.com/x \n ' },
+      });
+
+      expect(gw.createCalls[0].button).toEqual({ title: 'Ver', url: 'https://a.com/x' });
+    });
+
+    // `new URL()` BORRA en silencio el whitespace INTERIOR al parsear, así que
+    // la url "válida" y la url que se almacena/envía divergen. Se rechaza.
+    it.each([
+      ['newline interior', 'https://a.com/x\ny'],
+      ['tab interior', 'https://a.com/\tx'],
+      ['espacio interior', 'https://a.com/x y'],
+      ['carriage return interior', 'https://a.co\rm/x'],
+    ])('url con %s → InvalidTemplateInputError, no llega al gateway', async (_label, url) => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url } }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('button: null explícito → InvalidTemplateInputError, no TypeError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: null as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+  });
 });

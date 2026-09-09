@@ -7,7 +7,10 @@
  * para el envío) — por eso el ctor toma `contentBaseUrl`/`apiBaseUrl`
  * inyectables en vez de un solo `axios.create({baseURL})`.
  */
-import { TwilioContentGateway } from '@infrastructure/adapters/twilio/TwilioContentGateway';
+import {
+  TwilioContentGateway,
+  extractTemplateBody,
+} from '@infrastructure/adapters/twilio/TwilioContentGateway';
 import {
   TemplateProviderUnavailableError,
   TemplateSendRejectedError,
@@ -37,6 +40,22 @@ function makeGateway(overrides: { get?: jest.Mock; post?: jest.Mock } = {}) {
   });
   return { gateway, get, post };
 }
+
+/**
+ * whatsapp-template-buttons — shape REAL que devuelve Twilio para un template
+ * con botón: `body` + `actions`. Va en un `const` (no literal inline) porque el
+ * parámetro de `extractTemplateBody` es `Record<string, { body?: string }>` y
+ * el excess-property check de TS rechazaría `actions` en un literal directo —
+ * justamente la garantía estructural que este bloque cubre en runtime.
+ */
+const CTA_BUTTON_ACTION = { type: 'URL', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' };
+const CTA_TYPE_WITH_BUTTON = {
+  body: 'Hola {{1}}, ya tenés tu factura disponible',
+  actions: [CTA_BUTTON_ACTION],
+};
+const CTA_TYPE_ONLY_ACTIONS: { body?: string; actions: typeof CTA_BUTTON_ACTION[] } = {
+  actions: [CTA_BUTTON_ACTION],
+};
 
 const CONTENT_PAGE_1 = {
   data: {
@@ -138,6 +157,63 @@ describe('TwilioContentGateway — listTemplates', () => {
     const [template] = await gateway.listTemplates();
 
     expect(template.body).toBe('Elegí una opción');
+  });
+
+  /**
+   * whatsapp-template-buttons (VAL-3, escenario 3) — el preview de un template
+   * con botón CTA muestra SOLO el texto plano: `extractTemplateBody` devuelve el
+   * `body` de `twilio/call-to-action` y nunca nada derivado de `actions`
+   * (título/URL del botón). Regresión directa sobre la función exportada.
+   */
+  describe('extractTemplateBody — CTA (whatsapp-template-buttons VAL-3)', () => {
+    const CTA_TYPES = { 'twilio/call-to-action': CTA_TYPE_WITH_BUTTON };
+
+    it('template solo con `twilio/call-to-action` → devuelve el body plano, nunca el botón', () => {
+      const body = extractTemplateBody(CTA_TYPES);
+
+      expect(body).toBe('Hola {{1}}, ya tenés tu factura disponible');
+      expect(body).not.toContain('Ver mis facturas');
+      expect(body).not.toContain('http');
+    });
+
+    it('CTA + `twilio/text` → gana `twilio/text` (el canónico), sin filtrar el botón', () => {
+      const body = extractTemplateBody({
+        ...CTA_TYPES,
+        'twilio/text': { body: 'Hola {{1}}, ya tenés tu factura disponible' },
+      });
+
+      expect(body).toBe('Hola {{1}}, ya tenés tu factura disponible');
+      expect(body).not.toContain('Ver mis facturas');
+    });
+
+    it('CTA SIN body (solo actions) → cadena vacía, nunca undefined ni el título del botón', () => {
+      const body = extractTemplateBody({ 'twilio/call-to-action': CTA_TYPE_ONLY_ACTIONS });
+
+      expect(body).toBe('');
+    });
+  });
+
+  it('VAL-3: listTemplates de un template con botón CTA → `body` es el texto plano (sin el botón)', async () => {
+    const { gateway } = makeGateway({
+      get: jest.fn().mockResolvedValueOnce({
+        data: {
+          contents: [{
+            sid: 'HXcta',
+            friendly_name: 'aviso_factura_cta',
+            language: 'es',
+            variables: { '1': 'Nombre' },
+            approval_requests: { status: 'approved' },
+            types: { 'twilio/call-to-action': CTA_TYPE_WITH_BUTTON },
+          }],
+          meta: { next_page_url: null },
+        },
+      }),
+    });
+
+    const [template] = await gateway.listTemplates();
+
+    expect(template.body).toBe('Hola {{1}}, ya tenés tu factura disponible');
+    expect(JSON.stringify(template)).not.toContain('Ver mis facturas');
   });
 
   it('2 páginas (next_page_url no-null luego null) → concatena todo', async () => {

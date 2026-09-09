@@ -59,6 +59,17 @@ export function createMessagingTemplatesRouter(
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const body = req.body as Record<string, unknown> | undefined;
+        // Fix wave (review adversarial): el hand-map NO pre-valida el botón. Si
+        // viene `button` en el body se forwardea TAL CUAL (aunque esté mal
+        // formado) para que `assertValidButton` del caso de uso lo rechace con
+        // 400. Pre-filtrar a `undefined` hacía que un `{title, link}` (key
+        // equivocada) respondiera 201 SIN botón, en silencio — mientras la ruta
+        // Zod (`external-messaging.routes.ts`) devolvía 400 por el mismo body.
+        const rawButton = body?.['button'];
+        const button =
+          rawButton === undefined
+            ? undefined
+            : (rawButton as unknown as { title?: unknown; url?: unknown });
         const input: CreateTemplateInput = {
           friendlyName: typeof body?.['friendlyName'] === 'string' ? (body['friendlyName'] as string) : '',
           language: typeof body?.['language'] === 'string' ? (body['language'] as string) : '',
@@ -67,6 +78,7 @@ export function createMessagingTemplatesRouter(
           variables: Array.isArray(body?.['variables'])
             ? (body!['variables'] as unknown[]).filter((v): v is string => typeof v === 'string')
             : [],
+          button,
         };
         const created = await createTemplate.execute(input);
         res.status(201).json(created);
