@@ -18,7 +18,9 @@ const BUTTON_URL_MAX_LENGTH = 2000;
  * el mismo error de validación tipado, para no explotar con un TypeError crudo
  * (500) ante un caller directo del caso de uso. Además valida y almacena la url
  * TRIMEADA: `new URL()` tolera whitespace/newlines de borde, así que validar el
- * raw dejaba pasar un string sucio hacia Twilio.
+ * raw dejaba pasar un string sucio hacia Twilio. Y como `new URL()` además BORRA
+ * en silencio el whitespace/control INTERIOR al parsear, una url con espacios o
+ * caracteres de control adentro se rechaza (nunca se "limpia").
  */
 function assertValidButton(raw: unknown): TemplateButton {
   if (typeof raw !== 'object' || raw === null) {
@@ -45,6 +47,14 @@ function assertValidButton(raw: unknown): TemplateButton {
   }
   if (url.length > BUTTON_URL_MAX_LENGTH) {
     throw new InvalidTemplateInputError(`button.url excede ${BUTTON_URL_MAX_LENGTH} caracteres`);
+  }
+  // `new URL()` BORRA en silencio el whitespace/control INTERIOR al parsear
+  // ('https://a.co\nm/x' parsea limpio), pero acá se almacena el string RAW
+  // trimeado — así lo validado y lo transmitido a Twilio divergen. Se rechaza
+  // outright: una url con espacio/newline/tab adentro siempre es un error del
+  // caller, y "limpiarla" adivinaría la intención.
+  if (/[\s\u0000-\u001F\u007F]/.test(url)) {
+    throw new InvalidTemplateInputError('button.url no puede contener espacios ni caracteres de control');
   }
   let parsed: URL;
   try {

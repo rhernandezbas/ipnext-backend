@@ -197,7 +197,7 @@ describe('CreateTemplate (T3)', () => {
       });
     });
 
-    it('url con newline dentro del padding → el valor almacenado queda limpio', async () => {
+    it('url con whitespace en el BORDE (newline de padding) → el valor almacenado queda limpio', async () => {
       const gw = new InMemoryTemplateMessagingGateway();
       const uc = new CreateTemplate(gw);
 
@@ -209,6 +209,23 @@ describe('CreateTemplate (T3)', () => {
       });
 
       expect(gw.createCalls[0].button).toEqual({ title: 'Ver', url: 'https://a.com/x' });
+    });
+
+    // `new URL()` BORRA en silencio el whitespace INTERIOR al parsear, así que
+    // la url "válida" y la url que se almacena/envía divergen. Se rechaza.
+    it.each([
+      ['newline interior', 'https://a.com/x\ny'],
+      ['tab interior', 'https://a.com/\tx'],
+      ['espacio interior', 'https://a.com/x y'],
+      ['carriage return interior', 'https://a.co\rm/x'],
+    ])('url con %s → InvalidTemplateInputError, no llega al gateway', async (_label, url) => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url } }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
     });
 
     it('button: null explícito → InvalidTemplateInputError, no TypeError', async () => {

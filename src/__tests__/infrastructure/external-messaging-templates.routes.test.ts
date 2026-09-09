@@ -283,6 +283,17 @@ describe('POST /templates (TPL-3)', () => {
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(templatePort.createCalls).toHaveLength(0);
   });
+
+  it('con button url con newline INTERIOR → 400 VALIDATION_ERROR, no llega al create call', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url: 'https://a.com/x\ny' } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(templatePort.createCalls).toHaveLength(0);
+  });
 });
 
 describe('POST /templates/:sid/submit (TPL-4)', () => {
