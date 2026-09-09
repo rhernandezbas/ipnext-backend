@@ -1,7 +1,49 @@
-import type { TemplateAdminPort, CreateTemplateInput as ProviderCreateTemplateInput } from '@domain/ports/TemplateMessagingPort';
+import type { TemplateAdminPort, CreateTemplateInput as ProviderCreateTemplateInput, TemplateButton } from '@domain/ports/TemplateMessagingPort';
 import type { CreateTemplateInput, TemplateDetailDto } from '@application/dto/messaging-templates.dto';
 import { toTemplateDetailDto, isTemplateCategory } from '@application/dto/messaging-templates.dto';
 import { InvalidTemplateInputError } from '@domain/errors/messaging-bulk';
+
+/** whatsapp-template-buttons (design §2/#3) — topes de Meta, no verificados offline (ASUNCIÓN). */
+const BUTTON_TITLE_MAX_LENGTH = 25;
+const BUTTON_URL_MAX_LENGTH = 2000;
+
+/**
+ * whatsapp-template-buttons (design §2/#2/#3) — helper puro module-private:
+ * `title` trim no vacío ≤25 chars; `url` parseable como absoluta http/https
+ * ≤2000 chars. GOTCHA CRÍTICO (design §Learned): valida con `new URL(raw)`
+ * pero devuelve el string RAW, nunca `.href` — `.href` percent-encodearía
+ * placeholders de URL dinámica de Twilio como `{{1}}`.
+ */
+function assertValidButton(button: { title?: unknown; url?: unknown }): TemplateButton {
+  if (typeof button.title !== 'string') {
+    throw new InvalidTemplateInputError('button.title es requerido');
+  }
+  const title = button.title.trim();
+  if (!title) {
+    throw new InvalidTemplateInputError('button.title no puede estar vacío');
+  }
+  if (title.length > BUTTON_TITLE_MAX_LENGTH) {
+    throw new InvalidTemplateInputError(`button.title excede ${BUTTON_TITLE_MAX_LENGTH} caracteres`);
+  }
+
+  if (typeof button.url !== 'string' || button.url.length === 0) {
+    throw new InvalidTemplateInputError('button.url es requerido');
+  }
+  if (button.url.length > BUTTON_URL_MAX_LENGTH) {
+    throw new InvalidTemplateInputError(`button.url excede ${BUTTON_URL_MAX_LENGTH} caracteres`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(button.url);
+  } catch {
+    throw new InvalidTemplateInputError('button.url debe ser una URL absoluta válida');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new InvalidTemplateInputError('button.url debe usar http o https');
+  }
+
+  return { title, url: button.url };
+}
 
 /**
  * Change 3 (templates CRUD) — CREAR un template directo a Twilio Content API.
@@ -39,11 +81,14 @@ export class CreateTemplate {
       variables[name] = name;
     }
 
+    const button = input.button !== undefined ? assertValidButton(input.button) : undefined;
+
     const providerInput: ProviderCreateTemplateInput = {
       friendlyName,
       language,
       variables,
       body: input.body,
+      button,
     };
     const created = await this.adminPort.createTemplate(providerInput);
     return toTemplateDetailDto(created);

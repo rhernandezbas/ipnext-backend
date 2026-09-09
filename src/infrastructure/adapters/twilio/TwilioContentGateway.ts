@@ -199,7 +199,14 @@ export class TwilioContentGateway implements TemplateMessagingPort, TemplateAdmi
           friendly_name: input.friendlyName,
           language: input.language,
           variables: input.variables,
-          types: { 'twilio/text': { body: input.body } },
+          types: input.button
+            ? {
+                'twilio/call-to-action': {
+                  body: input.body,
+                  actions: [{ type: 'URL', title: input.button.title, url: input.button.url }],
+                },
+              }
+            : { 'twilio/text': { body: input.body } },
         },
         { auth: this.auth(), timeout: this.timeoutMs, headers: { 'Content-Type': 'application/json' } },
       );

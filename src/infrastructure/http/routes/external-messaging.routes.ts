@@ -122,12 +122,17 @@ const SendBodySchema = z.object({
   previewId: z.string(),
 });
 
+// whatsapp-template-buttons — `button` es OPCIONAL/ADITIVO (D7.d, TPL-3). Solo
+// se valida FORMA acá; las reglas de negocio (title trim ≤25, url absoluta
+// http/https ≤2000) viven en `CreateTemplate.assertValidButton` (D1: la misma
+// regla debe aplicar a AMBAS superficies de creación, hand-mapped y Zod).
 const CreateTemplateBodySchema = z.object({
   friendlyName: z.string(),
   language: z.string(),
   body: z.string(),
   category: z.string().optional(),
   variables: z.array(z.string()).optional(),
+  button: z.object({ title: z.string(), url: z.string() }).optional(),
 });
 
 // fix wave F3 (S3, smoke en vivo) — `name` pasa a OPCIONAL: si no vino, el

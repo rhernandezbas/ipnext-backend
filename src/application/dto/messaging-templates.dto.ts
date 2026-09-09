@@ -29,6 +29,12 @@ export interface CreateTemplateInput {
   category?: string;
   body: string;
   variables?: string[];
+  /**
+   * whatsapp-template-buttons — botón Call-to-Action (URL) OPCIONAL. Validado
+   * por `CreateTemplate.assertValidButton` (title trim no vacío ≤25 chars, url
+   * absoluta http/https ≤2000 chars); inválido → 400 `VALIDATION_ERROR`.
+   */
+  button?: { title: string; url: string };
 }
 
 /** Input HTTP de submit-a-Meta. */

@@ -59,6 +59,14 @@ export function createMessagingTemplatesRouter(
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
         const body = req.body as Record<string, unknown> | undefined;
+        const rawButton = body?.['button'];
+        const button =
+          typeof rawButton === 'object' &&
+          rawButton !== null &&
+          typeof (rawButton as Record<string, unknown>)['title'] === 'string' &&
+          typeof (rawButton as Record<string, unknown>)['url'] === 'string'
+            ? { title: (rawButton as { title: string }).title, url: (rawButton as { url: string }).url }
+            : undefined;
         const input: CreateTemplateInput = {
           friendlyName: typeof body?.['friendlyName'] === 'string' ? (body['friendlyName'] as string) : '',
           language: typeof body?.['language'] === 'string' ? (body['language'] as string) : '',
@@ -67,6 +75,7 @@ export function createMessagingTemplatesRouter(
           variables: Array.isArray(body?.['variables'])
             ? (body!['variables'] as unknown[]).filter((v): v is string => typeof v === 'string')
             : [],
+          button,
         };
         const created = await createTemplate.execute(input);
         res.status(201).json(created);

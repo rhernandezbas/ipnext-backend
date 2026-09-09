@@ -163,6 +163,31 @@ describe('/api/messaging/templates — POST / (create)', () => {
     const res = await request(app).post('/api/messaging/templates').send({ friendlyName: 'x', language: 'es', body: 'b' });
     expect(res.status).toBe(403);
   });
+
+  // ── whatsapp-template-buttons — button opcional forwardeado (hand-map) ────
+  it('con button válido → 201, gw.createCalls[0].button poblado', async () => {
+    const { app, gw } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/templates')
+      .send({
+        friendlyName: 'recordatorio',
+        language: 'es',
+        body: 'Hola {{1}}',
+        button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+    expect(res.status).toBe(201);
+    expect(gw.createCalls[0].button).toEqual({ title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
+  });
+
+  it('con button inválido (title vacío) → 400 VALIDATION_ERROR, no llega al create call', async () => {
+    const { app, gw } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/templates')
+      .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: '   ', url: 'https://example.com' } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(gw.createCalls).toHaveLength(0);
+  });
 });
 
 // ─── POST /:sid/submit — RBAC write=messaging.bulk ──────────────────────────
