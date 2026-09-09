@@ -11,10 +11,20 @@ const BUTTON_URL_MAX_LENGTH = 2000;
  * whatsapp-template-buttons (design §2/#2/#3) — helper puro module-private:
  * `title` trim no vacío ≤25 chars; `url` parseable como absoluta http/https
  * ≤2000 chars. GOTCHA CRÍTICO (design §Learned): valida con `new URL(raw)`
- * pero devuelve el string RAW, nunca `.href` — `.href` percent-encodearía
- * placeholders de URL dinámica de Twilio como `{{1}}`.
+ * pero devuelve el string RAW (solo trimeado), nunca `.href` — `.href`
+ * percent-encodearía placeholders de URL dinámica de Twilio como `{{1}}`.
+ *
+ * Fix wave (review adversarial): acepta `unknown` y rechaza `null`/no-objeto con
+ * el mismo error de validación tipado, para no explotar con un TypeError crudo
+ * (500) ante un caller directo del caso de uso. Además valida y almacena la url
+ * TRIMEADA: `new URL()` tolera whitespace/newlines de borde, así que validar el
+ * raw dejaba pasar un string sucio hacia Twilio.
  */
-function assertValidButton(button: { title?: unknown; url?: unknown }): TemplateButton {
+function assertValidButton(raw: unknown): TemplateButton {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new InvalidTemplateInputError('button debe ser un objeto { title, url }');
+  }
+  const button = raw as { title?: unknown; url?: unknown };
   if (typeof button.title !== 'string') {
     throw new InvalidTemplateInputError('button.title es requerido');
   }
@@ -26,15 +36,19 @@ function assertValidButton(button: { title?: unknown; url?: unknown }): Template
     throw new InvalidTemplateInputError(`button.title excede ${BUTTON_TITLE_MAX_LENGTH} caracteres`);
   }
 
-  if (typeof button.url !== 'string' || button.url.length === 0) {
+  if (typeof button.url !== 'string') {
     throw new InvalidTemplateInputError('button.url es requerido');
   }
-  if (button.url.length > BUTTON_URL_MAX_LENGTH) {
+  const url = button.url.trim();
+  if (url.length === 0) {
+    throw new InvalidTemplateInputError('button.url es requerido');
+  }
+  if (url.length > BUTTON_URL_MAX_LENGTH) {
     throw new InvalidTemplateInputError(`button.url excede ${BUTTON_URL_MAX_LENGTH} caracteres`);
   }
   let parsed: URL;
   try {
-    parsed = new URL(button.url);
+    parsed = new URL(url);
   } catch {
     throw new InvalidTemplateInputError('button.url debe ser una URL absoluta válida');
   }
@@ -42,7 +56,7 @@ function assertValidButton(button: { title?: unknown; url?: unknown }): Template
     throw new InvalidTemplateInputError('button.url debe usar http o https');
   }
 
-  return { title, url: button.url };
+  return { title, url };
 }
 
 /**
@@ -81,6 +95,9 @@ export class CreateTemplate {
       variables[name] = name;
     }
 
+    // `!== undefined` (y no `!= null`): un `button: null` explícito es entrada
+    // mal formada, no ausencia — entra a `assertValidButton`, que lo rechaza con
+    // el error de validación tipado (400) en vez de reventar en un TypeError.
     const button = input.button !== undefined ? assertValidButton(input.button) : undefined;
 
     const providerInput: ProviderCreateTemplateInput = {

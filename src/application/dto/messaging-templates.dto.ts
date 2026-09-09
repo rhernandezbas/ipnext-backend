@@ -33,8 +33,14 @@ export interface CreateTemplateInput {
    * whatsapp-template-buttons — botón Call-to-Action (URL) OPCIONAL. Validado
    * por `CreateTemplate.assertValidButton` (title trim no vacío ≤25 chars, url
    * absoluta http/https ≤2000 chars); inválido → 400 `VALIDATION_ERROR`.
+   *
+   * Fix wave (review adversarial): los campos van tipados `unknown` a propósito
+   * — es entrada CRUDA sin validar. Las rutas forwardean el objeto tal cual y
+   * la validación vive en UN solo lugar (el caso de uso), en vez de que cada
+   * hand-map decida por su cuenta y termine descartando en silencio un botón
+   * mal formado.
    */
-  button?: { title: string; url: string };
+  button?: { title?: unknown; url?: unknown };
 }
 
 /** Input HTTP de submit-a-Meta. */

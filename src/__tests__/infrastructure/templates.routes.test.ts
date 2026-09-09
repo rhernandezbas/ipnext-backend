@@ -188,6 +188,38 @@ describe('/api/messaging/templates — POST / (create)', () => {
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(gw.createCalls).toHaveLength(0);
   });
+
+  // ── fix wave (review adversarial) — el hand-map NO puede pre-filtrar el
+  // button malformado a `undefined`: debe pasarlo tal cual para que
+  // `assertValidButton` lo rechace con 400, igual que la ruta Zod. ─────────
+  it('button con key equivocada (link en vez de url) → 400, NO 201 silencioso sin botón', async () => {
+    const { app, gw } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/templates')
+      .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver', link: 'https://a.com' } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(gw.createCalls).toHaveLength(0);
+  });
+
+  it('button.title no-string → 400 con mensaje claro, no 201', async () => {
+    const { app, gw } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/templates')
+      .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 123, url: 'https://a.com' } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('button.title');
+    expect(gw.createCalls).toHaveLength(0);
+  });
+
+  it('button.url no-string → 400, no 201', async () => {
+    const { app, gw } = buildApp();
+    const res = await request(app)
+      .post('/api/messaging/templates')
+      .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver', url: 42 } });
+    expect(res.status).toBe(400);
+    expect(gw.createCalls).toHaveLength(0);
+  });
 });
 
 // ─── POST /:sid/submit — RBAC write=messaging.bulk ──────────────────────────

@@ -178,5 +178,52 @@ describe('CreateTemplate (T3)', () => {
 
       expect(gw.createCalls[0].button?.url).toBe('https://portal.ipnext.com.ar/{{1}}');
     });
+
+    // ── fix wave (review adversarial) ────────────────────────────────────────
+    it('url con whitespace alrededor → se guarda TRIMEADA (no el raw)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: '  Ver más  ', url: '  https://portal.ipnext.com.ar/facturas  ' },
+      });
+
+      expect(gw.createCalls[0].button).toEqual({
+        title: 'Ver más',
+        url: 'https://portal.ipnext.com.ar/facturas',
+      });
+    });
+
+    it('url con newline dentro del padding → el valor almacenado queda limpio', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: ' \n Ver \n ', url: ' \n https://a.com/x \n ' },
+      });
+
+      expect(gw.createCalls[0].button).toEqual({ title: 'Ver', url: 'https://a.com/x' });
+    });
+
+    it('button: null explícito → InvalidTemplateInputError, no TypeError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: null as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
   });
 });
