@@ -19,6 +19,7 @@ import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/I
 import { bootstrapApiMessagingUser } from '@infrastructure/bootstrap/bootstrapApiMessagingUser';
 import { InMemoryCreditBalancePort } from '@infrastructure/adapters/in-memory/InMemoryCreditBalancePort';
 import { InMemoryMessagingRatesConfigRepository } from '@infrastructure/adapters/in-memory/InMemoryMessagingRatesConfigRepository';
+import { extractTemplateBody } from '@infrastructure/adapters/twilio/TwilioContentGateway';
 import { FakeChatwootGateway } from '../../helpers/FakeChatwootGateway';
 import type {
   CampaignSegmentSource,
@@ -419,6 +420,32 @@ describe('ValidateExternalBulk', () => {
       expect(result.valid[0].renderedMessage).toBe('Hola Ana');
       expect(result.valid[1].renderedMessage).toBe('Hola Beto');
       expect(result.renderedMessage).toBe('Hola Ana');
+    });
+
+    /**
+     * whatsapp-template-buttons (VAL-3, escenario 3) — el `body` de un template
+     * con botón CTA sale de `extractTemplateBody` (mismo mapeo que usa el
+     * gateway real), así que el preview muestra SOLO el texto plano: el título
+     * y la URL del botón nunca llegan al `renderedMessage`.
+     */
+    it('template con botón CTA → renderedMessage es el texto plano, sin el botón', async () => {
+      const ctaType = {
+        body: 'Hola {{1}}, ya tenés tu factura disponible',
+        actions: [{ type: 'URL', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' }],
+      };
+      const ctaTemplate: TemplateDto = {
+        ...TEMPLATE,
+        body: extractTemplateBody({ 'twilio/call-to-action': ctaType }),
+      };
+      const { useCase } = await setup({ templates: [ctaTemplate] });
+
+      const result = await useCase.execute(
+        baseInput({ recipients: [{ phone: MOBILE_A, variables: { '1': 'Ana' } }] }),
+      );
+
+      expect(result.valid[0].renderedMessage).toBe('Hola Ana, ya tenés tu factura disponible');
+      expect(result.renderedMessage).not.toContain('Ver mis facturas');
+      expect(result.renderedMessage).not.toContain('http');
     });
 
     it('sin recipients válidos → 422 EMPTY_RECIPIENTS, sin persistir preview', async () => {
