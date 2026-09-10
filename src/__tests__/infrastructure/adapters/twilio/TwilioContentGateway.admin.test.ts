@@ -265,6 +265,37 @@ describe('TwilioContentGateway — getTemplate (T2)', () => {
     expect(dto.approvalCategory).toBe('MARKETING');
   });
 
+  // ── TPL-6 (whatsapp-invoice-detail-quickreply) — Meta puede aprobar bajo una
+  // categoría DISTINTA de la sometida (observado en vivo: sometido UTILITY,
+  // aprobado MARKETING, ~5x el costo por mensaje). El DTO debe reportar SIEMPRE
+  // la categoría REAL de aprobación, nunca la sometida que quedó en el recurso
+  // Content. Los tests S4 de arriba nunca ponen ambas fuentes en CONFLICTO.
+  it('TPL-6: sometido UTILITY pero aprobado MARKETING → el DTO reporta MARKETING, nunca UTILITY', async () => {
+    const get = jest
+      .fn()
+      // GET /v1/Content/{sid} — conserva la categoría SOMETIDA (UTILITY).
+      .mockResolvedValueOnce({
+        data: {
+          sid: 'HXqr',
+          friendly_name: 'detalle_facturas',
+          language: 'es',
+          variables: {},
+          types: { 'twilio/quick-reply': { body: 'Hola' } },
+          approval_requests: { status: 'approved', category: 'UTILITY' },
+        },
+      })
+      // GET /v1/Content/{sid}/ApprovalRequests — categoría REAL de Meta (MARKETING).
+      .mockResolvedValueOnce({ data: { whatsapp: { status: 'approved', category: 'MARKETING' } } });
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXqr');
+
+    expect(dto.approvalCategory).toBe('MARKETING');
+    expect(dto.approvalCategory).not.toBe('UTILITY');
+    expect(dto.category).toBe('MARKETING');
+    expect(dto.approvalStatus).toBe('approved');
+  });
+
   it('S4: ApprovalRequests status=pending → DTO pending', async () => {
     const get = jest
       .fn()

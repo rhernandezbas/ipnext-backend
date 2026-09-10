@@ -265,6 +265,49 @@ describe('CreateTemplate (T3)', () => {
       });
     });
 
+    // TPL-3 (scenario "`type:'url'` explícito — equivalente a legacy"): el resto
+    // de los tests construye SOLO la forma legacy sin tag; este arma el input con
+    // `type:'url'` EXPLÍCITO y exige que el efecto sea byte-idéntico al legacy.
+    it('type:"url" explícito → mismo efecto exacto que la forma legacy sin type', async () => {
+      const explicitGw = new InMemoryTemplateMessagingGateway();
+      await new CreateTemplate(explicitGw).execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' } as unknown as { title: string; url: string },
+      });
+
+      const legacyGw = new InMemoryTemplateMessagingGateway();
+      await new CreateTemplate(legacyGw).execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+
+      expect(explicitGw.createCalls[0].button).toEqual({
+        type: 'url',
+        title: 'Ver mis facturas',
+        url: 'https://portal.ipnext.com.ar/facturas',
+      });
+      expect(explicitGw.createCalls[0]).toEqual(legacyGw.createCalls[0]);
+    });
+
+    it('type:"url" explícito con url inválida → InvalidTemplateInputError (misma regla que legacy)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { type: 'url', title: 'Ver más', url: 'ftp://example.com/x' } as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
     it('type:"quickReply" con el título exacto de la constante → aceptado, sin url', async () => {
       const gw = new InMemoryTemplateMessagingGateway();
       const uc = new CreateTemplate(gw);

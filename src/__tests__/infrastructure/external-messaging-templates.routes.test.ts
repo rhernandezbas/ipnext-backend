@@ -295,6 +295,28 @@ describe('POST /templates (TPL-3)', () => {
     expect(templatePort.createCalls).toHaveLength(0);
   });
 
+  // TPL-3 (scenario "`type:'url'` explícito — equivalente a legacy"): el Zod
+  // modela `type` opcional en la rama url; este test manda el tag EXPLÍCITO por
+  // el wire y exige el mismo botón que la forma legacy sin tag.
+  it('con button type:"url" explícito → 201 y el botón llega idéntico al legacy sin type', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({
+        friendlyName: 'recordatorio_deuda',
+        language: 'es',
+        body: 'Hola {{1}}, mirá tu factura',
+        button: { type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+    expect(res.status).toBe(201);
+    expect(templatePort.createCalls[0].button).toEqual({
+      type: 'url',
+      title: 'Ver mis facturas',
+      url: 'https://portal.ipnext.com.ar/facturas',
+    });
+  });
+
   // ── fix wave (review adversarial) — BUG 5: la unión etiquetada en el Zod ───
   it('con button type:"quickReply" (sin url) → 201 y el botón llega como quickReply', async () => {
     const { app, templatePort } = buildApp();

@@ -74,5 +74,5 @@ Chain strategy: pending
 
 ## Phase 8: Regression + cleanup
 
-- [ ] 8.1 Run `npm test` full suite — confirm zero regression on the CTA-only path and all existing template/webhook tests.
-- [ ] 8.2 Confirm spec text (0.2) matches shipped behavior before archive.
+- [x] 8.1 Run `npm test` full suite — confirm zero regression on the CTA-only path and all existing template/webhook tests. (Full suite green: 1290 suites passed / 6 skipped, 13675 tests passed / 88 skipped; `npx tsc --noEmit` clean.)
+- [x] 8.2 Confirm spec text (0.2) matches shipped behavior before archive. (QR-4 scenario body was already reconciled by 0.2; its requirement HEADING still said "no reply … or internal error", contradicting the scenario — heading reworded to "fail-open; owner-locked fallback reply on internal error, no reply on unresolved phone". Also closed the two verification gaps `sdd-verify` flagged: TPL-3's explicit `type:'url'` scenario and TPL-6's recategorization scenario now have real tests.)

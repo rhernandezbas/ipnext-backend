@@ -65,7 +65,7 @@ labeled "Pagar", never presented as a separate, dedicated post-due mechanism.
 - THEN the system sends a short reply stating there are no pending invoices, and MUST NOT send
   an empty or malformed itemized block
 
-### Requirement: QR-4 — fail-open; no reply on unresolved phone or internal error
+### Requirement: QR-4 — fail-open; owner-locked fallback reply on internal error, no reply on unresolved phone
 
 The handler MUST be wired as an optional constructor collaborator, wrapped in its own
 try/catch, so any internal failure (lookup error, GR client error, malformed data) never breaks
