@@ -717,52 +717,59 @@ MUST degradar a `approvalStatus:'unsubmitted'` SIN tirar — es un dato secundar
 - When `GET .../templates/:sid`
 - Then responde 404 `TEMPLATE_NOT_FOUND`
 
-### Requirement: TPL-3 — creación de template, con botón CTA opcional
+### Requirement: TPL-3 — creación de template, botón CTA-URL o quick-reply
 
-`POST .../templates` MUST aceptar `{friendlyName, language, body, category?, variables?: string[],
-button?: {title: string, url: string}}` y delegar en `CreateTemplate`, que valida
-`friendlyName`/`language`/`body` no vacíos y `category` ∈ {UTILITY, MARKETING, AUTHENTICATION} si
-viene. `button` es OPCIONAL y ADITIVO: si viene, `title` MUST ser no vacío tras `trim` y acotado en
-largo, y `url` MUST ser una URL absoluta `http`/`https` bien formada; cualquiera inválido MUST
-responder 400 `VALIDATION_ERROR`, sin llamar al proveedor y sin crear nada. Si `button` viene válido,
-el template creado MUST emitir al proveedor el tipo de contenido `twilio/call-to-action` (con
-`actions: [{type:'URL', title, url}]`); si `button` está ausente, el payload emitido MUST seguir
-siendo `twilio/text`, byte-idéntico al comportamiento previo. Éxito MUST responder 201 con el DTO
-curado del template creado (`approvalStatus:'unsubmitted'`). La creación MUST NOT submitir el
-template a Meta: submit sigue siendo un paso EXPLÍCITO y separado (TPL-4).
-(Previously: sólo aceptaba `{friendlyName, language, body, category?, variables?}` y siempre creaba
-`twilio/text`; no existía `button`.)
+`POST .../templates` (y su espejo `POST /api/external/v1/messaging/templates`) MUST aceptar
+`button?: {type:'url', title, url} | {type:'quickReply', title}`. La forma LEGACY `{title, url}`
+SIN `type` (la única en producción hoy) MUST seguir aceptándose, tratada exactamente como
+`{type:'url', title, url}` — byte-idéntica en efecto. `type:'url'`/legacy exige `title` no vacío
+tras `trim` y `url` absoluta http(s) (igual que hoy); `type:'quickReply'` exige `title` no vacío
+tras `trim` E IGUAL EXACTO a la constante `INVOICE_DETAIL_BUTTON_TITLE` (mecanismo anti-drift:
+la creación rechaza cualquier título de quick-reply que no coincida con el que el webhook
+espera detectar) — una `url` presente junto a `quickReply` MUST responder 400
+`VALIDATION_ERROR` (no se ignora en silencio: un `url` inesperado en un botón quick-reply es
+un dato mal formado, no un campo de más a descartar). Cualquier `button` inválido (título
+vacío, título de quick-reply que no coincide con la constante, `url` mal formada, `type`
+desconocido) MUST responder 400 `VALIDATION_ERROR`, sin llamar al proveedor ni crear nada.
+`type:'url'`/legacy MUST seguir emitiendo `twilio/call-to-action`; `type:'quickReply'` MUST
+emitir `twilio/quick-reply` (`actions:[{id, title}]` — `id` es un slug derivado del título,
+`type` es el discriminador de `twilio/call-to-action` y NO existe en una acción de
+quick-reply); ausencia de `button` sigue emitiendo `twilio/text`. Éxito MUST responder 201 con
+el DTO curado; la creación MUST NOT submitir el template a Meta (TPL-4).
+(Previously: `button?: {title, url}` — shape única, siempre CTA-URL; no existía `quickReply`.)
 
-#### Scenario: creación válida sin botón — sin regresión
-- Given `{friendlyName:"promo_setiembre", language:"es", body:"Hola {{1}}", variables:["1"]}` (sin `button`)
+#### Scenario: legacy sin `type` — sin regresión
+- Given `button:{title:"Ver mis facturas", url:"https://..."}` (sin `type`)
 - When `POST .../templates`
-- Then responde 201 con `contentSid`, `approvalStatus:'unsubmitted'`, `sendable:false`
-- And el payload enviado al proveedor es `twilio/text`, sin ningún campo de `call-to-action`
+- Then responde 201 y emite `twilio/call-to-action`, idéntico al comportamiento hoy en producción
 
-#### Scenario: creación con botón CTA válido
-- Given `{friendlyName:"recordatorio_deuda", language:"es", body:"Hola {{1}}, mirá tu factura",
-  button:{title:"Ver mis facturas", url:"https://portal.ipnext.com.ar/facturas"}}`
+#### Scenario: `type:'url'` explícito — equivalente a legacy
+- Given `button:{type:'url', title:"Ver mis facturas", url:"https://..."}`
 - When `POST .../templates`
-- Then responde 201 con `contentSid`, `approvalStatus:'unsubmitted'`
-- And el proveedor recibió `types:{'twilio/call-to-action':{body, actions:[{type:'URL',
-  title:"Ver mis facturas", url:"https://portal.ipnext.com.ar/facturas"}]}}`
+- Then responde 201 con el mismo efecto que la forma legacy sin `type`
 
-#### Scenario: botón inválido (título vacío o url mal formada/no http-s) → 400
-- Given `button:{title:"   ", url:"https://example.com"}`, o `button:{title:"Ver más",
-  url:"no-es-una-url"}`, o `button:{title:"Ver más", url:"ftp://example.com/x"}`
+#### Scenario: quick-reply válido
+- Given `button:{type:'quickReply', title:INVOICE_DETAIL_BUTTON_TITLE}` (el título exacto que
+  el webhook de detalle de facturas espera detectar)
 - When `POST .../templates`
-- Then responde 400 `VALIDATION_ERROR` en TODOS los casos, sin llamar al proveedor ni crear nada
-- And el botón NUNCA se pierde silenciosamente: o se crea completo, o el request falla
+- Then responde 201 y el proveedor recibe `twilio/quick-reply` con
+  `actions:[{id:<slug del título>, title:INVOICE_DETAIL_BUTTON_TITLE}]`
 
-#### Scenario: body vacío — sin regresión
-- Given `{friendlyName:"x", language:"es", body:"   "}`
+#### Scenario: quick-reply con `url` de más → 400
+- Given `button:{type:'quickReply', title:INVOICE_DETAIL_BUTTON_TITLE, url:"https://..."}`
 - When `POST .../templates`
-- Then responde 400 `VALIDATION_ERROR`, sin llamar al proveedor
+- Then responde 400 `VALIDATION_ERROR` (no se ignora el `url`, se rechaza el request completo)
 
-#### Scenario: category fuera del enum — sin regresión
-- Given `{friendlyName:"x", language:"es", body:"y", category:"PROMO"}`
+#### Scenario: `type` desconocido, título vacío, o título de quick-reply que no coincide → 400
+- Given `button:{type:'sms', title:"x"}`, `button:{type:'quickReply', title:"   "}`, o
+  `button:{type:'quickReply', title:"otro texto"}` (no coincide con `INVOICE_DETAIL_BUTTON_TITLE`)
 - When `POST .../templates`
-- Then responde 400 `VALIDATION_ERROR`, sin crear nada
+- Then responde 400 `VALIDATION_ERROR` en los tres casos, sin llamar al proveedor
+
+#### Scenario: sin botón — sin regresión
+- Given un body sin `button`
+- When `POST .../templates`
+- Then responde 201 y emite `twilio/text`, igual que hoy
 
 ### Requirement: TPL-4 — submit a Meta, explícito y separado
 `POST .../templates/:sid/submit` MUST aceptar `{category, name?}` — `name` es OPCIONAL (AMENDED,
@@ -824,6 +831,19 @@ destructivo e irreversible en Meta con `deleteInWaba`). `DELETE .../templates/:s
 - Given el router dedicado montado ANTES del mount global (COMP-1, orden intacto)
 - When `DELETE .../templates/:sid` o `GET .../campaigns/` (id vacío) con la key dedicada válida
 - Then responde 404 `NOT_FOUND` — NUNCA el 401 del mount global, cualquiera sea el orden de matching de Express
+
+### Requirement: TPL-6 — categoría de aprobación puede diferir de la sometida (impacto de costo)
+
+Meta MAY aprobar un template `quickReply` bajo una categoría distinta de la sometida (observado
+en vivo: sometido `UTILITY`, aprobado `MARKETING` — `MARKETING` factura ~5x más por mensaje que
+`UTILITY`). El sistema MUST reportar siempre la categoría REAL de aprobación
+(`approvalCategory`, TPL-2) y MUST NOT asumir que la categoría sometida persiste tras la
+aprobación.
+
+#### Scenario: recategorización de Meta sobre un quick-reply
+- Given un template `quickReply` sometido con `category:'UTILITY'`
+- When Meta lo aprueba bajo `MARKETING`
+- Then `GET .../templates/:sid` refleja `approvalCategory:'MARKETING'`, nunca `UTILITY`
 
 ---
 
