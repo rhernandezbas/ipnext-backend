@@ -294,6 +294,37 @@ describe('POST /templates (TPL-3)', () => {
     expect(res.body.code).toBe('VALIDATION_ERROR');
     expect(templatePort.createCalls).toHaveLength(0);
   });
+
+  // ── fix wave (review adversarial) — BUG 5: la unión etiquetada en el Zod ───
+  it('con button type:"quickReply" (sin url) → 201 y el botón llega como quickReply', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({
+        friendlyName: 'detalle_facturas',
+        language: 'es',
+        body: 'Hola {{1}}',
+        button: { type: 'quickReply', title: 'Ver mis facturas' },
+      });
+    expect(res.status).toBe(201);
+    expect(templatePort.createCalls[0].button).toEqual({ type: 'quickReply', title: 'Ver mis facturas' });
+  });
+
+  it('con button type:"quickReply" + url colada → 400, NUNCA se crea como botón url', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { type: 'quickReply', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+    expect(res.status).toBe(400);
+    expect(templatePort.createCalls).toHaveLength(0);
+  });
 });
 
 describe('POST /templates/:sid/submit (TPL-4)', () => {

@@ -10,6 +10,8 @@ import { ReplyWithInvoiceDetail } from '@application/use-cases/messaging/invoice
 import {
   GR_LOOKUP_FAILED_MESSAGE,
   NO_PENDING_INVOICES_MESSAGE,
+  MAX_INVOICES_IN_REPLY,
+  MAX_REPLY_LENGTH,
 } from '@application/use-cases/messaging/invoice-detail/renderInvoiceDetailReply';
 import { INVOICE_DETAIL_BUTTON_TITLE } from '@application/use-cases/messaging/invoice-detail/invoiceDetailButton';
 import { InMemoryInvoiceDetailReader } from '@infrastructure/adapters/in-memory/InMemoryInvoiceDetailReader';
@@ -168,6 +170,100 @@ describe('ReplyWithInvoiceDetail (Phase 5)', () => {
 
     expect(calls).toHaveLength(1); // el refresh SÍ se intenta cuando stale
     expect(chatwoot.sendMessageCalls[0].content).toBe(NO_PENDING_INVOICES_MESSAGE); // cero facturas tras refrescar
+  });
+
+  // ── fix wave (review adversarial) — BUG 1: teléfono AMBIGUO ────────────────
+  it('el MISMO teléfono resuelve a 2 clientes → NO cita datos de ninguno, manda el fallback', async () => {
+    const reader = new InMemoryInvoiceDetailReader({
+      invoicesByClientId: {
+        'client-1': [{ tipo: 'Factura', numero: 'AAA-111', vencimiento: '2026-09-10T00:00:00.000Z', saldo: 1000, pdfUrl: null, paymentUrl: null }],
+        'client-2': [{ tipo: 'Factura', numero: 'BBB-222', vencimiento: '2026-09-10T00:00:00.000Z', saldo: 2000, pdfUrl: null, paymentUrl: null }],
+      },
+    });
+    const chatwoot = new FakeChatwootGateway();
+    const { refresh } = refreshDouble(true);
+    const uc = new ReplyWithInvoiceDetail(
+      customerRepoOf(() => freshCustomer()),
+      // Co-titulares: dos Client distintos con el MISMO teléfono normalizado.
+      segmentSourceOf([CANDIDATE, { ...CANDIDATE, clientId: 'client-2', name: 'María Pérez' }]),
+      reader,
+      chatwoot,
+      refresh,
+    );
+
+    await uc.execute({ content: INVOICE_DETAIL_BUTTON_TITLE, phone: CLIENT_PHONE, chatwootConversationId: 42 });
+
+    expect(chatwoot.sendMessageCalls).toHaveLength(1);
+    expect(chatwoot.sendMessageCalls[0].content).toBe(GR_LOOKUP_FAILED_MESSAGE);
+    expect(chatwoot.sendMessageCalls[0].content).not.toContain('AAA-111');
+    expect(chatwoot.sendMessageCalls[0].content).not.toContain('BBB-222');
+  });
+
+  // ── fix wave (review adversarial) — BUG 3: muchas facturas, un solo envío ──
+  it('cliente con MUCHAS facturas pendientes → un mensaje acotado que SÍ se envía', async () => {
+    const invoices = Array.from({ length: MAX_INVOICES_IN_REPLY + 10 }, (_, i) => ({
+      tipo: 'Factura',
+      numero: `0001-${i + 1}`,
+      vencimiento: '2026-09-10T00:00:00.000Z',
+      saldo: 41410.56,
+      pdfUrl: 'https://gr.example/pdf/0001-000123456',
+      paymentUrl: 'https://mp.example/pay/0001-000123456',
+    }));
+    const reader = new InMemoryInvoiceDetailReader({ invoicesByClientId: { 'client-1': invoices } });
+    const chatwoot = new FakeChatwootGateway();
+    const { refresh } = refreshDouble(true);
+    const uc = new ReplyWithInvoiceDetail(customerRepoOf(() => freshCustomer()), segmentSourceOf([CANDIDATE]), reader, chatwoot, refresh);
+
+    await uc.execute({ content: INVOICE_DETAIL_BUTTON_TITLE, phone: CLIENT_PHONE, chatwootConversationId: 42 });
+
+    expect(chatwoot.sendMessageCalls).toHaveLength(1);
+    expect(chatwoot.sendMessageCalls[0].content.length).toBeLessThanOrEqual(MAX_REPLY_LENGTH);
+    expect(chatwoot.sendMessageCalls[0].content).toContain('0001-1');
+  });
+
+  // ── fix wave (review adversarial) — BUG 4: fail-open completo ──────────────
+  it('la resolución de teléfono LANZA → igual manda el fallback (no se queda mudo)', async () => {
+    const reader = new InMemoryInvoiceDetailReader();
+    const chatwoot = new FakeChatwootGateway();
+    const { refresh } = refreshDouble(true);
+    const explodingSource: CampaignSegmentSource = {
+      listSegmentRecipients: async () => {
+        throw new Error('DB caída al listar candidatos');
+      },
+    };
+    const uc = new ReplyWithInvoiceDetail(customerRepoOf(() => freshCustomer()), explodingSource, reader, chatwoot, refresh);
+
+    await expect(
+      uc.execute({ content: INVOICE_DETAIL_BUTTON_TITLE, phone: CLIENT_PHONE, chatwootConversationId: 42 }),
+    ).resolves.toBeUndefined();
+
+    expect(chatwoot.sendMessageCalls).toHaveLength(1);
+    expect(chatwoot.sendMessageCalls[0].content).toBe(GR_LOOKUP_FAILED_MESSAGE);
+  });
+
+  it('el sendMessage del camino EXITOSO lanza → no propaga, no reintenta (fail-open, se loguea)', async () => {
+    const reader = new InMemoryInvoiceDetailReader({
+      invoicesByClientId: {
+        'client-1': [{ tipo: 'Factura', numero: '0001-1', vencimiento: '2026-09-10T00:00:00.000Z', saldo: 1000, pdfUrl: null, paymentUrl: null }],
+      },
+    });
+    const chatwoot = new FakeChatwootGateway();
+    chatwoot.failSendMessage = true;
+    const { refresh } = refreshDouble(true);
+    const uc = new ReplyWithInvoiceDetail(customerRepoOf(() => freshCustomer()), segmentSourceOf([CANDIDATE]), reader, chatwoot, refresh);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await expect(
+        uc.execute({ content: INVOICE_DETAIL_BUTTON_TITLE, phone: CLIENT_PHONE, chatwootConversationId: 42 }),
+      ).resolves.toBeUndefined();
+
+      // UN solo intento: nada de reintentar, ni de mandar el fallback encima del fallo de envío.
+      expect(chatwoot.sendMessageCalls).toHaveLength(1);
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('cliente sigue stale tras el intento de refresh → fallback GR-lookup-failed (nunca cita datos viejos)', async () => {

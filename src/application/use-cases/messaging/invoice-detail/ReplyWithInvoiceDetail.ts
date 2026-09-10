@@ -45,12 +45,35 @@ export class ReplyWithInvoiceDetail {
     const fromE164 = toWhatsAppE164(input.phone);
     if (fromE164 === null) return; // teléfono no reconstruible → no-op (QR-4)
 
-    const clientId = await this.resolveClientId(fromE164);
-    if (clientId === null) return; // QR-4 — sin match, sin reply, sin error
+    // fix wave (review adversarial, BUG 4) — el try envuelve TODO el pipeline
+    // resolve→lookup→format: antes la resolución del teléfono quedaba AFUERA, y
+    // una caída de la DB al listar candidatos dejaba al cliente sin ninguna
+    // respuesta (ni siquiera el fallback).
+    let text: string;
+    try {
+      const resolution = await this.resolveClient(fromE164);
+      if (resolution === 'none') return; // QR-4 — sin match, sin reply, sin error
+      text =
+        resolution === 'ambiguous'
+          ? renderInvoiceDetailReply(null)
+          : renderInvoiceDetailReply(await this.resolveInvoices(resolution.clientId));
+    } catch {
+      text = renderInvoiceDetailReply(null);
+    }
 
-    const invoices = await this.resolveInvoices(clientId);
-    const text = renderInvoiceDetailReply(invoices);
-    await this.chatwoot.sendMessage(input.chatwootConversationId, text);
+    // El envío va en su PROPIO try: si lo que falla es el envío mismo, no hay
+    // nada que reintentar ni un fallback que mandar (mandarlo sería intentar el
+    // mismo canal que acaba de fallar). Se loguea y se sigue — mismo fail-open
+    // que `maybeRegisterOptOut`/`maybeReplyWithInvoiceDetail` en el webhook.
+    try {
+      await this.chatwoot.sendMessage(input.chatwootConversationId, text);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[messaging] invoice-detail: no se pudo enviar la respuesta (fail-open)', {
+        chatwootConversationId: input.chatwootConversationId,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 
   /**
@@ -58,14 +81,27 @@ export class ReplyWithInvoiceDetail {
    * (`ReceiveChatwootWebhook.ts`, FIX-9-v2): `CampaignSegmentSource` se REUSA,
    * no se duplica. `listSegmentRecipients({statuses:[]})` es el escape hatch
    * narrow — universo completo, sin filtro de status.
+   *
+   * fix wave (review adversarial, BUG 1) — `filter`, NO `find`. Si el mismo
+   * E164 resuelve a VARIOS clientes (co-titulares, familiares, el teléfono del
+   * comercio) elegir "el primero" le mandaría a una persona los números de
+   * factura, el saldo y el link de pago de OTRA. Mismo guardrail, palabra por
+   * palabra, que `CustomerAssistantClientResolver`: ambigüedad ⇒ nadie.
+   *
+   * `'none'` (cero matches) mantiene el no-op silencioso de QR-4: un teléfono
+   * desconocido puede no ser ni cliente, y contestarle es peor que callar.
+   * `'ambiguous'` SÍ contesta: el número es de un cliente, así que se le debe
+   * una respuesta — la de lookup fallido, sin un solo dato de cuenta.
    */
-  private async resolveClientId(fromE164: string): Promise<string | null> {
+  private async resolveClient(fromE164: string): Promise<{ clientId: string } | 'none' | 'ambiguous'> {
     const candidates = await this.segmentSource.listSegmentRecipients({ statuses: [] });
-    const match = candidates.find((c) => {
+    const matches = candidates.filter((c) => {
       const candidateE164 = toWhatsAppE164(c.phone);
       return candidateE164 !== null && candidateE164 === fromE164;
     });
-    return match?.clientId ?? null;
+    if (matches.length === 0) return 'none';
+    if (matches.length > 1) return 'ambiguous';
+    return { clientId: matches[0].clientId };
   }
 
   /**

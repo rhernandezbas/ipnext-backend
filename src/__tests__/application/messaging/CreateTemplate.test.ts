@@ -279,6 +279,24 @@ describe('CreateTemplate (T3)', () => {
       expect(gw.createCalls[0].button).toEqual({ type: 'quickReply', title: 'Ver mis facturas' });
     });
 
+    // fix wave (review adversarial) — BUG 5, paridad entre superficies: el
+    // `url` colado NO se ignora en silencio (crear un quickReply "con url" es
+    // un input contradictorio; aceptarlo dejaba pasar un botón mal entendido).
+    it('type:"quickReply" con un url colado → InvalidTemplateInputError (no se ignora)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { type: 'quickReply', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' } as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
     it('type:"quickReply" con título distinto de la constante → InvalidTemplateInputError', async () => {
       const gw = new InMemoryTemplateMessagingGateway();
       const uc = new CreateTemplate(gw);

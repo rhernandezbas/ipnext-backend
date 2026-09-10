@@ -126,13 +126,28 @@ const SendBodySchema = z.object({
 // se valida FORMA acá; las reglas de negocio (title trim ≤25, url absoluta
 // http/https ≤2000) viven en `CreateTemplate.assertValidButton` (D1: la misma
 // regla debe aplicar a AMBAS superficies de creación, hand-mapped y Zod).
+// fix wave (review adversarial, BUG 5) — el Zod modela la MISMA unión etiquetada
+// que `TemplateButton`. Antes era `{title, url}` a secas: un
+// `{type:'quickReply', title}` (bien formado) daba 400 por falta de `url` — la
+// API externa NO podía crear ese botón — y un `{type:'quickReply', title, url}`
+// perdía el `type` (schema no-strict lo stripeaba) y se creaba como botón URL,
+// una mala clasificación SILENCIOSA.
+const CreateTemplateButtonSchema = z.union([
+  // quickReply: `title` y NADA más — `.strict()` rechaza el `url` colado en vez
+  // de descartarlo (paridad con `CreateTemplate.assertValidButton`).
+  z.object({ type: z.literal('quickReply'), title: z.string() }).strict(),
+  // url/CTA: `type` opcional por backward-compat (los callers en producción
+  // postean `{title,url}` sin tag; el use case lo normaliza a `type:'url'`).
+  z.object({ type: z.literal('url').optional(), title: z.string(), url: z.string() }),
+]);
+
 const CreateTemplateBodySchema = z.object({
   friendlyName: z.string(),
   language: z.string(),
   body: z.string(),
   category: z.string().optional(),
   variables: z.array(z.string()).optional(),
-  button: z.object({ title: z.string(), url: z.string() }).optional(),
+  button: CreateTemplateButtonSchema.optional(),
 });
 
 // fix wave F3 (S3, smoke en vivo) — `name` pasa a OPCIONAL: si no vino, el

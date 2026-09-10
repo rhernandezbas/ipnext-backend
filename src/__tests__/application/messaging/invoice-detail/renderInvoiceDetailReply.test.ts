@@ -9,6 +9,8 @@ import {
   renderInvoiceDetailReply,
   GR_LOOKUP_FAILED_MESSAGE,
   NO_PENDING_INVOICES_MESSAGE,
+  MAX_INVOICES_IN_REPLY,
+  MAX_REPLY_LENGTH,
 } from '@application/use-cases/messaging/invoice-detail/renderInvoiceDetailReply';
 import type { InvoiceDetailInvoice } from '@domain/ports/InvoiceDetailReader';
 
@@ -80,5 +82,46 @@ describe('renderInvoiceDetailReply (QR-3/QR-4)', () => {
     const between = text.slice(idx1, idx2);
     expect(between.length).toBeGreaterThan('0001-1\n'.length);
     expect(between).toMatch(/[-─]{3,}/);
+  });
+
+  // ── fix wave (review adversarial) — BUG 2: fecha legible, nunca ISO crudo ──
+  it('el vencimiento se muestra como DD/MM/YYYY, jamás el ISO crudo', () => {
+    const text = renderInvoiceDetailReply([invoice({ vencimiento: '2026-09-10T00:00:00.000Z' })]);
+
+    expect(text).toContain('Vence: 10/09/2026');
+    expect(text).not.toContain('2026-09-10');
+    expect(text).not.toContain('T00:00:00');
+    expect(text).not.toContain('Z');
+  });
+
+  it('vencimiento vacío (fila sin fecha) → la línea "Vence" no inventa una fecha', () => {
+    const text = renderInvoiceDetailReply([invoice({ vencimiento: '' })]);
+
+    expect(text).toContain('0001-00012345');
+    expect(text).not.toMatch(/Vence: \S/);
+  });
+
+  // ── fix wave (review adversarial) — BUG 3: tope de facturas y de largo ─────
+  it('más facturas que el tope → recorta, avisa que hay más, y NUNCA excede el largo seguro', () => {
+    const many = Array.from({ length: MAX_INVOICES_IN_REPLY + 7 }, (_, i) =>
+      invoice({ numero: `0001-${i + 1}` }),
+    );
+
+    const text = renderInvoiceDetailReply(many);
+
+    expect(text.length).toBeLessThanOrEqual(MAX_REPLY_LENGTH);
+    expect(text).toContain('0001-1'); // las primeras SÍ se citan
+    expect(text).not.toContain(`0001-${MAX_INVOICES_IN_REPLY + 7}`); // la última NO
+    // No se recorta en silencio: el mensaje avisa que hay más.
+    expect(text.toLowerCase()).toContain('más facturas');
+  });
+
+  it('facturas con links larguísimos → el mensaje sigue dentro del largo seguro', () => {
+    const longUrl = `https://mp.example/pay/${'x'.repeat(600)}`;
+    const many = Array.from({ length: MAX_INVOICES_IN_REPLY }, (_, i) =>
+      invoice({ numero: `0002-${i + 1}`, pdfUrl: longUrl, paymentUrl: longUrl }),
+    );
+
+    expect(renderInvoiceDetailReply(many).length).toBeLessThanOrEqual(MAX_REPLY_LENGTH);
   });
 });

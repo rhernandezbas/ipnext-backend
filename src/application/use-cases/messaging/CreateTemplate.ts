@@ -54,9 +54,16 @@ function assertValidButton(raw: unknown): TemplateButton {
   }
 
   if (type === 'quickReply') {
+    // fix wave (review adversarial, BUG 5) — un `url` colado se RECHAZA, no se
+    // ignora: `{type:'quickReply', url}` es un input contradictorio, y aceptarlo
+    // en silencio dejaba al operador creyendo que creó un botón con link.
+    // Misma respuesta que da el Zod de `external-messaging.routes.ts` (paridad
+    // entre las dos superficies de creación, D1).
+    if (button.url !== undefined) {
+      throw new InvalidTemplateInputError('button.url no aplica a un button.type quickReply');
+    }
     // Título fijo, exacto (post-trim) — no case-insensitive: es un valor
     // elegido por el operador al crear el template, no una detección de tap.
-    // `url` (si vino) se ignora — un quickReply no tiene URL en Twilio.
     if (title !== INVOICE_DETAIL_BUTTON_TITLE) {
       throw new InvalidTemplateInputError(
         `button.title de un quickReply debe ser exactamente "${INVOICE_DETAIL_BUTTON_TITLE}"`,
