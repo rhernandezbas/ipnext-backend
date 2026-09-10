@@ -52,3 +52,6 @@ Full suite after this pass: 1290 suites passed / 6 skipped, 13675 tests passed /
 
 - `acaebaad` — implementation of all 26 tasks.
 - `448ce327` — adversarial-review fix wave (5 findings).
+- `664fa267` — closes 3 sdd-verify blockers (missing tests for TPL-3 explicit `type:'url'` and TPL-6 category-conflict discrimination, QR-4 heading wording).
+- `f3134cc5` — this retrospective apply-progress.md.
+- (doc-only, no code) spec text corrected in `specs/external-bulk-messaging/spec.md` + `tasks.md` 1.6 note — the third `sdd-verify` pass found the spec prose itself was stale in 3 places (quick-reply `actions` shape, stray-`url` handling, anti-drift title match), all confirmed as spec-authoring lag behind the fix-wave's deliberate hardening, not a code defect.

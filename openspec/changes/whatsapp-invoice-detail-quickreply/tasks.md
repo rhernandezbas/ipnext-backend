@@ -36,7 +36,7 @@ Chain strategy: pending
 - [x] 1.3 GREEN: `src/application/dto/messaging-templates.dto.ts` — widen `button` to `{type?: unknown; title?: unknown; url?: unknown}`.
 - [x] 1.4 RED: `src/__tests__/application/messaging/invoice-detail/invoiceDetailButton.test.ts` — exact/case-insensitive/trim match fires; substring (`"quiero ver mis facturas"`) does not.
 - [x] 1.5 GREEN: Create `src/application/use-cases/messaging/invoice-detail/invoiceDetailButton.ts` — export `INVOICE_DETAIL_BUTTON_TITLE = 'Ver mis facturas'` + `isInvoiceDetailTrigger`.
-- [x] 1.6 GREEN: `src/application/use-cases/messaging/CreateTemplate.ts` `assertValidButton` — normalize missing `type`→`url`; `quickReply` requires trimmed title === `INVOICE_DETAIL_BUTTON_TITLE` (imported from 1.5) else 400; ignore stray `url` on `quickReply`.
+- [x] 1.6 GREEN: `src/application/use-cases/messaging/CreateTemplate.ts` `assertValidButton` — normalize missing `type`→`url`; `quickReply` requires trimmed title === `INVOICE_DETAIL_BUTTON_TITLE` (imported from 1.5) else 400. RECONCILED (review finding 5, commit `448ce327`): a stray `url` on `quickReply` is REJECTED with 400, not ignored — silently dropping it let the external route mis-create a url-type button instead of failing. Spec text corrected to match in the sdd-verify hygiene pass.
 
 ## Phase 2: Provider adapter branch
 

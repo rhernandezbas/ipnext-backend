@@ -1,14 +1,14 @@
 ```yaml
 schema: gentle-ai.verify-result/v1
-evidence_revision: sha256:fb656c2bc184564fe57e3e3e25e72236982ac3296670165a91df6a0e2b9c7b64
+evidence_revision: sha256:b64fc3e2185f364bc9995e79f155329a1b95137bc074704e541a0a029e145ac2
 verdict: fail
 blockers: 3
 critical_findings: 3
-requirements: 4/6
-scenarios: 11/13
+requirements: 5/6
+scenarios: 12/13
 test_command: npm test
 test_exit_code: 0
-test_output_hash: sha256:26c88ff6047dad6f9907a12ffe81793318f3d84b4e29cb0729d0206429f575ee
+test_output_hash: sha256:62cf83867b5a412dba0fa78db5763f6fb5775680e7708f59f77c61d953c05859
 build_command: npx tsc --noEmit
 build_exit_code: 0
 build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -17,266 +17,207 @@ build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca49599
 ## Verification Report
 
 **Change**: whatsapp-invoice-detail-quickreply
-**Version**: N/A
-**Mode**: Strict TDD
-**Worktree**: `.claude/worktrees/whatsapp-invoice-detail-quickreply-be` @ `448ce327` (branch `feat/whatsapp-invoice-detail-quickreply`, unpushed)
+**Mode**: full spec-driven verification (proposal + design + specs + tasks present), Strict TDD active
+**Revision**: f3134cc5 (range acab519d..f3134cc5)
+**Verdict**: FAIL - 3 CRITICAL, 1 WARNING, 2 SUGGESTION
 
-> **Headline**: no functional defect was found. Code, tests and types are green, and the owner's
-> two hard constraints (assistant isolation, owner-locked copy) hold under independent inspection.
-> The `fail` verdict is driven entirely by *evidence* gaps: two enumerated spec scenarios have no
-> covering test, and the required `apply-progress` artifact was never persisted. Remediation is
-> small and additive.
+### Artifact completeness
 
-### Completeness
+| Artifact | Present | Notes |
+|---|---|---|
+| proposal.md | yes | - |
+| explore.md | yes | - |
+| design.md | yes | - |
+| specs (2 deltas) | yes | 6 requirements, 13 scenarios |
+| tasks.md | yes | 26/26 checked |
+| apply-progress.md | yes | retrospective, added in f3134cc5 |
 
-| Metric | Value |
-|--------|-------|
-| Tasks total | 22 |
-| Tasks complete | 20 |
-| Tasks incomplete | 2 (8.1, 8.2 - Phase 8 "Regression + cleanup") |
+### Execution evidence
 
-Tasks 8.1/8.2 were left unchecked. 8.1 (run the full suite) is satisfied in substance by this
-phase's own execution below. 8.2 (confirm spec text matches shipped behavior before archive) is
-NOT satisfied - it has a real open finding (W-1).
-
-### Build & Tests Execution
-
-**Build**: PASSED
-
-```text
-npx tsc --noEmit
-exit 0 - zero diagnostics (0 output lines)
-```
-
-**Tests**: 13671 passed / 0 failed / 88 skipped
-
-```text
-npm test
-Test Suites: 6 skipped, 1290 passed, 1290 of 1296 total
-Tests:       88 skipped, 13671 passed, 13759 total
-Snapshots:   0 total
-Time:        122.292 s
-exit 0
-```
-
-Scope sanity check (this repo has a documented worktree-contamination gotcha): counting test files
-under this worktree returns 1296, exactly matching the 1296 suites jest collected - no
-residual-worktree bleed.
-
-Process hygiene (documented incident: orphaned jest workers): a Win32_Process scan filtered on
-jest showed zero jest processes before the run and zero after it. No manual backgrounding with an
-ampersand was used. Clean.
-
-**Coverage**: not run (available via the coverage script, informational only under this skill's
-rules, and not required to adjudicate any finding).
-
-### Spec Compliance Matrix
-
-Rebuilt from scratch. Every scenario is mapped to a named test that was read directly; no scenario
-is accepted as covered on assertion alone.
-
-| Requirement | Scenario | Test | Result |
+| Check | Command | Exit | Result |
 |---|---|---|---|
-| TPL-3 | legacy sin type - sin regresion | CreateTemplate.test.ts > legacy {title,url} sin type -> normaliza a type:"url"; TwilioContentGateway.admin.test.ts > con button -> payload types es twilio/call-to-action; external-messaging-templates.routes.test.ts > con button valido -> 201 | COMPLIANT |
-| TPL-3 | type:'url' explicito - equivalente a legacy | (none found) | UNTESTED |
-| TPL-3 | quick-reply valido | CreateTemplate.test.ts > type:"quickReply" con el titulo exacto de la constante -> aceptado, sin url; TwilioContentGateway.admin.test.ts > con button type:"quickReply" -> twilio/quick-reply con actions[{id,title}]; external-messaging-templates.routes.test.ts > con button type:"quickReply" (sin url) -> 201 | COMPLIANT |
-| TPL-3 | type desconocido o titulo vacio -> 400 | CreateTemplate.test.ts > type desconocido -> InvalidTemplateInputError; CreateTemplate.test.ts > title whitespace-only -> InvalidTemplateInputError, NO llama al port | PARTIAL |
-| TPL-3 | sin boton - sin regresion | CreateTemplate.test.ts > sin boton -> createCalls[0].button es undefined; TwilioContentGateway.admin.test.ts > sin button -> payload sigue byte-identico twilio/text | COMPLIANT |
-| TPL-6 | recategorizacion de Meta sobre un quick-reply | (none found - see C-2) | UNTESTED |
-| QR-1 | exact title match triggers the reply | invoiceDetailButton.test.ts > match exacto; > case-insensitive; > con espacios de borde (trim) | COMPLIANT |
-| QR-1 | unrelated content never false-triggers | invoiceDetailButton.test.ts > substring NO dispara; > contenido no relacionado -> NO dispara; > string vacio -> NO dispara; ReplyWithInvoiceDetail.test.ts > contenido no relacionado -> NO envia nada; opt-out non-interference held by the green ReceiveChatwootWebhook.optout.test.ts regression suite | COMPLIANT |
-| QR-2 | independent of the assistant flag | messaging.routes.test.ts > tap inbound del boton por la ruta REAL (firma HMAC valida) -> Chatwoot recibe el detalle - runs the real route with no assistant engine wired (flag absent = OFF) and the reply is still sent; reinforced by the static isolation proof below | COMPLIANT |
-| QR-3 | customer with pending invoices | renderInvoiceDetailReply.test.ts > UNA factura con paymentUrl -> itemiza numero/vencimiento/saldo + Ver + Pagar ahora; > N facturas (>1) separadas por un divisor; > paymentUrl null -> omite la linea Pagar ahora; ReplyWithInvoiceDetail.test.ts > trigger + factura pendiente -> UN sendMessage con el detalle | COMPLIANT |
-| QR-3 | customer with zero pending invoices | renderInvoiceDetailReply.test.ts > invoices === [] (cero pendientes) -> mensaje neutro verbatim; > owner-locked: string de cero facturas pendientes, EXACTA; > la string de cero facturas NUNCA sugiere al dia | COMPLIANT |
-| QR-4 | GR lookup fails | ReplyWithInvoiceDetail.test.ts > el reader de facturas lanza -> envia el fallback GR-lookup-failed EXACTO, no relanza (QR-4); > cliente sigue stale tras el intento de refresh -> fallback; ReceiveChatwootWebhook.invoiceDetail.test.ts > el colaborador lanza (hipo) -> el webhook NO explota e IGUAL espeja el mensaje y ackea (200) | COMPLIANT |
-| QR-4 | phone does not resolve to any Client | ReplyWithInvoiceDetail.test.ts > telefono sin match en ningun Client -> NO envia nada, no lanza (QR-4) | COMPLIANT |
+| Test suite | npm test | 0 | 1290 suites passed / 6 skipped; 13675 tests passed, 0 failed, 88 skipped, 13763 total; 140.76 s |
+| Type check | npx tsc --noEmit | 0 | clean, zero diagnostics |
+| Orphan processes | Get-CimInstance Win32_Process | - | zero orphaned jest/node workers after the run |
 
-**Compliance summary**: 11/13 scenarios compliant (1 partial, 2 untested).
+### Spec compliance matrix
 
-#### QR-4 spec-text reconciliation (task 0.2) - checked directly
+#### Delta whatsapp-invoice-detail-quickreply (QR-1 ... QR-4)
 
-The spec file's SCENARIO text was correctly updated by task 0.2 and now matches the code: it states
-the system sends the exact owner-locked fallback message, the error is not rethrown, and the webhook
-still responds 200. The implementation agrees: the catch path in ReplyWithInvoiceDetail.execute
-calls renderInvoiceDetailReply(null) and then sendMessage.
+| Req | Scenario | Covering test (exact name) | Status |
+|---|---|---|---|
+| QR-1 | exact title match triggers the reply | invoiceDetailButton.test.ts: "match exacto -> dispara el trigger", "case-insensitive -> dispara el trigger", "con espacios de borde (trim) -> dispara el trigger"; ReplyWithInvoiceDetail.test.ts: "trigger + factura pendiente + cliente resuelto (no stale) -> UN sendMessage con el detalle"; messaging.routes.test.ts: "tap inbound del boton por la ruta REAL (firma HMAC valida) -> Chatwoot recibe el detalle" | PASS |
+| QR-1 | unrelated content never false-triggers | invoiceDetailButton.test.ts: "substring (contiene el titulo pero no es igual) -> NO dispara", "contenido no relacionado -> NO dispara", "string vacio -> NO dispara"; ReplyWithInvoiceDetail.test.ts: "contenido no relacionado (no es el titulo del boton) -> NO envia nada"; ReceiveChatwootWebhook.invoiceDetail.test.ts: "sin colaborador inyectado (backward-compat) - cero regresion" | PASS |
+| QR-2 | independent of the assistant flag | messaging.routes.test.ts: "tap inbound del boton por la ruta REAL (firma HMAC valida) -> Chatwoot recibe el detalle" (harness wires NO assistant engine at all - reply still sent); messaging-bulk-composition.test.ts constructor-order regex; plus the structural proof below | PASS (see SUGGESTION-1) |
+| QR-3 | customer with pending invoices | renderInvoiceDetailReply.test.ts: "UNA factura con paymentUrl -> itemiza numero/vencimiento/saldo + Ver + Pagar ahora", "N facturas (>1) -> cada una itemizada, separadas por un divisor", "el vencimiento se muestra como DD/MM/YYYY, jamas el ISO crudo" | PASS |
+| QR-3 | customer with zero pending invoices | renderInvoiceDetailReply.test.ts: "invoices === [] (cero pendientes) -> devuelve el mensaje neutro verbatim", "owner-locked: string de cero facturas pendientes, EXACTA", "la string de cero facturas NUNCA sugiere al dia (guardrail del diseno)" | PASS |
+| QR-4 | GR lookup fails | ReplyWithInvoiceDetail.test.ts: "el reader de facturas lanza -> envia el fallback GR-lookup-failed EXACTO, no relanza (QR-4)"; ReceiveChatwootWebhook.invoiceDetail.test.ts: "el colaborador lanza (hipo) -> el webhook NO explota e IGUAL espeja el mensaje y ackea (fail-open)" | PASS |
+| QR-4 | phone does not resolve to any Client | ReplyWithInvoiceDetail.test.ts: "telefono sin match en ningun Client -> NO envia nada, no lanza (QR-4)"; reinforced by "el MISMO telefono resuelve a 2 clientes -> NO cita datos de ninguno, manda el fallback" | PASS |
 
-However the REQUIREMENT HEADING was not updated and still reads "QR-4 - fail-open; no reply on
-unresolved phone or internal error". The phrase "no reply on internal error" directly contradicts
-the scenario immediately below it, which mandates that a reply IS sent on internal error. Task 0.2
-fixed the scenario but not the title; task 8.2 exists precisely to catch this and is unchecked.
-Recorded as W-1.
+QR-4's requirement heading, which previously contradicted its own scenario body, now reads
+"fail-open; owner-locked fallback reply on internal error, no reply on unresolved phone".
+Both sub-cases are stated accurately: fallback sent on GR/internal error, genuine silence on a
+zero-match phone. Previous blocker 3 is CLOSED.
 
-### Correctness (Static Evidence)
+#### Delta external-bulk-messaging (TPL-3, TPL-6)
 
-| Requirement | Status | Notes |
+| Req | Scenario | Covering test (exact name) | Status |
+|---|---|---|---|
+| TPL-3 | legacy sin type - sin regresion | CreateTemplate.test.ts: "legacy {title,url} sin type -> normaliza a type:url"; external-messaging-templates.routes.test.ts: "con button valido -> 201, templatePort.createCalls[0].button poblado (Zod no lo stripea)"; TwilioContentGateway.admin.test.ts: "con button -> payload types es twilio/call-to-action con actions[{type:URL,title,url}]" | PASS |
+| TPL-3 | type:url explicito - equivalente a legacy | CreateTemplate.test.ts: "type:url explicito -> mismo efecto exacto que la forma legacy sin type" and "type:url explicito con url invalida -> InvalidTemplateInputError (misma regla que legacy)"; external-messaging-templates.routes.test.ts: "con button type:url explicito -> 201 y el boton llega identico al legacy sin type" | PASS |
+| TPL-3 | quick-reply valido | TwilioContentGateway.admin.test.ts: "con button type:quickReply -> payload types es twilio/quick-reply con actions[{id,title}], sin url" - asserts a DIFFERENT payload than the scenario states | FAIL - CRITICAL-1 |
+| TPL-3 | type desconocido o titulo vacio -> 400 | CreateTemplate.test.ts: "type desconocido -> InvalidTemplateInputError"; empty-title path via the whitespace-title button case (type-agnostic trim/empty guard) | PASS (see SUGGESTION-2) |
+| TPL-3 | sin boton - sin regresion | CreateTemplate.test.ts: "sin boton -> createCalls[0].button es undefined (regresion, no se inventa nada)"; TwilioContentGateway.admin.test.ts twilio/text case | PASS |
+| TPL-6 | recategorizacion de Meta sobre un quick-reply | TwilioContentGateway.admin.test.ts: "TPL-6: sometido UTILITY pero aprobado MARKETING -> el DTO reporta MARKETING, nunca UTILITY" | PASS |
+
+### Previously-blocking items - independently re-verified
+
+Blocker 1 - TPL-3 explicit type:url had no test. CLOSED. Both new tests genuinely construct an
+EXPLICIT {type:'url', title, url} input (not the legacy untyped shape) and assert real behaviour:
+the use-case test builds the explicit form and the legacy form through two separate gateways and
+compares the whole recorded call with toEqual, and a sibling test proves url validation still
+applies to the explicit form (ftp:// still rejected, zero create calls). The route test sends the
+tag over the wire and asserts the normalized button reaching the port. Not decorative.
+
+Blocker 2 - TPL-6 had no discriminating test. CLOSED, and the claim was verified rather than
+trusted. I re-ran the revert-probe myself against TwilioContentGateway.toTemplateDto:
+
+- Flipping BOTH category operands (the category: line and the approvalCategory assignment)
+  -> 3 failed / 21 passed, including the new TPL-6 test.
+- Flipping ONLY the ?? operand order on the category: line -> 1 failed / 23 passed, exactly the
+  claimed discrimination, and the single failure is the new TPL-6 test.
+- Reverted with git checkout --; git status --porcelain src/ empty; suite re-run 24/24 green.
+
+The report's claim that the read-back mechanism already existed and was already correct is
+accurate: the approvalOverride category precedence predates this change (S4 fix) and was untouched
+by the diff. Only the test was missing.
+
+Blocker 3 - QR-4 heading contradiction. CLOSED (see matrix note above).
+
+### Owner constraints
+
+Isolation (QR-2), verified fresh across the entire range acab519d..f3134cc5:
+
+- Zero imports from assistant modules in any new file (invoice-detail/*, InvoiceDetailReader.ts,
+  PrismaInvoiceDetailReader.ts, InMemoryInvoiceDetailReader.ts).
+- Every "assistant" token added by the diff is either a prose comment asserting the isolation, or a
+  reference to the PRE-EXISTING assistantEngine 8th constructor parameter of ReceiveChatwootWebhook
+  and its composition-order regex. No new coupling.
+- ai-assistant-enabled appears nowhere in the new code path. Repo-wide its only occurrences are in
+  the parked ReplyWithAssistant.ts and assistant-composition.test.ts, both untouched by this change.
+
+Owner-locked strings, character-exact in the final code
+(src/application/use-cases/messaging/invoice-detail/renderInvoiceDetailReply.ts):
+
+- GR_LOOKUP_FAILED_MESSAGE is byte-identical to the string quoted in the QR-4 spec scenario,
+  ending in the "IPNEXT Cobranzas" sign-off.
+- NO_PENDING_INVOICES_MESSAGE is the neutral zero-invoices string and makes no "al dia" claim,
+  per the design guardrail; a dedicated test asserts that absence.
+
+### Task completion
+
+26/26 tasks checked across Phases 0-8. Task text matches the shipped code state in every case but
+one (WARNING-1).
+
+### Design coherence
+
+| Design decision | Code state | Verdict |
 |---|---|---|
-| QR-1 trigger by title only | Implemented | invoiceDetailButton.ts - trim + toLowerCase equality against one constant; no content_attributes read anywhere |
-| QR-2 isolation | Implemented | See dedicated section below |
-| QR-3 reply content | Implemented | renderInvoiceDetailReply.ts emits tipo/numero, Vence:, Saldo:, Ver:, Pagar ahora:, and a divider; sent as free text via ChatwootGateway.sendMessage, not a template; single payment link, no separate post-due instrument |
-| QR-4 fail-open wiring | Implemented | Optional 9th ctor arg on ReceiveChatwootWebhook; maybeReplyWithInvoiceDetail in its own try/catch; inbound-gated; send failure caught separately and logged |
+| Title-text trigger matching (no button id on the wire) | isInvoiceDetailTrigger, trim + case-insensitive equality | coherent |
+| actions with an inert slug id on the Twilio action | buildContentTypes emits exactly that | coherent, but contradicts the spec delta (CRITICAL-1) |
+| Optional constructor collaborator, fail-open try/catch | 9th optional ctor arg + maybeReplyWithInvoiceDetail | coherent |
+| Pure total formatter (null = lookup failed, [] = zero pending) | renderInvoiceDetailReply | coherent |
+| Approach B full isolation | verified above | coherent |
 
-#### Owner-locked copy - byte-exact verification
+### Issues
 
-Verified programmatically against the canonical strings, not by eye:
+#### CRITICAL-1 - TPL-3 mandates a Twilio payload shape the code does not emit
 
-| String | Verbatim match | Leading char | Dash | Length |
-|---|---|---|---|---|
-| GR failure | true | U+00A1 | U+2014 | 127 |
-| Zero invoices | true | U+00A1 | U+2014 | 136 |
+specs/external-bulk-messaging/spec.md, normative sentence (lines 15-16) and scenario "quick-reply
+valido" (lines 34-35), both state that type:'quickReply' MUST emit twilio/quick-reply with
+actions carrying a type field set to QUICK_REPLY.
 
-The zero-invoices string does NOT contain "al dia" (asserted programmatically here, and by the test
-"la string de cero facturas NUNCA sugiere al dia"). No raw NUL bytes present in the file.
+The shipped code (TwilioContentGateway.buildContentTypes) emits
+actions: [{ id: slug(button.title), title: button.title }] - no type key at all. The type
+discriminator belongs to twilio/call-to-action (type:'URL'), not to twilio/quick-reply.
 
-#### QR-2 hard isolation - verified fresh, not inherited
+The CODE is right: design.md explicitly chose "emit actions: [{ id: slug(title), title }], slug
+computed inside the gateway", and that is the payload actually created and approved by Meta live.
+The SPEC TEXT is wrong, and it is wrong in the normative sentence, not only in the scenario. This
+scenario therefore has no passing covering test as literally written. Archiving this delta would
+enshrine a false provider contract in the permanent external-bulk-messaging capability spec, for a
+paid external integration.
 
-This was re-derived independently over the full acab519d..448ce327 diff (all 32 files, not just the
-new ones):
+Fix: spec text only. No code, test, or behaviour change.
 
-- Every import / export-from / require statement in all six new module files was enumerated. The
-  full import set is: CustomerRepository, InvoiceDetailReader, ChatwootGateway,
-  RefreshClientBalanceIfStale, toWhatsAppE164, ./invoiceDetailButton, ./renderInvoiceDetailReply,
-  and the prisma client. ZERO imports from application/use-cases/assistant/* or adapters/assistant/*.
-- Grepping every added line of the diff for ai-assistant-enabled: matches occur ONLY in openspec
-  prose (proposal/design/spec/tasks) and in one explanatory code comment. ZERO reads of the flag in
-  any code path.
-- The remaining assistant-shaped hits in src/ are (a) doc comments naming the parked module as a
-  deliberate non-dependency, and (b) the PRE-EXISTING assistantEngine constructor parameter of
-  ReceiveChatwootWebhook, which this change threads through app.ts unchanged while appending
-  invoiceDetailReplier after it. That is prior wiring, not new coupling.
+#### CRITICAL-2 - TPL-3 mandates silently ignoring a stray url; the code rejects it
 
-QR-2 holds.
+Same file, lines 12-13: "una url presente junto a quickReply MUST ignorarse sin error".
 
-### Fix-Wave Independent Re-check (items a/b/c)
+The fix wave (448ce327, adversarial finding 5) deliberately REVERSED this. assertValidButton now
+throws InvalidTemplateInputError for {type:'quickReply', url}, and the external route returns 400.
+The code comment states the reasoning explicitly: accepting it silently left the operator believing
+they had created a button with a link. Two tests lock the behaviour in:
+"type:quickReply con un url colado -> InvalidTemplateInputError (no se ignora)" and
+"con button type:quickReply + url colada -> 400, NUNCA se crea como boton url".
 
-| Item | Verified how | Result |
-|---|---|---|
-| (a) ambiguous phone never leaks another client data | Read ReplyWithInvoiceDetail.resolveClient directly: it uses filter, not find. Zero matches returns 'none' (silent no-op); more than one returns 'ambiguous', which routes to renderInvoiceDetailReply(null) - the GR-failure fallback, containing ZERO account data. Covered by the test "el MISMO telefono resuelve a 2 clientes -> NO cita datos de ninguno, manda el fallback". | Holds |
-| (b) dates render DD/MM/YYYY, not raw ISO | Read formatDueDate directly: a regex takes the date part of the trimmed ISO string and reassembles it as DD/MM/YYYY. It deliberately avoids new Date() (UTC-3 would roll a midnight-UTC due date back one day) and toLocaleDateString (full-ICU dependency). Unrecognised input is returned as-is, never an invented date. Covered by "el vencimiento se muestra como DD/MM/YYYY, jamas el ISO crudo" and "vencimiento vacio no inventa una fecha". | Holds |
-| (c) external and admin routes agree on button shapes | Read external-messaging.routes.ts (Zod tagged union) and templates.routes.ts (raw forward into assertValidButton) in full, then walked all 8 shapes: quickReply-valid, quickReply+url, legacy {title,url}, explicit type:'url', unknown type, quickReply blank title, quickReply foreign title, and wrong key {title,link}. BOTH surfaces reach the same accept/reject outcome in all 8. Note templates.routes.ts is not in this change diff - its defensive raw-forward came from the earlier commit 854fa068, and it stays correct because assertValidButton is the single shared validator. Both 400 paths emit VALIDATION_ERROR. | Holds |
+The hardened behaviour is correct. The spec still mandates the behaviour the review found dangerous.
 
-Fix-wave items (d) length cap and (e) Zod union are also present and tested, via "mas facturas que
-el tope -> recorta, avisa que hay mas, y NUNCA excede el largo seguro" and "facturas con links
-larguisimos -> el mensaje sigue dentro del largo seguro".
+#### CRITICAL-3 - TPL-3 states a permissive quickReply title rule; the code enforces an exact constant
 
-### TDD Compliance
+Same file, lines 11-12: "type:'quickReply' exige solo title no vacio tras trim, acotado en largo".
 
-The apply-progress artifact DOES NOT EXIST in either store. There is no
-openspec/changes/whatsapp-invoice-detail-quickreply/apply-progress.md, and mem_search for the topic
-key sdd/whatsapp-invoice-detail-quickreply/apply-progress plus three broader queries return nothing
-- Engram holds only explore/proposal/spec/design/tasks plus a fix-wave bugfix note. Its TDD Cycle
-Evidence table therefore could not be validated as written. The equivalent evidence was
-reconstructed independently from the tasks.md RED/GREEN annotations plus execution.
+The code additionally requires title === INVOICE_DETAIL_BUTTON_TITLE exactly (post-trim,
+case-sensitive), throwing otherwise. That is the deliberate anti-drift decision recorded in
+design.md: an operator physically cannot create a quick-reply template whose title the webhook
+would not recognize. Test: "type:quickReply con titulo distinto de la constante ->
+InvalidTemplateInputError". The spec omits the single most important validation rule of this
+requirement, and as written would permit creating a template the webhook can never answer.
 
-| Check | Result | Details |
-|-------|--------|---------|
-| TDD Evidence reported | FAIL | apply-progress artifact missing entirely (C-3) |
-| All tasks have tests | PASS | 9/9 RED test files named in tasks.md exist on disk |
-| RED confirmed (tests exist) | PASS | 9/9 verified present |
-| GREEN confirmed (tests pass) | PASS | All 9 files sit inside the 1290 passing suites; whole suite exit 0 |
-| Triangulation adequate | PASS | 7 cases (button), 12 (formatter), 10 (orchestrator), 5 (webhook), 6 (reader), 6 (template union) |
-| Safety Net for modified files | PASS | Modified files (CreateTemplate, TwilioContentGateway, ReceiveChatwootWebhook, both gateways, messaging.routes) retain their prior cases; explicit no-regression tests added on each |
+#### WARNING-1 - task 1.6 text describes the reversed behaviour
 
-**TDD Compliance**: 5/6 checks passed. The single failure is the missing artifact, not the practice.
+tasks.md task 1.6 still reads "ignore stray url on quickReply" and is checked [x]. That is the
+pre-fix-wave behaviour. Every other task carries an explicit reconciliation note where reality
+diverged from the plan (see 2.1, 3.2, 6.2, 7.1); this one does not. Cosmetic next to the CRITICALs,
+but tasks.md is archived too.
 
-### Test Layer Distribution
+#### SUGGESTION-1 - QR-2's scenario is satisfied structurally, not by a flag toggle
 
-| Layer | Tests | Files | Tools |
-|-------|-------|-------|-------|
-| Unit | 35 | 4 | jest + ts-jest |
-| Integration (supertest/HTTP) | 12 | 3 | jest + supertest |
-| E2E | 0 | 0 | not installed |
-| Total (this change) | 47 | 7 | |
+No test literally sets ai-assistant-enabled to OFF and then taps the button. The guarantee is
+stronger in practice: the flag is unreachable from this code path by construction, and the
+integration harness wires no assistant at all, so a toggle test would be close to vacuous. Recorded
+so archive does not later read the matrix as claiming a toggle test exists.
 
-### Changed File Coverage
+#### SUGGESTION-2 - TPL-3's empty-title scenario is covered by the type-agnostic guard
 
-Coverage analysis skipped - not required to adjudicate any finding; informational only under this
-skill's rules.
+The scenario names {type:'quickReply', title:"   "}. The passing test uses the legacy shape with a
+whitespace title. assertValidButton trims and rejects before branching on type, so the same code
+path is exercised, but the literal quickReply variant has no case of its own.
 
-### Assertion Quality
+### Accepted residual risk (unchanged)
 
-Audited all 7 test files created or modified by this change. No tautologies, no assertions that
-never invoke production code, no ghost loops, no smoke-test-only cases, no mock-heavy files. The
-empty-collection assertions (PrismaInvoiceDetailReader.test.ts "lista vacia -> []" and
-renderInvoiceDetailReply.test.ts "invoices === []") each have a companion non-empty test with the
-same setup, so they are not orphan empty checks.
+LOW - a single invoice block over roughly 1400 characters could theoretically displace the
+"more invoices" notice. Bounded in practice: real MercadoPago URLs are around 100 characters, and
+MAX_REPLY_LENGTH = 1400 with MAX_INVOICES_IN_REPLY = 5 are enforced and tested by
+"facturas con links larguisimos -> el mensaje sigue dentro del largo seguro".
 
-**Assertion quality**: all assertions verify real behavior - 0 CRITICAL, 0 WARNING.
+### apply-progress.md honesty check
 
-### Quality Metrics
-
-**Linter**: not run. This repo has no prettier config and project convention explicitly forbids
-running prettier here.
-**Type Checker**: no errors. npx tsc --noEmit, exit 0, zero diagnostics.
-
-### Coherence (Design)
-
-| Decision | Followed? | Notes |
-|----------|-----------|-------|
-| Approach B - full isolation from assistant/* | Yes | Independently verified above |
-| Tagged union normalized at the validation boundary | Yes | assertValidButton normalizes an absent type to 'url' |
-| Drift impossible at creation (quickReply title pinned to the constant) | Yes | CreateTemplate rejects any other quickReply title with 400 |
-| GR reused indirectly via RefreshClientBalanceIfStale, never called directly | Yes | No GestionRealClient import in the new module |
-| Fallbacks always answer, and never claim "al dia" | Yes | Byte-exact strings verified |
-| No dedicated post-due payment instrument in v1 | Yes | Single paymentUrl, one label |
-
-### Issues Found
-
-**CRITICAL**
-
-- **C-1 - TPL-3 scenario "type:'url' explicito - equivalente a legacy" is UNTESTED.** No test
-  anywhere sends an explicit type:'url' as INPUT to CreateTemplate or to either route. All 12
-  type:'url' occurrences in the test tree are expectation-side, asserting the value the validator
-  PRODUCED from a legacy {title,url}. Real-world risk is low, because assertValidButton
-  short-circuits with "type === undefined ? 'url' : button.type" so the explicit path converges
-  immediately - but the spec enumerates it as its own scenario and nothing proves it. Closable with
-  one roughly 8-line case.
-- **C-2 - TPL-6 scenario "recategorizacion de Meta sobre un quick-reply" is UNTESTED.** TPL-6 is an
-  ADDED requirement in this change delta, yet no task in tasks.md implements or covers it and no
-  test was added for it. The nearest existing test (TwilioContentGateway.admin.test.ts > "S4:
-  ApprovalRequests status=approved -> DTO approved") proves approvalCategory is sourced from the
-  ApprovalRequests response, but it uses an empty types object - not a quick-reply template - and
-  never establishes the scenario's actual point: a template SUBMITTED as UTILITY and APPROVED as
-  MARKETING must report MARKETING and never the submitted value. Given TPL-6's own rationale is a
-  roughly 5x billing difference, an explicit test is warranted. Closable with one roughly 10-line
-  case.
-- **C-3 - the required apply-progress artifact was never persisted.** Neither the openspec file nor
-  the Engram topic sdd/whatsapp-invoice-detail-quickreply/apply-progress exists. Under the phase
-  contract a missing required artifact is a blocker, and under Strict TDD a missing TDD Cycle
-  Evidence table is CRITICAL. Mitigated in substance, since the evidence was reconstructed and
-  confirmed independently, but the pipeline record is absent and archiving now would seal an
-  incomplete artifact set.
-
-**WARNING**
-
-- **W-1 - QR-4 requirement heading contradicts its own scenario.** The heading still says "no reply
-  on unresolved phone or internal error", while the scenario below mandates that the fallback reply
-  IS sent on internal error. Task 0.2 updated the scenario but not the title. This is exactly what
-  unchecked task 8.2 exists to catch, and it must be fixed before archive or the archived spec will
-  contradict shipped behavior.
-- **W-2 - tasks 8.1 and 8.2 are unchecked.** 8.1 is satisfied in substance by this run. 8.2 is not,
-  per W-1. Treated as cleanup-tier, but 8.2 carries a real finding.
-- **W-3 - TPL-3 scenario "type desconocido o titulo vacio -> 400" is PARTIAL.** The spec gives two
-  examples; only {type:'sms', title:"x"} is tested. The second, a quickReply with a whitespace-only
-  title, has no direct test - though it is covered by equivalence, since the title trim/empty
-  validation in assertValidButton runs BEFORE the quickReply branch and is exercised by the legacy
-  whitespace-title test. Low risk; noted for completeness.
-
-**SUGGESTION**
-
-- **S-1** - The accepted LOW residual from the fix-wave re-review still stands: a single invoice
-  block exceeding MAX_REPLY_LENGTH (1400) falls into the hard-cut branch, which trims at the last
-  newline and can therefore drop the MORE_INVOICES_MESSAGE notice. Real MercadoPago URLs are around
-  100 chars, so this is unreachable in practice. If desired, prepend the notice before truncating
-  rather than appending it after.
-- **S-2** - Consider recording one coverage run filtered to the 6 new source files before archive,
-  purely as an artifact.
+Cross-checked against git log acab519d..f3134cc5. It is an honest account. It declares itself
+retrospective and explains why, names commits acaebaad and 448ce327 with accurate descriptions,
+lists all 5 adversarial findings matching the 448ce327 commit body, records the accepted LOW
+residual risk, and describes the third-pass fix wave including the correct claim that TPL-6 needed
+no production code. Two minor omissions, neither a misrepresentation: the trailing Commits list
+stops at 448ce327 (it does not enumerate 664fa267, though the body describes that work in detail),
+and f3134cc5 - the commit that adds the file itself - is naturally absent. Nothing in it actively
+misrepresents reality.
 
 ### Verdict
 
-**FAIL**
-
-No functional defect was found. The suite is green (13671 passed, 0 failed), types are clean, the
-owner's isolation constraint and both owner-locked strings verify byte-exact, and all three
-re-checked fix-wave items hold. The verdict is fail solely on evidence completeness: two enumerated
-spec scenarios (C-1, C-2) have no covering test, and the required apply-progress artifact (C-3) does
-not exist. Two small tests, one heading edit (W-1), and the missing artifact would flip this to pass.
+FAIL. Runtime evidence is fully green (13675 passed, 0 failed, exit 0; tsc --noEmit clean), all 26
+tasks are complete, the three previously-blocking gaps are genuinely closed (the TPL-6 revert-probe
+independently reproduced), and both owner constraints hold across the entire range. The remaining
+blocker is narrower but real: the external-bulk-messaging spec delta states three normative rules
+the shipped code contradicts. In each case the code is right and the spec text is stale. Because
+that delta becomes the permanent capability contract for a paid external provider integration, it
+must be corrected before archive. No code, test, or behaviour change is required.
