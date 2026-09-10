@@ -74,6 +74,12 @@ import type { Customer } from '../../domain/entities/customer';
 import type { EntityLookup } from '../../domain/ports/EntityLookup';
 import type { UserRoleLookup } from '../../domain/ports/UserRoleLookup';
 import { config } from '../../infrastructure/config';
+// whatsapp-invoice-detail-quickreply (Phase 7, QR-1..QR-4) — integration seam.
+import { ReplyWithInvoiceDetail } from '../../application/use-cases/messaging/invoice-detail/ReplyWithInvoiceDetail';
+import { INVOICE_DETAIL_BUTTON_TITLE } from '../../application/use-cases/messaging/invoice-detail/invoiceDetailButton';
+import { InMemoryInvoiceDetailReader } from '../../infrastructure/adapters/in-memory/InMemoryInvoiceDetailReader';
+import type { CampaignSegmentSource, CampaignRecipientCandidate } from '../../domain/ports/CustomerRepository';
+import type { RefreshClientBalanceIfStale } from '../../application/use-cases/RefreshClientBalanceIfStale';
 
 /** F1.5-C2 — fixed known-assignee pool (same "fixed ids matching the fixture" idiom
  * as `seedAdmins(['1','2'])` in tickets.routes.new.test.ts). */
@@ -180,6 +186,13 @@ interface BuildAppOptions {
   /** Middleware que deja `req.messagingCanManage`. Default: supervisor=false (sólo el
    * autor puede mutar su nota). Tests de supervisor pasan uno que setea `true`. */
   attachManage?: RequestHandler;
+  /**
+   * whatsapp-invoice-detail-quickreply (Phase 7, QR-1..QR-4) — 9º arg OPCIONAL de
+   * `ReceiveChatwootWebhook`. Sin esto (default), el webhook se comporta EXACTAMENTE
+   * como antes de este change (cero regresión, mismo criterio que el resto de los
+   * colaboradores opcionales de este harness).
+   */
+  invoiceDetailReplier?: { execute(input: import('../../application/use-cases/messaging/invoice-detail/ReplyWithInvoiceDetail').ReplyWithInvoiceDetailInput): Promise<void> };
 }
 
 /** messaging-inbox-notes (edit/delete) — default: NO supervisor (fail-closed). */
@@ -265,7 +278,17 @@ function buildApp(opts: BuildAppOptions = {}) {
   app.use(
     '/api/messaging',
     createMessagingRouter(
-      new ReceiveChatwootWebhook(conversationRepo, messageRepo, deliveryRepo, attachmentRepo),
+      new ReceiveChatwootWebhook(
+        conversationRepo,
+        messageRepo,
+        deliveryRepo,
+        attachmentRepo,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        opts.invoiceDetailReplier,
+      ),
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, messageRepo, gateway, getClientContext, attachmentRepo),
       new ListMessages(conversationRepo, messageRepo, attachmentRepo),
@@ -3240,5 +3263,121 @@ describe('GET /api/messaging/conversations/:id/previous', () => {
 
     expect(res.status).toBe(500);
     expect(res.body.code).toBe('INTERNAL_ERROR');
+  });
+});
+
+// ─── whatsapp-invoice-detail-quickreply (Phase 7, QR-1..QR-4) — webhook wiring, end-to-end ──
+
+/** Mismo molde que `ReplyWithInvoiceDetail.test.ts`: fakes mínimos, sin mockear Prisma/axios. */
+function invoiceDetailCustomerRepo(customer: Customer): CustomerRepository {
+  return { findById: async () => customer } as unknown as CustomerRepository;
+}
+
+function invoiceDetailSegmentSource(candidates: CampaignRecipientCandidate[]): CampaignSegmentSource {
+  return { listSegmentRecipients: async () => candidates };
+}
+
+function invoiceDetailNoopRefresh(): RefreshClientBalanceIfStale {
+  return { execute: async () => false } as unknown as RefreshClientBalanceIfStale;
+}
+
+const INVOICE_DETAIL_PHONE = '+5493364111111';
+
+function freshInvoiceDetailCustomer(): Customer {
+  return {
+    id: 'client-inv-1',
+    grClienteId: 'GR-INV-1',
+    name: 'Cliente Facturas',
+    email: 'cliente@example.com',
+    phone: INVOICE_DETAIL_PHONE,
+    status: 'active',
+    address: '',
+    city: '',
+    country: 'AR',
+    login: 'cliente',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    balanceDue: 0,
+    balanceCurrency: null,
+    lastBalanceAt: new Date().toISOString(),
+    balanceStale: false,
+  } as Customer;
+}
+
+describe('POST /api/messaging/webhook — invoice-detail quick-reply (Phase 7, integration)', () => {
+  it('tap inbound del botón por la ruta REAL (firma HMAC válida) → Chatwoot recibe el detalle', async () => {
+    const reader = new InMemoryInvoiceDetailReader({
+      invoicesByClientId: {
+        'client-inv-1': [
+          {
+            tipo: 'Factura',
+            numero: '0001-9',
+            vencimiento: '2026-09-10T00:00:00.000Z',
+            saldo: 500,
+            pdfUrl: 'https://gr.example/pdf/9',
+            paymentUrl: 'https://mp.example/pay/9',
+          },
+        ],
+      },
+    });
+    // El orchestrator necesita el MISMO `ChatwootGateway` que verá el webhook — se
+    // construye ACÁ y se pasa como `opts.gateway` al harness (mismo seam que `gateway`
+    // usa en el resto del archivo).
+    const gateway = new FakeChatwootGateway();
+    const invoiceDetailReplier = new ReplyWithInvoiceDetail(
+      invoiceDetailCustomerRepo(freshInvoiceDetailCustomer()),
+      invoiceDetailSegmentSource([{ clientId: 'client-inv-1', name: 'Cliente Facturas', phone: INVOICE_DETAIL_PHONE, balanceDue: 0, whatsappOptOutAt: null }]),
+      reader,
+      gateway,
+      invoiceDetailNoopRefresh(),
+    );
+    const { app } = buildApp({ invoiceDetailReplier, gateway });
+
+    const payload = {
+      event: 'message_created',
+      id: 950,
+      content: INVOICE_DETAIL_BUTTON_TITLE,
+      message_type: 'incoming',
+      created_at: NOW_SEC,
+      conversation: { id: 950, meta: { sender: { name: 'Cliente Facturas', phone_number: INVOICE_DETAIL_PHONE } } },
+      sender: { name: 'Cliente Facturas' },
+    };
+    const rawBody = Buffer.from(JSON.stringify(payload));
+    const timestamp = String(NOW_SEC);
+
+    const res = await request(app)
+      .post('/api/messaging/webhook')
+      .set('x-chatwoot-signature', sign(rawBody, timestamp))
+      .set('x-chatwoot-timestamp', timestamp)
+      .set('x-chatwoot-delivery', 'delivery-invoice-detail-1')
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(gateway.sendMessageCalls).toHaveLength(1);
+    expect(gateway.sendMessageCalls[0].chatwootConversationId).toBe(950);
+    expect(gateway.sendMessageCalls[0].content).toContain('0001-9');
+  });
+
+  it('sin invoiceDetailReplier inyectado (default del harness) → tap del botón no rompe el webhook (cero regresión)', async () => {
+    const { app } = buildApp(); // invoiceDetailReplier ausente — mismo comportamiento que antes del change
+    const payload = {
+      event: 'message_created',
+      id: 951,
+      content: INVOICE_DETAIL_BUTTON_TITLE,
+      message_type: 'incoming',
+      created_at: NOW_SEC,
+      conversation: { id: 951, meta: { sender: { name: 'Cliente Facturas', phone_number: INVOICE_DETAIL_PHONE } } },
+      sender: { name: 'Cliente Facturas' },
+    };
+    const rawBody = Buffer.from(JSON.stringify(payload));
+    const timestamp = String(NOW_SEC);
+
+    const res = await request(app)
+      .post('/api/messaging/webhook')
+      .set('x-chatwoot-signature', sign(rawBody, timestamp))
+      .set('x-chatwoot-timestamp', timestamp)
+      .set('x-chatwoot-delivery', 'delivery-invoice-detail-2')
+      .send(payload);
+
+    expect(res.status).toBe(200);
   });
 });

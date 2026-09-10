@@ -10,6 +10,7 @@ import type {
 } from '@domain/ports/ConversationEventRepository';
 import { MessageNotMirroredYetError } from '@domain/errors/messaging';
 import type { ReplyWithAssistantCommand } from '@application/use-cases/assistant/ReplyWithAssistant';
+import type { ReplyWithInvoiceDetailInput } from '@application/use-cases/messaging/invoice-detail/ReplyWithInvoiceDetail';
 import { toWhatsAppE164 } from './toWhatsAppE164';
 import { deriveConversationPreview } from './conversationPreview';
 import { computeStatusTransition } from './conversationStatusTransition';
@@ -234,6 +235,16 @@ export class ReceiveChatwootWebhook {
      * espejar el mensaje.
      */
     private readonly assistant?: { execute(command: ReplyWithAssistantCommand): Promise<unknown> },
+    /**
+     * whatsapp-invoice-detail-quickreply (Phase 6, QR-1/QR-2/QR-4) — quick-reply
+     * de detalle de facturas. Optional (los call sites de 3/5/6/7/8-arg siguen
+     * compilando; el webhook se comporta EXACTAMENTE como antes sin él, cero
+     * regresión). Modelado byte-a-byte sobre `maybeRegisterOptOut`: fail-open,
+     * try/catch propio, nunca rompe el ack 200. Aislado del asistente parked
+     * (QR-2) — este colaborador es `ReplyWithInvoiceDetail`, un archivo
+     * completamente nuevo sin relación con `assistant/*`.
+     */
+    private readonly invoiceDetailReplier?: { execute(input: ReplyWithInvoiceDetailInput): Promise<void> },
   ) {}
 
   async execute(deliveryId: string, payload: ChatwootWebhookPayload): Promise<void> {
@@ -440,6 +451,39 @@ export class ReceiveChatwootWebhook {
       // D4.2/SEC-6 — quien tiene la conversación EN CHATWOOT, en el instante del webhook.
       assigneeName: assigneeNameFrom(payload.conversation?.meta),
     });
+
+    // whatsapp-invoice-detail-quickreply (QR-1) — solo taps INBOUND cuentan (un
+    // tap real de botón SIEMPRE produce un mensaje entrante, design "trigger
+    // detection"); va AL FINAL, fail-open, mismo criterio que el asistente de
+    // arriba (el espejado es el trabajo crítico del webhook).
+    if (direction === 'inbound') {
+      await this.maybeReplyWithInvoiceDetail(chatwootConversationId, payload.content, sender?.phone_number);
+    }
+  }
+
+  /**
+   * whatsapp-invoice-detail-quickreply (Phase 6, design "modeled byte-for-byte
+   * on maybeRegisterOptOut") — fail-open, nunca lanza: sin `invoiceDetailReplier`
+   * inyectado (call sites existentes) o ante cualquier falla del colaborador →
+   * se loguea y se sigue (el webhook SIEMPRE espeja/ackea 200). La decisión de
+   * SI dispara (título del botón, resolución de teléfono, etc.) vive ENTERA
+   * dentro de `ReplyWithInvoiceDetail` — este método solo la invoca y la aísla.
+   */
+  private async maybeReplyWithInvoiceDetail(
+    chatwootConversationId: number,
+    content: string | null | undefined,
+    phone: string | null | undefined,
+  ): Promise<void> {
+    if (!this.invoiceDetailReplier) return;
+    try {
+      await this.invoiceDetailReplier.execute({ content, phone, chatwootConversationId });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[messaging] invoice-detail quick-reply falló (fail-open, el webhook igual ackea 200)', {
+        chatwootConversationId,
+        error: err instanceof Error ? err.message : err,
+      });
+    }
   }
 
   /**

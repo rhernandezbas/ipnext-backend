@@ -108,7 +108,7 @@ describe('TwilioContentGateway — createTemplate (T2)', () => {
       language: 'es',
       variables: {},
       body: 'Hola {{1}}',
-      button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      button: { type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
     });
 
     const [, body] = post.mock.calls[0];
@@ -125,6 +125,40 @@ describe('TwilioContentGateway — createTemplate (T2)', () => {
     });
   });
 
+  it('whatsapp-invoice-detail-quickreply — con button type:"quickReply" → payload types es twilio/quick-reply con actions[{id,title}], sin url', async () => {
+    const post = jest.fn().mockResolvedValueOnce({
+      data: {
+        sid: 'HXqr',
+        friendly_name: 'ver_facturas',
+        language: 'es',
+        variables: {},
+        types: { 'twilio/quick-reply': { body: 'Hola', actions: [{ id: 'ver_mis_facturas', title: 'Ver mis facturas' }] } },
+      },
+    });
+    const { gateway } = makeGateway({ post });
+
+    await gateway.createTemplate({
+      friendlyName: 'ver_facturas',
+      language: 'es',
+      variables: {},
+      body: 'Hola',
+      button: { type: 'quickReply', title: 'Ver mis facturas' },
+    });
+
+    const [, body] = post.mock.calls[0];
+    expect(body).toEqual({
+      friendly_name: 'ver_facturas',
+      language: 'es',
+      variables: {},
+      types: {
+        'twilio/quick-reply': {
+          body: 'Hola',
+          actions: [{ id: 'ver_mis_facturas', title: 'Ver mis facturas' }],
+        },
+      },
+    });
+  });
+
   it('GOTCHA: url con placeholder {{1}} se envía SIN percent-encoding', async () => {
     const post = jest.fn().mockResolvedValueOnce({
       data: { sid: 'HXph', friendly_name: 'x', language: 'es', variables: {}, types: {} },
@@ -136,7 +170,7 @@ describe('TwilioContentGateway — createTemplate (T2)', () => {
       language: 'es',
       variables: {},
       body: 'b',
-      button: { title: 'Ver más', url: 'https://portal.ipnext.com.ar/{{1}}' },
+      button: { type: 'url', title: 'Ver más', url: 'https://portal.ipnext.com.ar/{{1}}' },
     });
 
     const [, body] = post.mock.calls[0] as [string, { types: { 'twilio/call-to-action': { actions: Array<{ url: string }> } } }];
@@ -229,6 +263,37 @@ describe('TwilioContentGateway — getTemplate (T2)', () => {
     expect(dto.approvalStatus).toBe('approved');
     expect(dto.rejectionReason).toBeUndefined();
     expect(dto.approvalCategory).toBe('MARKETING');
+  });
+
+  // ── TPL-6 (whatsapp-invoice-detail-quickreply) — Meta puede aprobar bajo una
+  // categoría DISTINTA de la sometida (observado en vivo: sometido UTILITY,
+  // aprobado MARKETING, ~5x el costo por mensaje). El DTO debe reportar SIEMPRE
+  // la categoría REAL de aprobación, nunca la sometida que quedó en el recurso
+  // Content. Los tests S4 de arriba nunca ponen ambas fuentes en CONFLICTO.
+  it('TPL-6: sometido UTILITY pero aprobado MARKETING → el DTO reporta MARKETING, nunca UTILITY', async () => {
+    const get = jest
+      .fn()
+      // GET /v1/Content/{sid} — conserva la categoría SOMETIDA (UTILITY).
+      .mockResolvedValueOnce({
+        data: {
+          sid: 'HXqr',
+          friendly_name: 'detalle_facturas',
+          language: 'es',
+          variables: {},
+          types: { 'twilio/quick-reply': { body: 'Hola' } },
+          approval_requests: { status: 'approved', category: 'UTILITY' },
+        },
+      })
+      // GET /v1/Content/{sid}/ApprovalRequests — categoría REAL de Meta (MARKETING).
+      .mockResolvedValueOnce({ data: { whatsapp: { status: 'approved', category: 'MARKETING' } } });
+    const { gateway } = makeGateway({ get });
+
+    const dto = await gateway.getTemplate('HXqr');
+
+    expect(dto.approvalCategory).toBe('MARKETING');
+    expect(dto.approvalCategory).not.toBe('UTILITY');
+    expect(dto.category).toBe('MARKETING');
+    expect(dto.approvalStatus).toBe('approved');
   });
 
   it('S4: ApprovalRequests status=pending → DTO pending', async () => {

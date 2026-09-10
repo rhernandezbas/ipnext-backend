@@ -93,11 +93,16 @@ export interface CreateTemplateInput {
 /**
  * whatsapp-template-buttons — botón CTA singular (no `buttons[]`, design
  * decisión #1: widening a plural después es backward-compatible, narrowing no).
+ *
+ * whatsapp-invoice-detail-quickreply (design "tagged union with normalization
+ * at the validation boundary") — ampliado a UNION discriminada por `type`:
+ * `'url'` (CTA existente, sin cambios de comportamiento) | `'quickReply'`
+ * (botón de respuesta rápida, sin `url`, título fijo validado contra
+ * `INVOICE_DETAIL_BUTTON_TITLE`). El DTO HTTP sigue sin tag — `CreateTemplate
+ * .assertValidButton` normaliza un `type` ausente a `'url'` para no romper a
+ * los callers que ya postean `{title,url}` en producción.
  */
-export interface TemplateButton {
-  title: string;
-  url: string;
-}
+export type TemplateButton = { type: 'url'; title: string; url: string } | { type: 'quickReply'; title: string };
 
 /**
  * Change 3 (templates CRUD) — port de ADMINISTRACIÓN de templates (VER/CREAR/

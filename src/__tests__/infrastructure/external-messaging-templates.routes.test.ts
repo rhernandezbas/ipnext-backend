@@ -270,7 +270,7 @@ describe('POST /templates (TPL-3)', () => {
         button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
       });
     expect(res.status).toBe(201);
-    expect(templatePort.createCalls[0].button).toEqual({ title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
+    expect(templatePort.createCalls[0].button).toEqual({ type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
   });
 
   it('con button inválido (url ftp://) → 400 VALIDATION_ERROR, no llega al create call', async () => {
@@ -292,6 +292,59 @@ describe('POST /templates (TPL-3)', () => {
       .send({ friendlyName: 'x', language: 'es', body: 'b', button: { title: 'Ver más', url: 'https://a.com/x\ny' } });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(templatePort.createCalls).toHaveLength(0);
+  });
+
+  // TPL-3 (scenario "`type:'url'` explícito — equivalente a legacy"): el Zod
+  // modela `type` opcional en la rama url; este test manda el tag EXPLÍCITO por
+  // el wire y exige el mismo botón que la forma legacy sin tag.
+  it('con button type:"url" explícito → 201 y el botón llega idéntico al legacy sin type', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({
+        friendlyName: 'recordatorio_deuda',
+        language: 'es',
+        body: 'Hola {{1}}, mirá tu factura',
+        button: { type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+    expect(res.status).toBe(201);
+    expect(templatePort.createCalls[0].button).toEqual({
+      type: 'url',
+      title: 'Ver mis facturas',
+      url: 'https://portal.ipnext.com.ar/facturas',
+    });
+  });
+
+  // ── fix wave (review adversarial) — BUG 5: la unión etiquetada en el Zod ───
+  it('con button type:"quickReply" (sin url) → 201 y el botón llega como quickReply', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({
+        friendlyName: 'detalle_facturas',
+        language: 'es',
+        body: 'Hola {{1}}',
+        button: { type: 'quickReply', title: 'Ver mis facturas' },
+      });
+    expect(res.status).toBe(201);
+    expect(templatePort.createCalls[0].button).toEqual({ type: 'quickReply', title: 'Ver mis facturas' });
+  });
+
+  it('con button type:"quickReply" + url colada → 400, NUNCA se crea como botón url', async () => {
+    const { app, templatePort } = buildApp();
+    const res = await request(app)
+      .post(`${BASE}/templates`)
+      .set('X-Api-Key', DEDICATED_KEY)
+      .send({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { type: 'quickReply', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+    expect(res.status).toBe(400);
     expect(templatePort.createCalls).toHaveLength(0);
   });
 });

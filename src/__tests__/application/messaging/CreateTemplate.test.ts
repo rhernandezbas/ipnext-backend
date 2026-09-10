@@ -81,7 +81,7 @@ describe('CreateTemplate (T3)', () => {
         button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
       });
 
-      expect(gw.createCalls[0].button).toEqual({ title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
+      expect(gw.createCalls[0].button).toEqual({ type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
       expect(dto.contentSid).toMatch(/^HX/);
     });
 
@@ -176,7 +176,7 @@ describe('CreateTemplate (T3)', () => {
         button: { title: 'Ver más', url: 'https://portal.ipnext.com.ar/{{1}}' },
       });
 
-      expect(gw.createCalls[0].button?.url).toBe('https://portal.ipnext.com.ar/{{1}}');
+      expect((gw.createCalls[0].button as { url: string } | undefined)?.url).toBe('https://portal.ipnext.com.ar/{{1}}');
     });
 
     // ── fix wave (review adversarial) ────────────────────────────────────────
@@ -192,6 +192,7 @@ describe('CreateTemplate (T3)', () => {
       });
 
       expect(gw.createCalls[0].button).toEqual({
+        type: 'url',
         title: 'Ver más',
         url: 'https://portal.ipnext.com.ar/facturas',
       });
@@ -208,7 +209,7 @@ describe('CreateTemplate (T3)', () => {
         button: { title: ' \n Ver \n ', url: ' \n https://a.com/x \n ' },
       });
 
-      expect(gw.createCalls[0].button).toEqual({ title: 'Ver', url: 'https://a.com/x' });
+      expect(gw.createCalls[0].button).toEqual({ type: 'url', title: 'Ver', url: 'https://a.com/x' });
     });
 
     // `new URL()` BORRA en silencio el whitespace INTERIOR al parsear, así que
@@ -238,6 +239,132 @@ describe('CreateTemplate (T3)', () => {
           language: 'es',
           body: 'b',
           button: null as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+  });
+
+  // ── whatsapp-invoice-detail-quickreply (Phase 1) — tagged union `TemplateButton` ──
+  describe('button tagged union (type: url | quickReply)', () => {
+    it('legacy {title,url} sin type → normaliza a type:"url"', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+
+      expect(gw.createCalls[0].button).toEqual({
+        type: 'url',
+        title: 'Ver mis facturas',
+        url: 'https://portal.ipnext.com.ar/facturas',
+      });
+    });
+
+    // TPL-3 (scenario "`type:'url'` explícito — equivalente a legacy"): el resto
+    // de los tests construye SOLO la forma legacy sin tag; este arma el input con
+    // `type:'url'` EXPLÍCITO y exige que el efecto sea byte-idéntico al legacy.
+    it('type:"url" explícito → mismo efecto exacto que la forma legacy sin type', async () => {
+      const explicitGw = new InMemoryTemplateMessagingGateway();
+      await new CreateTemplate(explicitGw).execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' } as unknown as { title: string; url: string },
+      });
+
+      const legacyGw = new InMemoryTemplateMessagingGateway();
+      await new CreateTemplate(legacyGw).execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+
+      expect(explicitGw.createCalls[0].button).toEqual({
+        type: 'url',
+        title: 'Ver mis facturas',
+        url: 'https://portal.ipnext.com.ar/facturas',
+      });
+      expect(explicitGw.createCalls[0]).toEqual(legacyGw.createCalls[0]);
+    });
+
+    it('type:"url" explícito con url inválida → InvalidTemplateInputError (misma regla que legacy)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { type: 'url', title: 'Ver más', url: 'ftp://example.com/x' } as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('type:"quickReply" con el título exacto de la constante → aceptado, sin url', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await uc.execute({
+        friendlyName: 'x',
+        language: 'es',
+        body: 'b',
+        button: { type: 'quickReply', title: 'Ver mis facturas' } as unknown as { title: string; url: string },
+      });
+
+      expect(gw.createCalls[0].button).toEqual({ type: 'quickReply', title: 'Ver mis facturas' });
+    });
+
+    // fix wave (review adversarial) — BUG 5, paridad entre superficies: el
+    // `url` colado NO se ignora en silencio (crear un quickReply "con url" es
+    // un input contradictorio; aceptarlo dejaba pasar un botón mal entendido).
+    it('type:"quickReply" con un url colado → InvalidTemplateInputError (no se ignora)', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { type: 'quickReply', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' } as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('type:"quickReply" con título distinto de la constante → InvalidTemplateInputError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { type: 'quickReply', title: 'Otro título' } as unknown as { title: string; url: string },
+        }),
+      ).rejects.toBeInstanceOf(InvalidTemplateInputError);
+      expect(gw.createCalls).toHaveLength(0);
+    });
+
+    it('type desconocido → InvalidTemplateInputError', async () => {
+      const gw = new InMemoryTemplateMessagingGateway();
+      const uc = new CreateTemplate(gw);
+
+      await expect(
+        uc.execute({
+          friendlyName: 'x',
+          language: 'es',
+          body: 'b',
+          button: { type: 'carousel', title: 'x' } as unknown as { title: string; url: string },
         }),
       ).rejects.toBeInstanceOf(InvalidTemplateInputError);
       expect(gw.createCalls).toHaveLength(0);

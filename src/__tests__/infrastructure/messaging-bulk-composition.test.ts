@@ -189,8 +189,10 @@ describe('Messaging-bulk composition root (F2, Batch 7)', () => {
     // ai-assistant-multiagent (RUN-2) — +assistantEngine (8º). La aserción NO se afloja a un
     // `.toContain('customerAdapter')`: el ORDEN es el contrato posicional del constructor, y
     // que este test se rompa al agregar un arg es precisamente su trabajo.
+    // whatsapp-invoice-detail-quickreply (Phase 7) — +invoiceDetailReplier (9º), el mismo
+    // criterio: esta aserción se actualiza a propósito, no se afloja.
     expect(window).toMatch(
-      /new ReceiveChatwootWebhook\([^)]*,\s*customerAdapter,\s*conversationEventRepo,\s*assistantEngine\)/,
+      /new ReceiveChatwootWebhook\([^)]*,\s*customerAdapter,\s*conversationEventRepo,\s*assistantEngine,\s*invoiceDetailReplier\)/,
     );
   });
 

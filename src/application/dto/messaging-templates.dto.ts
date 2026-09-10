@@ -39,8 +39,12 @@ export interface CreateTemplateInput {
    * la validación vive en UN solo lugar (el caso de uso), en vez de que cada
    * hand-map decida por su cuenta y termine descartando en silencio un botón
    * mal formado.
+   *
+   * whatsapp-invoice-detail-quickreply — `type` agregado, también `unknown`
+   * y opcional: un `type` ausente se normaliza a `'url'` en el caso de uso
+   * (compat con los callers que ya postean `{title,url}` sin tag).
    */
-  button?: { title?: unknown; url?: unknown };
+  button?: { type?: unknown; title?: unknown; url?: unknown };
 }
 
 /** Input HTTP de submit-a-Meta. */
