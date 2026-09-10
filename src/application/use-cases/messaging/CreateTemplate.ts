@@ -2,6 +2,7 @@ import type { TemplateAdminPort, CreateTemplateInput as ProviderCreateTemplateIn
 import type { CreateTemplateInput, TemplateDetailDto } from '@application/dto/messaging-templates.dto';
 import { toTemplateDetailDto, isTemplateCategory } from '@application/dto/messaging-templates.dto';
 import { InvalidTemplateInputError } from '@domain/errors/messaging-bulk';
+import { INVOICE_DETAIL_BUTTON_TITLE } from '@application/use-cases/messaging/invoice-detail/invoiceDetailButton';
 
 /** whatsapp-template-buttons (design §2/#3) — topes de Meta, no verificados offline (ASUNCIÓN). */
 const BUTTON_TITLE_MAX_LENGTH = 25;
@@ -21,12 +22,26 @@ const BUTTON_URL_MAX_LENGTH = 2000;
  * raw dejaba pasar un string sucio hacia Twilio. Y como `new URL()` además BORRA
  * en silencio el whitespace/control INTERIOR al parsear, una url con espacios o
  * caracteres de control adentro se rechaza (nunca se "limpia").
+ *
+ * whatsapp-invoice-detail-quickreply (design "tagged union with normalization
+ * at the validation boundary") — `type` ausente se normaliza a `'url'` (los
+ * callers ya en producción postean `{title,url}` sin tag, backward-compat);
+ * `type:'quickReply'` NO lleva `url` y su `title` debe ser EXACTAMENTE (post-
+ * trim) `INVOICE_DETAIL_BUTTON_TITLE` — esto hace imposible, a nivel de
+ * creación, un botón de respuesta rápida cuyo título el webhook no reconocería
+ * (design "make drift impossible at creation").
  */
 function assertValidButton(raw: unknown): TemplateButton {
   if (typeof raw !== 'object' || raw === null) {
     throw new InvalidTemplateInputError('button debe ser un objeto { title, url }');
   }
-  const button = raw as { title?: unknown; url?: unknown };
+  const button = raw as { type?: unknown; title?: unknown; url?: unknown };
+
+  const type = button.type === undefined ? 'url' : button.type;
+  if (type !== 'url' && type !== 'quickReply') {
+    throw new InvalidTemplateInputError(`button.type inválido: ${String(type)}`);
+  }
+
   if (typeof button.title !== 'string') {
     throw new InvalidTemplateInputError('button.title es requerido');
   }
@@ -36,6 +51,18 @@ function assertValidButton(raw: unknown): TemplateButton {
   }
   if (title.length > BUTTON_TITLE_MAX_LENGTH) {
     throw new InvalidTemplateInputError(`button.title excede ${BUTTON_TITLE_MAX_LENGTH} caracteres`);
+  }
+
+  if (type === 'quickReply') {
+    // Título fijo, exacto (post-trim) — no case-insensitive: es un valor
+    // elegido por el operador al crear el template, no una detección de tap.
+    // `url` (si vino) se ignora — un quickReply no tiene URL en Twilio.
+    if (title !== INVOICE_DETAIL_BUTTON_TITLE) {
+      throw new InvalidTemplateInputError(
+        `button.title de un quickReply debe ser exactamente "${INVOICE_DETAIL_BUTTON_TITLE}"`,
+      );
+    }
+    return { type: 'quickReply', title };
   }
 
   if (typeof button.url !== 'string') {
@@ -66,7 +93,7 @@ function assertValidButton(raw: unknown): TemplateButton {
     throw new InvalidTemplateInputError('button.url debe usar http o https');
   }
 
-  return { title, url };
+  return { type: 'url', title, url };
 }
 
 /**

@@ -74,4 +74,39 @@ describe('InMemoryTemplateMessagingGateway', () => {
     await expect(gateway.sendTemplate('+549bad', 'HXapproved', {})).rejects.toThrow(TemplateSendRejectedError);
     await expect(gateway.sendTemplate('+549good', 'HXapproved', {})).resolves.toMatchObject({ status: 'queued' });
   });
+
+  // ── whatsapp-invoice-detail-quickreply — mirror del branch quickReply del adapter real ──
+  describe('createTemplate — button tagged union (mirror del branch real)', () => {
+    it('button type:"quickReply" → registra la llamada con el shape RAW, sin url', async () => {
+      const gateway = new InMemoryTemplateMessagingGateway();
+
+      await gateway.createTemplate({
+        friendlyName: 'ver_facturas',
+        language: 'es',
+        variables: {},
+        body: 'Hola',
+        button: { type: 'quickReply', title: 'Ver mis facturas' },
+      });
+
+      expect(gateway.createCalls[0].button).toEqual({ type: 'quickReply', title: 'Ver mis facturas' });
+    });
+
+    it('button type:"url" → registra la llamada con title/url (regresión, shape existente)', async () => {
+      const gateway = new InMemoryTemplateMessagingGateway();
+
+      await gateway.createTemplate({
+        friendlyName: 'recordatorio',
+        language: 'es',
+        variables: {},
+        body: 'Hola',
+        button: { type: 'url', title: 'Ver más', url: 'https://portal.ipnext.com.ar/facturas' },
+      });
+
+      expect(gateway.createCalls[0].button).toEqual({
+        type: 'url',
+        title: 'Ver más',
+        url: 'https://portal.ipnext.com.ar/facturas',
+      });
+    });
+  });
 });

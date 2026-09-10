@@ -828,6 +828,10 @@ import { FireAndForgetChatMediaDownloadTrigger } from '../adapters/chatwoot/Fire
 import { DownloadChatMessageAttachment } from '@application/use-cases/messaging/DownloadChatMessageAttachment';
 import { GetChatAttachmentFile } from '@application/use-cases/messaging/GetChatAttachmentFile';
 import { ReceiveChatwootWebhook } from '@application/use-cases/messaging/ReceiveChatwootWebhook';
+// whatsapp-invoice-detail-quickreply (Phase 7) — quick-reply de detalle de facturas.
+// Aislado del asistente (QR-2): archivos NUEVOS, zero relación con el módulo assistant.
+import { ReplyWithInvoiceDetail } from '@application/use-cases/messaging/invoice-detail/ReplyWithInvoiceDetail';
+import { PrismaInvoiceDetailReader } from '../adapters/prisma/PrismaInvoiceDetailReader';
 import { ListConversations } from '@application/use-cases/messaging/ListConversations';
 import { GetConversation } from '@application/use-cases/messaging/GetConversation';
 // Aliased: `ListMessages` already names an unrelated notifications-inbox use case above (:318).
@@ -3403,6 +3407,22 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       assignConversation,
     });
 
+    // whatsapp-invoice-detail-quickreply (Phase 7, QR-2/QR-3) — solo se cablea cuando GR
+    // está configurado (`balanceRefresh` definido, línea ~1320): sin GR no hay forma de
+    // refrescar un balance stale, y el orchestrator lo exige (no-optional, a diferencia
+    // de `assistantEngine`). Ausente ⇒ el webhook se comporta EXACTAMENTE como antes de
+    // este change (cero regresión, mismo criterio que el resto de los colaboradores
+    // opcionales de `ReceiveChatwootWebhook`).
+    const invoiceDetailReplier = balanceRefresh
+      ? new ReplyWithInvoiceDetail(
+          customerAdapter,
+          customerAdapter,
+          new PrismaInvoiceDetailReader(),
+          chatwootGateway,
+          balanceRefresh,
+        )
+      : undefined;
+
     app.use('/api/messaging', createMessagingRouter(
       // messaging-bulk (F2, Batch 6, OPT-2) — 6º arg `customerAdapter` (opcional):
       // ya implementa `CampaignSegmentSource & OptOutRegistry` (misma instancia
@@ -3412,7 +3432,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // (actor null) y resolved/reopened Chatwoot-driven, best-effort.
       // ai-assistant-multiagent (RUN-2) — 8º arg `assistantEngine`: dispara el bot en rama
       // AISLADA tras espejar el mensaje. Mudo hasta que se prenda el flag.
-      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter, conversationEventRepo, assistantEngine),
+      // whatsapp-invoice-detail-quickreply — 9º arg `invoiceDetailReplier`: quick-reply de
+      // detalle de facturas, fail-open, AISLADO del asistente (QR-2).
+      new ReceiveChatwootWebhook(conversationRepo, chatMessageRepo, webhookDeliveryRepo, chatAttachmentRepo, chatMediaDownloadTrigger, customerAdapter, conversationEventRepo, assistantEngine, invoiceDetailReplier),
       new ListConversations(conversationRepo),
       new GetConversation(conversationRepo, chatMessageRepo, chatwootGateway, getClientContextByPhone, chatAttachmentRepo, chatMediaDownloadTrigger),
       new ListChatMessages(conversationRepo, chatMessageRepo, chatAttachmentRepo),

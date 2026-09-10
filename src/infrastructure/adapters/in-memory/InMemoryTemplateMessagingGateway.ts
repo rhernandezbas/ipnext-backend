@@ -4,6 +4,7 @@ import type {
   TemplateDto,
   SendTemplateResult,
   CreateTemplateInput,
+  TemplateButton,
 } from '@domain/ports/TemplateMessagingPort';
 import {
   TemplateProviderUnavailableError,
@@ -23,8 +24,12 @@ export interface TemplateCreateCallRecord {
   language: string;
   variables: Record<string, string>;
   body: string;
-  /** whatsapp-template-buttons — pass-through del botón CTA, `undefined` si no vino. */
-  button?: { title: string; url: string };
+  /**
+   * whatsapp-template-buttons — pass-through del botón CTA, `undefined` si no
+   * vino. whatsapp-invoice-detail-quickreply — ampliado al tagged union
+   * `TemplateButton` (mirror del branch real del adapter Twilio).
+   */
+  button?: TemplateButton;
 }
 export interface TemplateDeleteCallRecord {
   contentSid: string;

@@ -176,7 +176,7 @@ describe('/api/messaging/templates — POST / (create)', () => {
         button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
       });
     expect(res.status).toBe(201);
-    expect(gw.createCalls[0].button).toEqual({ title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
+    expect(gw.createCalls[0].button).toEqual({ type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
   });
 
   it('con button inválido (title vacío) → 400 VALIDATION_ERROR, no llega al create call', async () => {

@@ -270,7 +270,7 @@ describe('POST /templates (TPL-3)', () => {
         button: { title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' },
       });
     expect(res.status).toBe(201);
-    expect(templatePort.createCalls[0].button).toEqual({ title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
+    expect(templatePort.createCalls[0].button).toEqual({ type: 'url', title: 'Ver mis facturas', url: 'https://portal.ipnext.com.ar/facturas' });
   });
 
   it('con button inválido (url ftp://) → 400 VALIDATION_ERROR, no llega al create call', async () => {

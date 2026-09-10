@@ -199,14 +199,7 @@ export class TwilioContentGateway implements TemplateMessagingPort, TemplateAdmi
           friendly_name: input.friendlyName,
           language: input.language,
           variables: input.variables,
-          types: input.button
-            ? {
-                'twilio/call-to-action': {
-                  body: input.body,
-                  actions: [{ type: 'URL', title: input.button.title, url: input.button.url }],
-                },
-              }
-            : { 'twilio/text': { body: input.body } },
+          types: buildContentTypes(input.body, input.button),
         },
         { auth: this.auth(), timeout: this.timeoutMs, headers: { 'Content-Type': 'application/json' } },
       );
@@ -368,6 +361,44 @@ function retryAfterMs(e: AxiosLikeError): number | undefined {
   if (raw === undefined || raw === null) return undefined;
   const secs = parseInt(String(raw), 10);
   return Number.isFinite(secs) && secs >= 0 ? secs * 1000 : undefined;
+}
+
+/**
+ * whatsapp-invoice-detail-quickreply (design "set an inert `id` on the Twilio
+ * action") — Twilio exige un `id` en cada action de `twilio/quick-reply`; es
+ * write-only desde la perspectiva de este webhook hoy (Chatwoot no lo
+ * reenvía). Slug derivado y determinístico: lowercase, no-alfanumérico → `_`.
+ */
+function slug(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Three-way branch (design §"File Changes" / TwilioContentGateway) — sin
+ * botón → `twilio/text`; `type:'url'` → `twilio/call-to-action` (sin cambios,
+ * regresión cubierta por los tests existentes); `type:'quickReply'` →
+ * `twilio/quick-reply` con `actions:[{id,title}]`, SIN `url` (Twilio no la
+ * acepta en este tipo de contenido).
+ */
+function buildContentTypes(
+  body: string,
+  button: CreateTemplateInput['button'],
+): Record<string, unknown> {
+  if (!button) return { 'twilio/text': { body } };
+  if (button.type === 'quickReply') {
+    return {
+      'twilio/quick-reply': {
+        body,
+        actions: [{ id: slug(button.title), title: button.title }],
+      },
+    };
+  }
+  return {
+    'twilio/call-to-action': {
+      body,
+      actions: [{ type: 'URL', title: button.title, url: button.url }],
+    },
+  };
 }
 
 interface TwilioContentItem {
