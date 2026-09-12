@@ -46,3 +46,26 @@ export class SuricataAuthError extends DomainError {
     this.name = 'SuricataAuthError';
   }
 }
+
+/**
+ * suricata-tickets-mirror (Phase C, task C.5) — no existe ningún adjunto
+ * mirroreado con ese id local. Usado por `markStored`/`markFailed` cuando el
+ * id no corresponde a ninguna fila (molde `AttachmentNotFoundError`).
+ */
+export class SuricataAttachmentNotFoundError extends DomainError {
+  constructor(public readonly id: string) {
+    super(`Suricata attachment with id ${id} not found`, 'SURICATA_ATTACHMENT_NOT_FOUND');
+    this.name = 'SuricataAttachmentNotFoundError';
+  }
+}
+
+/**
+ * suricata-tickets-mirror (Phase C, task C.5) — `finish(id, ...)` recibió un
+ * id de corrida que `start()` nunca creó (molde `AttachmentNotFoundError`).
+ */
+export class SuricataSyncRunNotFoundError extends DomainError {
+  constructor(public readonly id: string) {
+    super(`Suricata sync run with id ${id} not found`, 'SURICATA_SYNC_RUN_NOT_FOUND');
+    this.name = 'SuricataSyncRunNotFoundError';
+  }
+}

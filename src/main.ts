@@ -17,6 +17,7 @@ import { bootstrapSnoozeReactivation } from './infrastructure/scheduling/bootstr
 import { bootstrapTeamLocationIngest } from './infrastructure/scheduling/bootstrapTeamLocationIngest';
 import { bootstrapFinanceReceiptsIngest } from './infrastructure/scheduling/bootstrapFinanceReceiptsIngest';
 import { bootstrapFinanceSnapshotJob } from './infrastructure/scheduling/bootstrapFinanceSnapshotJob';
+import { bootstrapSuricataSync } from './infrastructure/scheduling/bootstrapSuricataSync';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
@@ -123,6 +124,13 @@ void (async () => {
   void bootstrapChatMediaDownload()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[chat-media-download] bootstrap failed (server kept alive):', (err as Error).message));
+  // suricata-tickets-mirror (Phase C) — espejo de tickets de Suricata Cx —
+  // opt-in (envs SURICATA_*, D5/D11), dark by default (flag
+  // 'suricata-sync-enabled'). Devuelve null hasta que exista el sidecar
+  // Playwright (Fase J) -- ver DEVIATION en bootstrapSuricataSync.ts.
+  void bootstrapSuricataSync()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[suricata-sync] bootstrap failed (server kept alive):', (err as Error).message));
   // Watcher full-auto de fibra (K3 fiber-auto-watcher) — opt-in (envs SMARTOLT_*),
   // dark by default (flag 'fiber-auto-provision-watcher', separado del flag del wizard).
   void bootstrapAutoProvisionFiber()
