@@ -20,6 +20,7 @@ import { InMemorySuricataMessageRepository } from '@infrastructure/adapters/in-m
 import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAttachmentRepository';
 import { InMemorySuricataAreaRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAreaRepository';
 import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
+import { InMemoryFileStorage } from '@infrastructure/adapters/in-memory/InMemoryFileStorage';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
 import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
@@ -127,6 +128,7 @@ async function buildApp(opts: BuildAppOpts = {}) {
   const getSuricataTicketDetail = new GetSuricataTicketDetail(tickets, messages, attachments, verdicts, areaRepo, userRepo);
   const computeSuricataKpis = new ComputeSuricataKpis(tickets, verdicts);
   const setSuricataAssignee = new SetSuricataAssignee(tickets, userRepo);
+  const fileStorage = new InMemoryFileStorage();
 
   const app = express();
   app.use(cookieParser());
@@ -145,6 +147,8 @@ async function buildApp(opts: BuildAppOpts = {}) {
       computeSuricataKpis,
       setSuricataAssignee,
       areaRepo,
+      attachmentRepo: attachments,
+      fileStorage,
     }),
   );
   app.use(errorHandler);

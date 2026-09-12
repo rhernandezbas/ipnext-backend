@@ -3362,8 +3362,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     computeSuricataKpis,
     setSuricataAssignee,
     areaRepo: suricataInternalAreaRepo,
+    attachmentRepo: suricataInternalAttachmentRepo,
+    fileStorage: taskPhotoStorage,
   }));
   // [suricata-internal-mount-end]
+  // ↑ Fase H gap (D7.c): `attachmentRepo`/`fileStorage` habilitan la ruta
+  // espejo interna del adjunto (MISMO storage compartido `taskPhotoStorage`
+  // que la ruta externa) para que el detalle del panel sirva audio inline.
 
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
   {

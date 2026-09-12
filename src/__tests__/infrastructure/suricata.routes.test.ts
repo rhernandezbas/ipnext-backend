@@ -24,6 +24,7 @@ import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/i
 import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
 import { InMemorySuricataAreaRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAreaRepository';
 import { InMemorySuricataReplyAuditRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataReplyAuditRepository';
+import { InMemoryFileStorage } from '@infrastructure/adapters/in-memory/InMemoryFileStorage';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
@@ -111,6 +112,7 @@ async function buildApp() {
   const verdicts = new InMemorySuricataVerdictRepository();
   const areaRepo = new InMemorySuricataAreaRepository();
   const audits = new InMemorySuricataReplyAuditRepository();
+  const fileStorage = new InMemoryFileStorage();
   const featureFlags = new InMemoryFeatureFlagRepository();
 
   const replyToSuricataTicket = new ReplyToSuricataTicket(tickets, audits, new FakeSuricataReply());
@@ -135,11 +137,13 @@ async function buildApp() {
       computeSuricataKpis,
       setSuricataAssignee,
       areaRepo,
+      attachmentRepo: attachments,
+      fileStorage,
     }),
   );
   app.use(errorHandler);
 
-  return { app, tickets, messages, attachments, verdicts, areaRepo, userRepo, readerUserId: readerUser.id, managerUserId: managerUser.id, noPermUserId: noPermUser.id };
+  return { app, tickets, messages, attachments, verdicts, areaRepo, userRepo, fileStorage, readerUserId: readerUser.id, managerUserId: managerUser.id, noPermUserId: noPermUser.id };
 }
 
 function asUser(req: request.Test, userId: string): request.Test {
@@ -304,6 +308,89 @@ describe('PATCH /api/suricata/tickets/:id/assignee', () => {
   it('unknown ticket -> 404', async () => {
     const { app, managerUserId } = await buildApp();
     const res = await asUser(request(app).patch('/api/suricata/tickets/ghost/assignee'), managerUserId).send({ assigneeId: null });
+    expect(res.status).toBe(404);
+  });
+});
+
+// suricata-tickets-mirror (Phase H gap, design D7.c) — internal MIRROR of the
+// external content proxy (`externalV1.suricata.routes.test.ts`'s attachment
+// suite): session + `suricata.read` instead of the API key. The FE detail's
+// Conversation tab (UI-3) needs this for inline audio playback.
+describe('GET /api/suricata/tickets/:id/attachments/:attachmentId/content (D7.c internal mirror)', () => {
+  it('no cookie -> 401', async () => {
+    const { app } = await buildApp();
+    const res = await request(app).get('/api/suricata/tickets/any/attachments/any/content');
+    expect(res.status).toBe(401);
+  });
+
+  it('missing suricata.read -> 403', async () => {
+    const { app, noPermUserId } = await buildApp();
+    const res = await asUser(request(app).get('/api/suricata/tickets/any/attachments/any/content'), noPermUserId);
+    expect(res.status).toBe(403);
+  });
+
+  it('attachment id belonging to ANOTHER ticket -> 404, never 200', async () => {
+    const { app, tickets, attachments, fileStorage, readerUserId } = await buildApp();
+    await seedTicket(tickets, { externalId: 'ext-1' });
+    const otherTicket = await seedTicket(tickets, { externalId: 'ext-2' });
+    const attachment = await attachments.upsertByExternalRef({
+      ticketId: otherTicket.id,
+      messageId: null,
+      externalRef: 'ref-1',
+      fileName: 'nota.ogg',
+      mimeType: 'audio/ogg',
+    });
+    await attachments.markStored(attachment.id, { sha256: 'abc123', storageKey: 'suricata/abc123', sizeBytes: 10 });
+    await fileStorage.save({ key: 'suricata/abc123', buffer: Buffer.from('binary-audio'), mimeType: 'audio/ogg' });
+
+    const otherReaderTicket = await seedTicket(tickets, { externalId: 'ext-3' });
+    const res = await asUser(
+      request(app).get(`/api/suricata/tickets/${otherReaderTicket.id}/attachments/${attachment.id}/content`),
+      readerUserId,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it('valid attachment for the SAME ticket -> 200, streams the binary via FileStorage.get, no signed URL', async () => {
+    const { app, tickets, attachments, fileStorage, readerUserId } = await buildApp();
+    const ticket = await seedTicket(tickets, { externalId: 'ext-1' });
+    const attachment = await attachments.upsertByExternalRef({
+      ticketId: ticket.id,
+      messageId: null,
+      externalRef: 'ref-1',
+      fileName: 'nota.ogg',
+      mimeType: 'audio/ogg',
+    });
+    await attachments.markStored(attachment.id, { sha256: 'abc123', storageKey: 'suricata/abc123', sizeBytes: 12 });
+    await fileStorage.save({ key: 'suricata/abc123', buffer: Buffer.from('binary-audio'), mimeType: 'audio/ogg' });
+
+    const res = await asUser(
+      request(app).get(`/api/suricata/tickets/${ticket.id}/attachments/${attachment.id}/content`),
+      readerUserId,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('audio/ogg');
+    expect(res.body).toEqual(Buffer.from('binary-audio'));
+  });
+
+  it('attachment not yet stored (no storageKey) -> 404', async () => {
+    const { app, tickets, attachments, readerUserId } = await buildApp();
+    const ticket = await seedTicket(tickets, { externalId: 'ext-1' });
+    const attachment = await attachments.upsertByExternalRef({
+      ticketId: ticket.id,
+      messageId: null,
+      externalRef: 'ref-1',
+      fileName: 'nota.ogg',
+      mimeType: 'audio/ogg',
+    });
+
+    const res = await asUser(
+      request(app).get(`/api/suricata/tickets/${ticket.id}/attachments/${attachment.id}/content`),
+      readerUserId,
+    );
+
     expect(res.status).toBe(404);
   });
 });

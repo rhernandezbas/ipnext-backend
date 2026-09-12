@@ -5,11 +5,14 @@ import type { SessionRepository } from '@domain/ports/SessionRepository';
 import type { PermissionAction, RbacModuleCode } from '@domain/entities/rbac';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import type { SuricataAreaRepository } from '@domain/ports/SuricataAreaRepository';
+import type { SuricataAttachmentRepository } from '@domain/ports/SuricataAttachmentRepository';
+import type { FileStorage } from '@domain/ports/FileStorage';
 import type { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
 import type { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
 import type { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
 import type { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import type { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
+import { SuricataAttachmentNotFoundError } from '@domain/errors/suricata';
 import { createAuthMiddleware } from './middleware/authMiddleware';
 
 export interface ComposeSuricataModuleDeps {
@@ -31,6 +34,15 @@ export interface ComposeSuricataModuleDeps {
   setSuricataAssignee: SetSuricataAssignee;
   /** suricata-tickets-mirror (Fase F) — GET /areas, catálogo simple, sin caso de uso dedicado. */
   areaRepo: SuricataAreaRepository;
+  /**
+   * suricata-tickets-mirror (Fase H, gap flagged por Fase F, design D7.c) —
+   * ruta espejo de la externa: el panel interno (sesión + `suricata.read`)
+   * necesita servir el CONTENIDO de un adjunto (ej. reproducir un audio en
+   * el tab Conversación, UI-3) sin depender de la key de API externa.
+   */
+  attachmentRepo: SuricataAttachmentRepository;
+  /** MISMO storage/bucket que la ruta externa (D7.a) — sin adapter nuevo. */
+  fileStorage: FileStorage;
 }
 
 /** suricata-tickets-mirror (Fase A, dark por default) — Fase A migration ya lo sembró en `false`. */
@@ -177,6 +189,37 @@ export function composeSuricataModule(deps: ComposeSuricataModuleDeps): Router {
       try {
         const detail = await deps.getSuricataTicketDetail.execute(req.params['id'] as string);
         res.status(200).json(detail);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── GET /tickets/:id/attachments/:attachmentId/content (D7.c internal mirror) ──
+  // suricata-tickets-mirror (Fase H gap) — misma semántica que la ruta EXTERNA
+  // (`composeSuricataExternalModule.ts`), pero gateada por sesión + `suricata.read`
+  // en vez de la API key. `:id` es el id LOCAL del ticket (mismo criterio que
+  // `GET /tickets/:id`), no el `externalId`. El `attachmentId` se valida contra
+  // ESE ticket resuelto — un adjunto de OTRO ticket 404ea, nunca 200 (D7.c).
+  router.get(
+    '/tickets/:id/attachments/:attachmentId/content',
+    auth,
+    requireRead,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const ticketId = req.params['id'] as string;
+        const attachmentId = req.params['attachmentId'] as string;
+
+        const attachment = await deps.attachmentRepo.findById(attachmentId);
+        if (!attachment || attachment.ticketId !== ticketId || !attachment.storageKey) {
+          throw new SuricataAttachmentNotFoundError(attachmentId);
+        }
+
+        const stored = await deps.fileStorage.get(attachment.storageKey);
+        if (!stored) throw new SuricataAttachmentNotFoundError(attachmentId);
+
+        res.setHeader('Content-Type', stored.mimeType);
+        res.send(stored.buffer);
       } catch (err) {
         next(err);
       }

@@ -38,7 +38,7 @@ describe('suricata-tickets-mirror composition root — assertions estáticas (D8
 
   it('el mount interno existe y pasa authAdapter/sessionRepo/requirePerm (D8, sin re-derivar un 2º rbacUserRepo)', () => {
     expect(appSrc).toMatch(
-      /app\.use\('\/api\/suricata',\s*composeSuricataModule\(\{\s*authAdapter,\s*sessionRepo,\s*requirePerm,\s*replyToSuricataTicket,\s*featureFlags:\s*suricataInternalFeatureFlagRepo,\s*listSuricataTickets,\s*getSuricataTicketDetail,\s*computeSuricataKpis,\s*setSuricataAssignee,\s*areaRepo:\s*suricataInternalAreaRepo,?\s*\}\)\)/,
+      /app\.use\('\/api\/suricata',\s*composeSuricataModule\(\{\s*authAdapter,\s*sessionRepo,\s*requirePerm,\s*replyToSuricataTicket,\s*featureFlags:\s*suricataInternalFeatureFlagRepo,\s*listSuricataTickets,\s*getSuricataTicketDetail,\s*computeSuricataKpis,\s*setSuricataAssignee,\s*areaRepo:\s*suricataInternalAreaRepo,\s*attachmentRepo:\s*suricataInternalAttachmentRepo,\s*fileStorage:\s*taskPhotoStorage,?\s*\}\)\)/,
     );
   });
 
