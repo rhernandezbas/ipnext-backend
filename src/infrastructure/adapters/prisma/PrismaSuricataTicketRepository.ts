@@ -87,4 +87,10 @@ export class PrismaSuricataTicketRepository implements SuricataTicketRepository 
     const row = await (prisma as any).suricataTicket.findUnique({ where: { externalId } });
     return row ? toDomain(row) : null;
   }
+
+  async findById(id: string): Promise<SuricataTicketRecord | null> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).suricataTicket.findUnique({ where: { id } });
+    return row ? toDomain(row) : null;
+  }
 }

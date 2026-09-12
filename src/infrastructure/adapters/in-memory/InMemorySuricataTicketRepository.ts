@@ -52,4 +52,9 @@ export class InMemorySuricataTicketRepository implements SuricataTicketRepositor
     const row = this.rows.find((r) => r.externalId === externalId);
     return row ? { ...row } : null;
   }
+
+  async findById(id: string): Promise<SuricataTicketRecord | null> {
+    const row = this.rows.find((r) => r.id === id);
+    return row ? { ...row } : null;
+  }
 }

@@ -9,4 +9,11 @@ export interface SuricataTicketRepository {
   /** Idempotent by `externalId` (D6.b) — insert-if-new, update otherwise. */
   upsertByExternalId(input: UpsertSuricataTicketInput): Promise<SuricataTicketRecord>;
   findByExternalId(externalId: string): Promise<SuricataTicketRecord | null>;
+  /**
+   * suricata-tickets-mirror (Phase E, task E.2) — resolves by the LOCAL id,
+   * needed by the internal panel routes (`POST /tickets/:id/reply` and
+   * Phase F's `GET /:id` / `PATCH /:id/assignee`), which address a ticket by
+   * its Prominense-local id, never by Suricata's `externalId`.
+   */
+  findById(id: string): Promise<SuricataTicketRecord | null>;
 }

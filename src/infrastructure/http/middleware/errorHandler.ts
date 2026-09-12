@@ -353,6 +353,18 @@ const statusMap: Record<string, number> = {
   // D7.c — attachment id doesn't belong to the ticket in the path (or was
   // never stored) — 404, never 200 (never leaks another ticket's binary).
   SURICATA_ATTACHMENT_NOT_FOUND: 404,
+  // suricata-tickets-mirror (Phase E, spec suricata-ticket-reply, design D4/D10)
+  // — the shared Playwright session is busy (queued behind sync or another
+  // replica) beyond the caller's timeout budget. The request was valid, the
+  // resource is temporarily busy — Retry-After is set below.
+  SURICATA_SESSION_BUSY: 503,
+  // Re-login failed after one retry (Phase B `SuricataAuthError`), OR no live
+  // driver is wired yet (Phase E's `UnavailableSuricataReplyPort` guard,
+  // `SuricataReplyDriverUnavailableError`) — same code either way, D10.
+  SURICATA_UNAVAILABLE: 502,
+  // REPLY-2 — the server-recomputed sha256 of `body` didn't match the
+  // client-supplied `confirm`. Nothing was sent, nothing was audited.
+  REPLY_CONFIRMATION_MISMATCH: 400,
 };
 
 /** Express global error-handling middleware. */
@@ -374,6 +386,14 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // how long to wait instead of leaving it to guess (or hammer immediately).
     if (err instanceof FinanceSyncLockBusyError) {
       res.set('Retry-After', String(err.retryAfterSeconds));
+    }
+    // suricata-tickets-mirror (Phase E, design D4) — fixed 30s budget, unlike
+    // FinanceSyncLockBusyError's dynamic one; checked by CODE (not
+    // `instanceof`) so it applies whether the raw `SuricataSessionBusyError`
+    // propagates directly OR is wrapped by `SuricataReplySendFailedError`
+    // (which reuses the original error's `.code`, design D10).
+    if (err.code === 'SURICATA_SESSION_BUSY') {
+      res.set('Retry-After', '30');
     }
     const mapped = domainErrorToCode(err);
     const body: Record<string, unknown> = { error: err.message, code: err.code };
@@ -412,6 +432,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     // de estado/tipo prohibidos (para que el FE muestre exactamente qué bloqueó).
     if (mapped?.forbidden !== undefined) {
       body['forbidden'] = mapped.forbidden;
+    }
+    // suricata-tickets-mirror (Phase E, design D10) — lets the operator look
+    // up the exact attempt that failed to send.
+    if (mapped?.replyAuditId !== undefined) {
+      body['replyAuditId'] = mapped.replyAuditId;
     }
     // Cazado en vivo (2026-08-03, "Dispositivos conectados" falló en el
     // teléfono del cliente con los logs de prod MUDOS): este branch respondía

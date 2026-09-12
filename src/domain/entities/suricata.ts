@@ -179,3 +179,36 @@ export interface CreateSuricataVerdictInput {
   ticketContentHash: string;
   submittedBy: string;
 }
+
+export type SuricataReplyOutcome = 'sent' | 'failed';
+
+/**
+ * suricata-tickets-mirror (Phase E, task E.1, design D3/D10) — one row per
+ * ATTEMPT, successful or not (REPLY-4). Written with `outcome='failed'`
+ * BEFORE the shared session is ever touched, then flipped by `markOutcome`
+ * (D10: "auditar el INTENTO, no el éxito").
+ */
+export interface SuricataReplyAuditRecord {
+  id: string;
+  ticketId: string;
+  /** RbacUser that confirmed the send (soft reference, no physical FK — schema comment). */
+  actorId: string;
+  /** the EXACT text that was attempted. */
+  body: string;
+  outcome: SuricataReplyOutcome;
+  error: string | null;
+  attemptedAt: string;
+  sentAt: string | null;
+}
+
+export interface RecordSuricataReplyAttemptInput {
+  ticketId: string;
+  actorId: string;
+  body: string;
+}
+
+export interface MarkSuricataReplyOutcomeInput {
+  outcome: SuricataReplyOutcome;
+  sentAt?: string | null;
+  error?: string | null;
+}

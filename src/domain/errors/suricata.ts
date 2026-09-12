@@ -113,3 +113,72 @@ export class SuricataVerdictFeatureDisabledError extends DomainError {
     this.name = 'SuricataVerdictFeatureDisabledError';
   }
 }
+
+/**
+ * suricata-tickets-mirror (Phase E, task E.2/E.3, spec suricata-ticket-reply
+ * REPLY-2, design D10) — the caller's two confirmation signals disagree: the
+ * server-recomputed sha256 of `body` doesn't match the client-supplied
+ * `confirm`. Rejected BEFORE any `SuricataReplyAudit` row is written and
+ * BEFORE the shared session is ever touched — a mismatched confirm never
+ * reaches the port, by construction.
+ */
+export class SuricataReplyConfirmationMismatchError extends DomainError {
+  constructor(message = 'Reply confirmation does not match the submitted text') {
+    super(message, 'REPLY_CONFIRMATION_MISMATCH');
+    this.name = 'SuricataReplyConfirmationMismatchError';
+  }
+}
+
+/**
+ * suricata-tickets-mirror (Phase E, design D0/D14) — the internal reply route
+ * is gated by the (already-seeded, Phase A migration) `suricata-reply-enabled`
+ * flag, dark by default. Reuses `FEATURE_DISABLED`, molde
+ * `SuricataVerdictFeatureDisabledError`.
+ */
+export class SuricataReplyFeatureDisabledError extends DomainError {
+  constructor(message = 'Suricata reply capability is disabled') {
+    super(message, 'FEATURE_DISABLED');
+    this.name = 'SuricataReplyFeatureDisabledError';
+  }
+}
+
+/**
+ * suricata-tickets-mirror (Phase E, task E.1) — CONSERVATIVE GUARD added by
+ * this apply session, beyond what design/tasks literally spell out. Phase J
+ * (`playwright-core`, the sidecar) does not exist yet, so there is no real
+ * `SuricataReplyPort` implementation that could EVER reach a live Suricata
+ * session today. `composeSuricataModule` wires `UnavailableSuricataReplyPort`
+ * UNCONDITIONALLY until Phase J lands the real Playwright driver — every call
+ * fails closed with this error, reusing the SAME code (`SURICATA_UNAVAILABLE`,
+ * 502) design D10 already assigns to a failed send. Net effect: even if an
+ * operator flips `suricata-reply-enabled` and has `suricata.reply`, this
+ * capability physically cannot touch a real customer today — see
+ * `UnavailableSuricataReplyPort.ts` for the wiring-level half of this guard.
+ */
+export class SuricataReplyDriverUnavailableError extends DomainError {
+  constructor(message = 'No live Suricata reply driver is wired yet (Phase J pending) — refusing to send') {
+    super(message, 'SURICATA_UNAVAILABLE');
+    this.name = 'SuricataReplyDriverUnavailableError';
+  }
+}
+
+/**
+ * suricata-tickets-mirror (Phase E, task E.2, design D10) — wraps ANY failure
+ * raised while sending (session busy, auth failure, missing driver) so the
+ * HTTP layer can surface `replyAuditId` in the body: design D10 — "el error
+ * de envío sube... con el replyAuditId en el body, para que el operador pueda
+ * mirar el intento". Reuses the ORIGINAL failure's `.code` (so the existing
+ * `SURICATA_SESSION_BUSY`/`SURICATA_UNAVAILABLE` status mapping still
+ * applies) — this class only ADDS the audit id, it never invents a new wire
+ * contract.
+ */
+export class SuricataReplySendFailedError extends DomainError {
+  constructor(
+    code: string,
+    message: string,
+    public readonly replyAuditId: string,
+  ) {
+    super(message, code);
+    this.name = 'SuricataReplySendFailedError';
+  }
+}

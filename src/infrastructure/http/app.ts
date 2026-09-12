@@ -816,6 +816,14 @@ import { PrismaSuricataTicketRepository } from '@infrastructure/adapters/prisma/
 import { PrismaSuricataAttachmentRepository } from '@infrastructure/adapters/prisma/PrismaSuricataAttachmentRepository';
 import { PrismaSuricataVerdictRepository } from '@infrastructure/adapters/prisma/PrismaSuricataVerdictRepository';
 import { SubmitSuricataVerdict } from '@application/use-cases/suricata/SubmitSuricataVerdict';
+// ── suricata-tickets-mirror (Fase E, D3/D10) — repo + use case + guarded port del reply interno ─
+import { PrismaSuricataReplyAuditRepository } from '@infrastructure/adapters/prisma/PrismaSuricataReplyAuditRepository';
+import { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
+// ⚠️ CONSERVATIVE GUARD (Fase E, ver el doc comment del archivo): NUNCA
+// `PlaywrightSuricataReply` acá hasta que la Fase J exista de verdad — este
+// port falla SIEMPRE, sin importar el flag/RBAC, porque no hay ningún driver
+// Playwright real todavía.
+import { UnavailableSuricataReplyPort } from '@infrastructure/adapters/suricata/UnavailableSuricataReplyPort';
 import { ChatMessageThreadReader } from '@infrastructure/adapters/assistant/ChatMessageThreadReader';
 import { CustomerAssistantClientResolver } from '@infrastructure/adapters/assistant/CustomerAssistantClientResolver';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
@@ -3292,11 +3300,33 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // así la configuración puede estar viva y editándose con el bot completamente mudo.
   app.use('/api/assistant', composeAssistantModule({ authAdapter, sessionRepo, requirePerm }));
 
-  // ─── suricata-tickets-mirror (Fase A — BE Slice 0, D8) — panel interno ───────
+  // ─── suricata-tickets-mirror (Fase A — BE Slice 0, D8; Fase E — reply real) ──
   // Espejo READ-ONLY de tickets de Suricata Cx + veredicto del bot + reply guardado.
-  // Slice 0: TODAS las rutas devuelven 501 (D14 "wiring vacío") — reclama las líneas
-  // de este God Object antes que otra sesión. Heavy wiring vive en composeSuricataModule.
-  app.use('/api/suricata', composeSuricataModule({ authAdapter, sessionRepo, requirePerm }));
+  // Fase E reemplaza SOLO `POST /tickets/:id/reply` (el resto sigue 501, Fase F
+  // scope). Heavy wiring vive en composeSuricataModule.
+  //
+  // ⚠️ Guard de 3 capas independientes contra un envío real HOY (ninguna sola
+  // basta, ver `UnavailableSuricataReplyPort.ts`):
+  //   1. `suricata-reply-enabled` — flag sembrado `false` (migración Fase A).
+  //   2. `suricata.reply` — RBAC grantado solo a super_admin/administrador.
+  //   3. `UnavailableSuricataReplyPort` — el port wireado ACÁ SIEMPRE tira
+  //      `SuricataReplyDriverUnavailableError` (502), sin importar 1 y 2: no
+  //      existe ningún driver Playwright real hasta la Fase J (D5).
+  const suricataInternalTicketRepo = new PrismaSuricataTicketRepository();
+  const suricataReplyAuditRepo = new PrismaSuricataReplyAuditRepository();
+  const suricataInternalFeatureFlagRepo = new PrismaFeatureFlagRepository();
+  const replyToSuricataTicket = new ReplyToSuricataTicket(
+    suricataInternalTicketRepo,
+    suricataReplyAuditRepo,
+    new UnavailableSuricataReplyPort(),
+  );
+  app.use('/api/suricata', composeSuricataModule({
+    authAdapter,
+    sessionRepo,
+    requirePerm,
+    replyToSuricataTicket,
+    featureFlags: suricataInternalFeatureFlagRepo,
+  }));
   // [suricata-internal-mount-end]
 
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────

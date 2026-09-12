@@ -1,10 +1,11 @@
 /**
- * suricata-tickets-mirror (task A.7, updated Fase D task D.7, D8) —
+ * suricata-tickets-mirror (task A.7, updated Fase D task D.7, Fase E, D8) —
  * composition-root test, molde `external-bulk-messaging-composition.test.ts`
  * (a) "assertions estáticas".
  *
- * `composeSuricataModule` (panel interno) sigue en 501 (Fase F). Fase D
- * reemplazó el Slice 0 dark del endpoint EXTERNO por la key dedicada real +
+ * `composeSuricataModule` (panel interno) sigue en 501 salvo `POST
+ * /tickets/:id/reply` (Fase E — el resto es Fase F). Fase D reemplazó el
+ * Slice 0 dark del endpoint EXTERNO por la key dedicada real +
  * `machineActorMiddleware` — la invariante de ORDEN (D8) sigue siendo la
  * misma: si el mount de `/api/external/v1/suricata` quedara DESPUÉS del mount
  * GLOBAL `/api/external/v1`, la key GLOBAL interceptaría el prefijo dedicado y
@@ -35,8 +36,13 @@ describe('suricata-tickets-mirror composition root — assertions estáticas (D8
 
   it('el mount interno existe y pasa authAdapter/sessionRepo/requirePerm (D8, sin re-derivar un 2º rbacUserRepo)', () => {
     expect(appSrc).toMatch(
-      /app\.use\('\/api\/suricata',\s*composeSuricataModule\(\{\s*authAdapter,\s*sessionRepo,\s*requirePerm\s*\}\)\)/,
+      /app\.use\('\/api\/suricata',\s*composeSuricataModule\(\{\s*authAdapter,\s*sessionRepo,\s*requirePerm,\s*replyToSuricataTicket,\s*featureFlags:\s*suricataInternalFeatureFlagRepo,?\s*\}\)\)/,
     );
+  });
+
+  it('la Fase E wirea el guard conservador `UnavailableSuricataReplyPort` — NUNCA `PlaywrightSuricataReply` (Fase J pendiente)', () => {
+    expect(appSrc).toContain('new UnavailableSuricataReplyPort()');
+    expect(appSrc).not.toContain('new PlaywrightSuricataReply(');
   });
 
   it('el mount interno queda montado DESPUÉS de /api/assistant (D8: "INMEDIATAMENTE DESPUÉS del mount de /api/assistant")', () => {
