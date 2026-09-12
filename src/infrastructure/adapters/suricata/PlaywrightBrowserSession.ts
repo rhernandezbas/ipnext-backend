@@ -29,6 +29,10 @@
  * boot either, only fail the next sync tick, which
  * `SuricataSyncScheduler.runOnce` already catches and logs without crashing
  * (molde `ChatMediaDownloadScheduler`).
+ *
+ * ...and RECONNECTS: a failed connect is never memoized, and a `disconnected`
+ * browser drops the cached context, so a sidecar that boots late or restarts
+ * recovers on the next tick instead of requiring a BE restart.
  */
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { SuricataAttachmentTooLargeError } from '@domain/errors/suricata';
@@ -60,7 +64,11 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
 
   constructor(private readonly cfg: PlaywrightBrowserSessionConfig) {}
 
-  /** Memoized: `chromium.connect` runs at most once per instance (see the test asserting `toHaveBeenCalledTimes(1)`). */
+  /**
+   * Memoized for the HAPPY path only: while a connection is live,
+   * `chromium.connect` runs once. It is deliberately NOT memoized across
+   * failures — see `connect()`.
+   */
   private ensureContext(): Promise<BrowserContext> {
     if (this.context) return Promise.resolve(this.context);
     if (!this.connecting) this.connecting = this.connect();
@@ -68,9 +76,36 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
   }
 
   private async connect(): Promise<BrowserContext> {
-    this.browser = await chromium.connect(this.cfg.browserWs);
-    this.context = await this.browser.newContext();
-    return this.context;
+    try {
+      const browser = await chromium.connect(this.cfg.browserWs);
+
+      // The sidecar is a separate container: it restarts, gets redeployed, and
+      // dies. Without this, `this.context` would keep pointing at a dead
+      // browser and EVERY later call would fail on it until the BE itself was
+      // restarted. Clearing both fields makes the next call reconnect.
+      browser.on('disconnected', () => {
+        this.browser = null;
+        this.context = null;
+        this.connecting = null;
+      });
+
+      this.browser = browser;
+      this.context = await browser.newContext();
+      return this.context;
+    } catch (err) {
+      // CRITICAL: drop the memo on failure. A rejected promise left in
+      // `this.connecting` is cached forever, so a sidecar that simply had not
+      // finished booting when the first tick fired would keep "failing" for
+      // the life of the process even once it is perfectly healthy — every
+      // later tick just re-awaits the same stale rejection. Resetting here
+      // makes the next tick a genuine fresh attempt. The scheduler's interval
+      // is the backoff (molde `ChatMediaDownloadScheduler`); there is no retry
+      // loop inside this method.
+      this.browser = null;
+      this.context = null;
+      this.connecting = null;
+      throw err;
+    }
   }
 
   async isAuthenticated(): Promise<boolean> {

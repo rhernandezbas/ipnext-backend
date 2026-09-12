@@ -69,6 +69,14 @@ function makeFakeContext(
   };
 }
 
+/** `on` is required: the adapter subscribes to `disconnected` to drop a dead context. */
+function makeFakeBrowser(context: ReturnType<typeof makeFakeContext>) {
+  return {
+    newContext: jest.fn().mockResolvedValue(context),
+    on: jest.fn(),
+  };
+}
+
 describe('PlaywrightBrowserSession (Phase J, D5)', () => {
   const cfg = {
     browserWs: 'ws://playwright:3000/',
@@ -85,7 +93,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
   it('isAuthenticated navigates the cheap authenticated probe and reports true when no login form is present', async () => {
     const page = makeFakePage({ loginFormCount: 0 });
     const context = makeFakeContext(page);
-    const browser = { newContext: jest.fn().mockResolvedValue(context) };
+    const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
     const session = new PlaywrightBrowserSession(cfg);
@@ -103,7 +111,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
   it('isAuthenticated reports false when the login form marker IS present', async () => {
     const page = makeFakePage({ loginFormCount: 1 });
     const context = makeFakeContext(page);
-    const browser = { newContext: jest.fn().mockResolvedValue(context) };
+    const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
     const session = new PlaywrightBrowserSession(cfg);
@@ -124,7 +132,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       return makeFakeLocator();
     });
     const context = makeFakeContext(page);
-    const browser = { newContext: jest.fn().mockResolvedValue(context) };
+    const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
     const session = new PlaywrightBrowserSession(cfg);
@@ -145,7 +153,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       throw new Error('Timeout 30000ms exceeded waiting for selector');
     });
     const context = makeFakeContext(page);
-    const browser = { newContext: jest.fn().mockResolvedValue(context) };
+    const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -159,7 +167,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
   it('fetchHtml navigates the given URL and returns page.content()', async () => {
     const page = makeFakePage();
     const context = makeFakeContext(page);
-    const browser = { newContext: jest.fn().mockResolvedValue(context) };
+    const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
     const session = new PlaywrightBrowserSession(cfg);
@@ -174,7 +182,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
   it('fetchBinary uses context.request.get (inherits the session cookie, works against a remote browser) and returns the body + content-type', async () => {
     const page = makeFakePage();
     const context = makeFakeContext(page);
-    const browser = { newContext: jest.fn().mockResolvedValue(context) };
+    const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
     const session = new PlaywrightBrowserSession(cfg);
@@ -189,7 +197,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       const page = makeFakePage();
       const response = makeFakeResponse({ 'content-type': 'application/octet-stream', 'content-length': '99999999' });
       const context = makeFakeContext(page, response);
-      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      const browser = makeFakeBrowser(context);
       (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
       const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1024 });
@@ -206,7 +214,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       const page = makeFakePage();
       const response = makeFakeResponse({ 'content-length': '5000' });
       const context = makeFakeContext(page, response);
-      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      const browser = makeFakeBrowser(context);
       (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
       const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 100 });
@@ -224,7 +232,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       const page = makeFakePage();
       const response = makeFakeResponse({ 'content-type': 'image/png', 'content-length': '3' });
       const context = makeFakeContext(page, response);
-      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      const browser = makeFakeBrowser(context);
       (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
       const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1024 });
@@ -238,7 +246,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       const page = makeFakePage();
       const response = makeFakeResponse({ 'content-type': 'image/png' }); // no content-length
       const context = makeFakeContext(page, response);
-      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      const browser = makeFakeBrowser(context);
       (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
       const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1 });
@@ -255,7 +263,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       const page = makeFakePage();
       const response = makeFakeResponse({ 'content-type': 'image/png', 'content-length': 'not-a-number' });
       const context = makeFakeContext(page, response);
-      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      const browser = makeFakeBrowser(context);
       (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
       const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1024 });
@@ -263,10 +271,58 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
     });
   });
 
+  describe('recovery from a transient sidecar failure', () => {
+    it('a failed connect does NOT poison the memo — the next call retries from scratch', async () => {
+      const page = makeFakePage();
+      const context = makeFakeContext(page);
+      const browser = { newContext: jest.fn().mockResolvedValue(context), on: jest.fn() };
+      (chromium.connect as jest.Mock)
+        // First attempt: the sidecar container has not finished booting.
+        .mockRejectedValueOnce(new Error('connect ECONNREFUSED playwright:3000'))
+        // Second attempt: it is up.
+        .mockResolvedValueOnce(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+
+      await expect(session.fetchHtml('https://suricata.example.com/tickets')).rejects.toThrow('ECONNREFUSED');
+
+      // Before the fix, the REJECTED promise stayed cached in `connecting`
+      // forever: every later tick re-awaited it and failed identically, even
+      // with a healthy sidecar. Only a process restart recovered.
+      await expect(session.fetchHtml('https://suricata.example.com/tickets')).resolves.toBe('<html>ok</html>');
+      expect(chromium.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it('registers a `disconnected` handler that clears the cached context so the next call reconnects', async () => {
+      const page = makeFakePage();
+      const context = makeFakeContext(page);
+      const handlers: Record<string, () => void> = {};
+      const browser = {
+        newContext: jest.fn().mockResolvedValue(context),
+        on: jest.fn((event: string, handler: () => void) => {
+          handlers[event] = handler;
+        }),
+      };
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+      await session.fetchHtml('https://suricata.example.com/tickets');
+      expect(chromium.connect).toHaveBeenCalledTimes(1);
+      expect(browser.on).toHaveBeenCalledWith('disconnected', expect.any(Function));
+
+      // The sidecar restarts: without this handler, `context` would keep
+      // pointing at a dead browser and every later call would fail on it.
+      handlers['disconnected']?.();
+
+      await session.fetchHtml('https://suricata.example.com/tickets');
+      expect(chromium.connect).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('connects to the sidecar via chromium.connect ONLY ONCE across multiple calls (lazy, memoized context)', async () => {
     const page = makeFakePage();
     const context = makeFakeContext(page);
-    const browser = { newContext: jest.fn().mockResolvedValue(context) };
+    const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
 
     const session = new PlaywrightBrowserSession(cfg);
