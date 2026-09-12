@@ -247,13 +247,15 @@ WHERE r."code" IN ('super_admin', 'administrador', 'noc')
   AND p."action" = 'read'
 ON CONFLICT ("roleId", "permissionId") DO NOTHING;
 
--- 6. Grant suricata.manage → super_admin + administrador (calcado de store.manage)
+-- 6. Grant suricata.manage → super_admin + administrador + noc (asignar un
+--    ticket a un colega es 100% interno, sin efecto externo — a diferencia
+--    de 'reply' abajo, que sí queda restringido).
 INSERT INTO "RbacRolePermission" ("roleId", "permissionId", "createdAt")
 SELECT r."id", p."id", NOW()
 FROM "RbacRole" r
 CROSS JOIN "RbacPermission" p
 JOIN "RbacModule" m ON m."id" = p."moduleId"
-WHERE r."code" IN ('super_admin', 'administrador')
+WHERE r."code" IN ('super_admin', 'administrador', 'noc')
   AND m."code" = 'suricata'
   AND p."action" = 'manage'
 ON CONFLICT ("roleId", "permissionId") DO NOTHING;

@@ -147,10 +147,10 @@ describe('Migración 20261116000000_suricata_tickets_mirror_base (Fase A, D1/D2/
       expect(roles).toHaveLength(3);
     });
 
-    it('suricata.manage sigue restringido a super_admin + administrador (asignación)', () => {
+    it('suricata.manage se otorga a super_admin + administrador + noc (asignación, 100% interna)', () => {
       const manage = grantFor('manage');
       const roles = manage.match(/'(super_admin|administrador|administracion|ventas|noc|tecnico)'/g) ?? [];
-      expect(roles.sort()).toEqual(["'administrador'", "'super_admin'"]);
+      expect(roles.sort()).toEqual(["'administrador'", "'noc'", "'super_admin'"]);
     });
 
     it('suricata.reply sigue restringido a super_admin + administrador (envío irreversible a un cliente real)', () => {
