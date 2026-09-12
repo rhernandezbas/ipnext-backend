@@ -50,9 +50,9 @@ Chain strategy: pending
 
 ## Phase B — BE session lock (repo: ipnext-backend)
 
-- [ ] B.1 TDD `SuricataSession` (D4): `high` jumps queued `low`; FIFO within a level; timeout ⇒ `SuricataSessionBusyError`; mutex releases even if `fn` throws — `src/__tests__/infrastructure/suricata-session.test.ts`, implement `src/infrastructure/adapters/suricata/SuricataSession.ts` (in-process mutex, molde `CampaignRunner.heldInProcess`, + `PgAdvisoryLock('suricata-session')` reuse).
-- [ ] B.2 TDD `ensureAuthenticated`: DOM-marker classification, single re-login + single retry, second failure ⇒ `SuricataAuthError` — same test file, mock `BrowserContext`.
-- [ ] B.3 Edit `src/infrastructure/config.ts`: add `suricata.*` block (D11), not in `REQUIRED_VARS`.
+- [x] B.1 TDD `SuricataSession` (D4): `high` jumps queued `low`; FIFO within a level; timeout ⇒ `SuricataSessionBusyError`; mutex releases even if `fn` throws — `src/__tests__/infrastructure/suricata-session.test.ts`, implement `src/infrastructure/adapters/suricata/SuricataSession.ts` (in-process mutex, molde `CampaignRunner.heldInProcess`, + `PgAdvisoryLock('suricata-session')` reuse). DEVIATION: per D3.c the domain stays blind to the lock, so this is infra-only — no `SuricataSessionPort` in `domain/ports/`; also added a cross-replica coverage case (advisory lock held by another container ⇒ `SuricataSessionBusyError` too) beyond the task's literal bullet list, since D4 names it as the second lock's whole reason to exist.
+- [x] B.2 TDD `ensureAuthenticated`: DOM-marker classification, single re-login + single retry, second failure ⇒ `SuricataAuthError` — same test file, mock `BrowserContext`. DEVIATION: no `playwright-core` dependency exists yet (Phase J installs it), so the mock is a narrow structural `SuricataAuthSession` interface (`isAuthenticated()`/`login()`) exported from `SuricataSession.ts` — Phase C/E's real Playwright adapters implement it on top of an actual `BrowserContext`. `ensureAuthenticated` is a standalone exported function (not a private method) so it's unit-testable directly, and `withSession` calls it fresh on every invocation per D4.
+- [x] B.3 Edit `src/infrastructure/config.ts`: add `suricata.*` block (D11), not in `REQUIRED_VARS`. Used the repo's defensive parsers (`parseIntervalMs`/`parsePositiveInt`) instead of the design snippet's illustrative bare `Number(...)` — matches every other opt-in block in this file (basura cae al valor seguro, nunca al 0/NaN).
 
 ## Phase C — BE sync capability (repo: ipnext-backend)
 
