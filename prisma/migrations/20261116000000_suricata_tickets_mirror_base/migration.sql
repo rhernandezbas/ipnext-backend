@@ -9,10 +9,12 @@
 --                           --to-schema prisma/schema.prisma --script
 --
 -- Al SQL del diff se le apenda a mano (el diff no emite DML):
---   1. Seed RBAC del módulo 'suricata' (D2) — calcado 1:1 del bloque 'store'
---      (20261106000000_store/migration.sql): 'read'/'manage' base + 'reply'
---      DEDICADA (RBAC-EXT-2 — NO se reusa 'send', ver design.md D2 corrección
---      post-tasks 2026-09-11).
+--   1. Seed RBAC del módulo 'suricata' (D2) — estructura calcada del bloque
+--      'store' (20261106000000_store/migration.sql): 'read'/'manage' base +
+--      'reply' DEDICADA (RBAC-EXT-2 — NO se reusa 'send', ver design.md D2
+--      corrección post-tasks 2026-09-11). El ALCANCE de los grants NO se
+--      calca: ver el comentario del grant #5 — acá se leen datos personales
+--      de clientes, no un catálogo.
 --   2. Los 2 feature flags que gobiernan el rollout dark (D14):
 --      'suricata-sync-enabled' y 'suricata-reply-enabled', ambos en FALSE.
 --      Nacen de la migración (molde 20261028000000_iclass_gps_ingest_flag):
@@ -221,13 +223,26 @@ FROM "RbacModule" m
 WHERE m."code" = 'suricata'
 ON CONFLICT ("moduleId", "action") DO NOTHING;
 
--- 5. Grant suricata.read → los 6 roles de sistema (calcado de store.read)
+-- 5. Grant suricata.read → SOLO los roles que atienden tickets.
+--
+--    NO es el alcance de 'store'. El bloque original calcaba store.read, que
+--    abre a los 6 roles de sistema, pero acá lo que se lee NO es un catálogo:
+--    un ticket de Suricata trae nombre, teléfono y audios de clientes reales.
+--    Eso lo ve quien atiende el ticket, no todo el sistema (decisión de
+--    producto confirmada por el usuario).
+--
+--    De los 6 roles de SYSTEM_ROLES (src/domain/entities/rbac.ts) no existe
+--    ningún 'soporte'/'agente'/'atencion_cliente': el rol de atención es
+--    'noc', el operador de mesa — explícitamente NO técnico de campo (ver
+--    TECHNICAL_ROLE_CODES, donde solo figura 'tecnico'). Quedan FUERA a
+--    propósito: 'tecnico' y 'ventas' (no atienden tickets) y 'administracion'
+--    (Contabilidad, según el seed de roles 20260529000000).
 INSERT INTO "RbacRolePermission" ("roleId", "permissionId", "createdAt")
 SELECT r."id", p."id", NOW()
 FROM "RbacRole" r
 CROSS JOIN "RbacPermission" p
 JOIN "RbacModule" m ON m."id" = p."moduleId"
-WHERE r."code" IN ('super_admin', 'administrador', 'administracion', 'ventas', 'noc', 'tecnico')
+WHERE r."code" IN ('super_admin', 'administrador', 'noc')
   AND m."code" = 'suricata'
   AND p."action" = 'read'
 ON CONFLICT ("roleId", "permissionId") DO NOTHING;

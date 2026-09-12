@@ -103,6 +103,63 @@ describe('Migración 20261116000000_suricata_tickets_mirror_base (Fase A, D1/D2/
     });
   });
 
+  /**
+   * Decisión de producto confirmada por el usuario (fix wave): un ticket de
+   * Suricata contiene nombre, teléfono y audios de clientes reales. Eso lo ve
+   * quien ATIENDE tickets, no cualquier rol del sistema. El seed original
+   * calcaba el bloque de `store`, que abre `read` a los 6 roles.
+   *
+   * De los 6 roles de sistema (SYSTEM_ROLES, rbac.ts — no existe ningún
+   * 'soporte'/'agente'/'atencion_cliente'), el rol de atención es `noc`: el
+   * operador de mesa, explícitamente NO técnico de campo (ver
+   * `TECHNICAL_ROLE_CODES`, donde solo figura 'tecnico'). `administracion` es
+   * Contabilidad según el seed de roles.
+   */
+  describe('alcance de los grants — datos de clientes reales, no para todo el sistema', () => {
+    /**
+     * Devuelve la sentencia COMPLETA y AISLADA del grant de esa acción. El
+     * split por `;` es obligatorio: un regex sobre el archivo entero se come
+     * el grant anterior y reporta roles que no son de esta sentencia.
+     */
+    function grantFor(action: string): string {
+      const statements = sql
+        .split(';')
+        .map((s) => s.trim())
+        .filter((s) => s.includes('INSERT INTO "RbacRolePermission"') && s.includes(`p."action" = '${action}'`));
+      expect(statements).toHaveLength(1);
+      return statements[0];
+    }
+
+    it("suricata.read NO se otorga a los 6 roles: nada de 'tecnico' ni 'ventas'", () => {
+      const read = grantFor('read');
+      expect(read).not.toMatch(/'tecnico'/);
+      expect(read).not.toMatch(/'ventas'/);
+      expect(read).not.toMatch(/'administracion'/);
+    });
+
+    it('suricata.read se otorga a super_admin, administrador y el rol de atención (noc)', () => {
+      const read = grantFor('read');
+      expect(read).toMatch(/'super_admin'/);
+      expect(read).toMatch(/'administrador'/);
+      expect(read).toMatch(/'noc'/);
+      // Exactamente esos 3 — un rol más entra por acá sin que nadie lo note.
+      const roles = read.match(/'(super_admin|administrador|administracion|ventas|noc|tecnico)'/g) ?? [];
+      expect(roles).toHaveLength(3);
+    });
+
+    it('suricata.manage sigue restringido a super_admin + administrador (asignación)', () => {
+      const manage = grantFor('manage');
+      const roles = manage.match(/'(super_admin|administrador|administracion|ventas|noc|tecnico)'/g) ?? [];
+      expect(roles.sort()).toEqual(["'administrador'", "'super_admin'"]);
+    });
+
+    it('suricata.reply sigue restringido a super_admin + administrador (envío irreversible a un cliente real)', () => {
+      const reply = grantFor('reply');
+      const roles = reply.match(/'(super_admin|administrador|administracion|ventas|noc|tecnico)'/g) ?? [];
+      expect(roles.sort()).toEqual(["'administrador'", "'super_admin'"]);
+    });
+  });
+
   it('seedea las 3 acciones del módulo: read, manage y la DEDICADA reply (RBAC-EXT-2)', () => {
     expect(sql).toMatch(/'read'/);
     expect(sql).toMatch(/'manage'/);

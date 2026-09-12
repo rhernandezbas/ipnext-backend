@@ -200,9 +200,23 @@ queden consistentes antes de `sdd-apply`.
 Acciones: `read` y `manage` son base (no se agregan action codes) **+ `reply`**, acción NUEVA y
 dedicada (NO se reusa `send`): gatea una escritura real e irreversible hacia un cliente externo vía
 Suricata — un riesgo distinto al de mensajería interna, por eso el spec pide separación explícita.
-Seed en la migración de D1.b, calcado 1:1 del bloque `store`: `RbacModule` + 3 `RbacPermission` +
-grants (`suricata.read` → los 6 roles de sistema; `suricata.manage` y `suricata.reply` →
-`super_admin` + `administrador`). `ON CONFLICT DO NOTHING` en todo, como el molde.
+Seed en la migración de D1.b, con la ESTRUCTURA del bloque `store`: `RbacModule` + 3
+`RbacPermission` + grants. `ON CONFLICT DO NOTHING` en todo, como el molde.
+
+El **alcance** de los grants NO se calca de `store` (corrección post-review, decisión de producto
+confirmada por el usuario): `store.read` abre a los 6 roles porque lee un catálogo, mientras que un
+ticket de Suricata trae nombre, teléfono y audios de **clientes reales**. Alcance correcto:
+
+| Permiso | Roles |
+|---|---|
+| `suricata.read` | `super_admin`, `administrador`, `noc` |
+| `suricata.manage` | `super_admin`, `administrador` |
+| `suricata.reply` | `super_admin`, `administrador` |
+
+`noc` es el rol de atención de este sistema: de los 6 `SYSTEM_ROLES` no existe ningún
+`soporte`/`agente`/`atencion_cliente`, y `noc` es el operador de mesa, explícitamente NO técnico de
+campo (`TECHNICAL_ROLE_CODES` solo lista `tecnico`). Quedan fuera a propósito `tecnico` y `ventas`
+(no atienden tickets) y `administracion` (Contabilidad).
 El comentario del array es obligatorio: cada module code del repo tiene su justificación al lado.
 
 ---
