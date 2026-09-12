@@ -39,60 +39,60 @@ Chain strategy: pending
 
 ## Phase A — BE Slice 0: schema, RBAC module, wiring stub (repo: ipnext-backend)
 
-- [ ] A.1 Edit `prisma/schema.prisma`: add 7 models per design D1 (`SuricataArea`, `SuricataTicket`, `SuricataMessage`, `SuricataAttachment`, `SuricataTicketVerdict`, `SuricataReplyAudit`, `SuricataSyncRun`).
-- [ ] A.2 Edit `src/domain/entities/rbac.ts`: append `'suricata'` to `RBAC_MODULES` with the D2 justification comment; actions `read`, `manage`, `reply` (per spec RBAC-EXT-2 — see Risks: conflicts with design D2's `send` reuse, follow spec literally).
-- [ ] A.3 TDD RBAC-EXT-1/EXT-2: unresolved `'ghost'` module fails `tsc --noEmit`; `RBAC_MODULES` contains `suricata` with 3 actions — `src/__tests__/domain/rbac.test.ts`.
-- [ ] A.4 Generate `prisma/migrations/<ts>_suricata_tickets_mirror/migration.sql` via `prisma migrate diff --from-schema-datamodel` (no local DB, per `WORKFLOW-MULTI-REPO.md`); hand-append RBAC seed (`suricata.read/manage/reply`, `ON CONFLICT DO NOTHING`, grant `super_admin`) + 2 feature flags (`suricata-sync-enabled`, `suricata-reply-enabled`, both `false`). No `BEGIN`/`COMMIT`.
-- [ ] A.5 Create `src/infrastructure/http/composeSuricataModule.ts` and `composeSuricataExternalModule.ts` returning `501` stub routers.
-- [ ] A.6 Edit `src/infrastructure/http/app.ts`: add import + 2 marked mount blocks per D8 (internal after `/api/assistant`, external before the global external-v1 catch-all — order load-bearing).
-- [ ] A.7 TDD composition: mount index of `/api/external/v1/suricata` `<` index of `/api/external/v1` — extend `src/__tests__/infrastructure/external-bulk-messaging-composition.test.ts` pattern in a new `suricata-composition.test.ts`.
-- [ ] A.8 REFACTOR pass: confirm `tsc --noEmit` clean, `npm test` green.
+- [x] A.1 Edit `prisma/schema.prisma`: add 7 models per design D1 (`SuricataArea`, `SuricataTicket`, `SuricataMessage`, `SuricataAttachment`, `SuricataTicketVerdict`, `SuricataReplyAudit`, `SuricataSyncRun`).
+- [x] A.2 Edit `src/domain/entities/rbac.ts`: append `'suricata'` to `RBAC_MODULES` with the D2 justification comment; actions `read`, `manage`, `reply` (per spec RBAC-EXT-2 — see Risks: conflicts with design D2's `send` reuse, follow spec literally).
+- [x] A.3 TDD RBAC-EXT-1/EXT-2: unresolved `'ghost'` module fails `tsc --noEmit`; `RBAC_MODULES` contains `suricata` with 3 actions — `src/__tests__/domain/rbac.test.ts`.
+- [x] A.4 Generate `prisma/migrations/<ts>_suricata_tickets_mirror/migration.sql` via `prisma migrate diff --from-schema-datamodel` (no local DB, per `WORKFLOW-MULTI-REPO.md`); hand-append RBAC seed (`suricata.read/manage/reply`, `ON CONFLICT DO NOTHING`, grant `super_admin`) + 2 feature flags (`suricata-sync-enabled`, `suricata-reply-enabled`, both `false`). No `BEGIN`/`COMMIT`.
+- [x] A.5 Create `src/infrastructure/http/composeSuricataModule.ts` and `composeSuricataExternalModule.ts` returning `501` stub routers.
+- [x] A.6 Edit `src/infrastructure/http/app.ts`: add import + 2 marked mount blocks per D8 (internal after `/api/assistant`, external before the global external-v1 catch-all — order load-bearing).
+- [x] A.7 TDD composition: mount index of `/api/external/v1/suricata` `<` index of `/api/external/v1` — extend `src/__tests__/infrastructure/external-bulk-messaging-composition.test.ts` pattern in a new `suricata-composition.test.ts`.
+- [x] A.8 REFACTOR pass: confirm `tsc --noEmit` clean, `npm test` green.
 
 ## Phase B — BE session lock (repo: ipnext-backend)
 
-- [ ] B.1 TDD `SuricataSession` (D4): `high` jumps queued `low`; FIFO within a level; timeout ⇒ `SuricataSessionBusyError`; mutex releases even if `fn` throws — `src/__tests__/infrastructure/suricata-session.test.ts`, implement `src/infrastructure/adapters/suricata/SuricataSession.ts` (in-process mutex, molde `CampaignRunner.heldInProcess`, + `PgAdvisoryLock('suricata-session')` reuse).
-- [ ] B.2 TDD `ensureAuthenticated`: DOM-marker classification, single re-login + single retry, second failure ⇒ `SuricataAuthError` — same test file, mock `BrowserContext`.
-- [ ] B.3 Edit `src/infrastructure/config.ts`: add `suricata.*` block (D11), not in `REQUIRED_VARS`.
+- [x] B.1 TDD `SuricataSession` (D4): `high` jumps queued `low`; FIFO within a level; timeout ⇒ `SuricataSessionBusyError`; mutex releases even if `fn` throws — `src/__tests__/infrastructure/suricata-session.test.ts`, implement `src/infrastructure/adapters/suricata/SuricataSession.ts` (in-process mutex, molde `CampaignRunner.heldInProcess`, + `PgAdvisoryLock('suricata-session')` reuse).
+- [x] B.2 TDD `ensureAuthenticated`: DOM-marker classification, single re-login + single retry, second failure ⇒ `SuricataAuthError` — same test file, mock `BrowserContext`.
+- [x] B.3 Edit `src/infrastructure/config.ts`: add `suricata.*` block (D11), not in `REQUIRED_VARS`.
 
 ## Phase C — BE sync capability (repo: ipnext-backend)
 
-- [ ] C.1 Add domain ports `src/domain/ports/SuricataScraperPort.ts`, `SuricataTicketRepository.ts`, `SuricataMessageRepository.ts`, `SuricataAttachmentRepository.ts`, `SuricataAreaRepository.ts`, `SuricataSyncRunRepository.ts` + entities in `src/domain/entities/suricata.ts`.
-- [ ] C.2 TDD `contentHash` (canonical render, order-independent) — unit test + `src/domain/entities/suricataContentHash.ts` (or colocated helper).
-- [ ] C.3 Create `src/infrastructure/adapters/suricata/selectors.ts` (named selector constants, D6.d) and HTML fixtures (list/detail-with-attachment/empty-list/DOM-changed) captured from real Suricata markup — producible, not plausible.
-- [ ] C.4 TDD + implement `PlaywrightSuricataScraper` (parses via `selectors.ts`) and `FakeSuricataScraper` for tests, behind `SURICATA_BROWSER_WS`.
-- [ ] C.5 Implement `InMemorySuricataTicketRepository/MessageRepository/AttachmentRepository/AreaRepository/SyncRunRepository` and their `Prisma*Repository` counterparts.
-- [ ] C.6 TDD `SyncSuricataTickets` use case (MIRROR-1..6, D6): first-run backfill within `SURICATA_BACKFILL_DAYS`/`SURICATA_MAX_PAGES_PER_RUN`; incremental run after watermark; idempotent re-run (same counts); one failing ticket isolated, batch continues; 0 tickets ⇒ `outcome='failed'`, zero writes; area disappearance ⇒ `active=false`, ticket keeps its `areaId`.
-- [ ] C.7 TDD attachment migration (MIRROR-7): `context.request.get` → `FileStorage.save('suricata/<sha256>')`, dedup by content, `attempts` cap 5 ⇒ `status='failed'`, `SURICATA_MAX_ATTACHMENT_BYTES` ⇒ `lastError='too_large'`.
-- [ ] C.8 TDD MIRROR-8 (read-only guard): assert no write/update call reaches `SuricataScraperPort` mock during a sync run.
-- [ ] C.9 Create `src/infrastructure/scheduling/SuricataSyncScheduler.ts` (molde `ChatMediaDownloadScheduler`, flag `suricata-sync-enabled`, advisory lock, `setInterval` unref).
-- [ ] C.10 Create `src/infrastructure/http/bootstrapSuricataSync.ts` (null if `SURICATA_BASE_URL`/`SURICATA_BROWSER_WS` unset); wire from `src/main.ts`.
-- [ ] C.11 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] C.1 Add domain ports `src/domain/ports/SuricataScraperPort.ts`, `SuricataTicketRepository.ts`, `SuricataMessageRepository.ts`, `SuricataAttachmentRepository.ts`, `SuricataAreaRepository.ts`, `SuricataSyncRunRepository.ts` + entities in `src/domain/entities/suricata.ts`.
+- [x] C.2 TDD `contentHash` (canonical render, order-independent) — unit test + `src/domain/entities/suricataContentHash.ts` (or colocated helper).
+- [x] C.3 Create `src/infrastructure/adapters/suricata/selectors.ts` (named selector constants, D6.d) and HTML fixtures (list/detail-with-attachment/empty-list/DOM-changed) captured from real Suricata markup — producible, not plausible.
+- [x] C.4 TDD + implement `PlaywrightSuricataScraper` (parses via `selectors.ts`) and `FakeSuricataScraper` for tests, behind `SURICATA_BROWSER_WS`.
+- [x] C.5 Implement `InMemorySuricataTicketRepository/MessageRepository/AttachmentRepository/AreaRepository/SyncRunRepository` and their `Prisma*Repository` counterparts.
+- [x] C.6 TDD `SyncSuricataTickets` use case (MIRROR-1..6, D6): first-run backfill within `SURICATA_BACKFILL_DAYS`/`SURICATA_MAX_PAGES_PER_RUN`; incremental run after watermark; idempotent re-run (same counts); one failing ticket isolated, batch continues; 0 tickets ⇒ `outcome='failed'`, zero writes; area disappearance ⇒ `active=false`, ticket keeps its `areaId`.
+- [x] C.7 TDD attachment migration (MIRROR-7): `context.request.get` → `FileStorage.save('suricata/<sha256>')`, dedup by content, `attempts` cap 5 ⇒ `status='failed'`, `SURICATA_MAX_ATTACHMENT_BYTES` ⇒ `lastError='too_large'`.
+- [x] C.8 TDD MIRROR-8 (read-only guard): assert no write/update call reaches `SuricataScraperPort` mock during a sync run.
+- [x] C.9 Create `src/infrastructure/scheduling/SuricataSyncScheduler.ts` (molde `ChatMediaDownloadScheduler`, flag `suricata-sync-enabled`, advisory lock, `setInterval` unref).
+- [x] C.10 Create `src/infrastructure/http/bootstrapSuricataSync.ts` (null if `SURICATA_BASE_URL`/`SURICATA_BROWSER_WS` unset); wire from `src/main.ts`.
+- [x] C.11 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase D — BE verdict capability (repo: ipnext-backend)
 
-- [ ] D.1 Add `src/domain/ports/SuricataVerdictRepository.ts`; implement `InMemorySuricataVerdictRepository` + `PrismaSuricataVerdictRepository`.
-- [ ] D.2 TDD `SubmitSuricataVerdict` use case (VERDICT-2..5): `resuelto=false` missing `motivo`/`respuestaSugerida` ⇒ `InvalidSuricataVerdictError`; unknown ticket ⇒ not-found error; append-only (2 submits ⇒ 2 rows); `latestByTicket` returns newest; `stale` derived when `ticketContentHash` differs from current.
-- [ ] D.3 Create `src/domain/errors/suricata.ts` (`InvalidSuricataVerdictError`, `SuricataTicketNotFoundError`, `SuricataSessionBusyError`, `SuricataAuthError`).
-- [ ] D.4 TDD external verdict route (VERDICT-1, RBAC-EXT-3): missing/unconfigured token ⇒ 401 before any logic; dedicated key ⇒ passes; global key ⇒ 401 (dedicated ≠ global); flag OFF ⇒ 403; malformed body via `parseOr400`/zod `safeParse` ⇒ 400 not 500; unknown ticket ⇒ 404; RBAC session alone ⇒ rejected — `src/__tests__/infrastructure/externalV1.suricata.routes.test.ts`.
-- [ ] D.5 Implement route in `composeSuricataExternalModule.ts` (verdict `POST` + D7.c attachment `GET .../attachments/:id/content`, same router/flag/key).
-- [ ] D.6 TDD D7.c: attachment id belonging to another ticket ⇒ 404 never 200; proxy streams via `FileStorage.get`, no signed URLs.
-- [ ] D.7 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] D.1 Add `src/domain/ports/SuricataVerdictRepository.ts`; implement `InMemorySuricataVerdictRepository` + `PrismaSuricataVerdictRepository`.
+- [x] D.2 TDD `SubmitSuricataVerdict` use case (VERDICT-2..5): `resuelto=false` missing `motivo`/`respuestaSugerida` ⇒ `InvalidSuricataVerdictError`; unknown ticket ⇒ not-found error; append-only (2 submits ⇒ 2 rows); `latestByTicket` returns newest; `stale` derived when `ticketContentHash` differs from current.
+- [x] D.3 Create `src/domain/errors/suricata.ts` (`InvalidSuricataVerdictError`, `SuricataTicketNotFoundError`, `SuricataSessionBusyError`, `SuricataAuthError`).
+- [x] D.4 TDD external verdict route (VERDICT-1, RBAC-EXT-3): missing/unconfigured token ⇒ 401 before any logic; dedicated key ⇒ passes; global key ⇒ 401 (dedicated ≠ global); flag OFF ⇒ 403; malformed body via `parseOr400`/zod `safeParse` ⇒ 400 not 500; unknown ticket ⇒ 404; RBAC session alone ⇒ rejected — `src/__tests__/infrastructure/externalV1.suricata.routes.test.ts`.
+- [x] D.5 Implement route in `composeSuricataExternalModule.ts` (verdict `POST` + D7.c attachment `GET .../attachments/:id/content`, same router/flag/key).
+- [x] D.6 TDD D7.c: attachment id belonging to another ticket ⇒ 404 never 200; proxy streams via `FileStorage.get`, no signed URLs.
+- [x] D.7 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase E — BE reply capability (repo: ipnext-backend)
 
-- [ ] E.1 Add `src/domain/ports/SuricataReplyPort.ts`, `SuricataReplyAuditRepository.ts`; implement `InMemorySuricataReplyAuditRepository` + `PrismaSuricataReplyAuditRepository`; implement `PlaywrightSuricataReply`/`FakeSuricataReply`.
-- [ ] E.2 TDD `ReplyToSuricataTicket` use case (REPLY-1..6, D10): audit row written with `outcome='failed'` BEFORE `withSession`; `confirm` (sha256 of `body`) mismatch ⇒ port never invoked, no audit "sent"; port success ⇒ `markOutcome('sent', sentAt)`; port throws ⇒ audit stays `failed` with `error`, error propagates; text sent literally via `fill`/`type`, never `page.evaluate` interpolation.
-- [ ] E.3 TDD internal reply route: missing `suricata.reply` permission ⇒ rejected before any Playwright action; flag OFF ⇒ 403; confirmation mismatch ⇒ 400 `REPLY_CONFIRMATION_MISMATCH`; session busy ⇒ 503 `SURICATA_SESSION_BUSY` + `Retry-After: 30`; auth failure ⇒ 502 `SURICATA_UNAVAILABLE` with `replyAuditId`.
-- [ ] E.4 Implement `POST /api/suricata/tickets/:id/reply` in `composeSuricataModule.ts`.
-- [ ] E.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] E.1 Add `src/domain/ports/SuricataReplyPort.ts`, `SuricataReplyAuditRepository.ts`; implement `InMemorySuricataReplyAuditRepository` + `PrismaSuricataReplyAuditRepository`; implement `PlaywrightSuricataReply`/`FakeSuricataReply`.
+- [x] E.2 TDD `ReplyToSuricataTicket` use case (REPLY-1..6, D10): audit row written with `outcome='failed'` BEFORE `withSession`; `confirm` (sha256 of `body`) mismatch ⇒ port never invoked, no audit "sent"; port success ⇒ `markOutcome('sent', sentAt)`; port throws ⇒ audit stays `failed` with `error`, error propagates; text sent literally via `fill`/`type`, never `page.evaluate` interpolation.
+- [x] E.3 TDD internal reply route: missing `suricata.reply` permission ⇒ rejected before any Playwright action; flag OFF ⇒ 403; confirmation mismatch ⇒ 400 `REPLY_CONFIRMATION_MISMATCH`; session busy ⇒ 503 `SURICATA_SESSION_BUSY` + `Retry-After: 30`; auth failure ⇒ 502 `SURICATA_UNAVAILABLE` with `replyAuditId`.
+- [x] E.4 Implement `POST /api/suricata/tickets/:id/reply` in `composeSuricataModule.ts`.
+- [x] E.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase F — BE panel read routes (repo: ipnext-backend)
 
-- [ ] F.1 TDD + implement `ListSuricataTickets`, `GetSuricataTicketDetail`, `ComputeSuricataKpis`, `SetSuricataAssignee` use cases against InMemory repos: each filter (status/priority/area/botState) independently; KPI percentages computed by hand in the test; `setAssignee` never calls any Suricata port.
-- [ ] F.2 Implement `GET /api/suricata/tickets`, `GET /:id`, `GET /areas`, `GET /kpis`, `PATCH /:id/assignee` in `composeSuricataModule.ts`, gated by session + `suricata.read` (`manage` for assignee).
-- [ ] F.3 TDD routes with supertest + InMemory repos seeded per scenario, including RBAC-gate 403 for missing permission — `src/__tests__/infrastructure/suricata.routes.test.ts`.
-- [ ] F.4 Composition-root test: assert full `app.ts` wiring (both mounts + DI args) matches `composeSuricataModule`/`composeSuricataExternalModule` signatures — pin per repo's known "wiring is verified by hand" lesson.
-- [ ] F.5 REFACTOR pass; `npm test` + `tsc --noEmit` green; delete Phase A stub 501 responses.
+- [x] F.1 TDD + implement `ListSuricataTickets`, `GetSuricataTicketDetail`, `ComputeSuricataKpis`, `SetSuricataAssignee` use cases against InMemory repos: each filter (status/priority/area/botState) independently; KPI percentages computed by hand in the test; `setAssignee` never calls any Suricata port.
+- [x] F.2 Implement `GET /api/suricata/tickets`, `GET /:id`, `GET /areas`, `GET /kpis`, `PATCH /:id/assignee` in `composeSuricataModule.ts`, gated by session + `suricata.read` (`manage` for assignee).
+- [x] F.3 TDD routes with supertest + InMemory repos seeded per scenario, including RBAC-gate 403 for missing permission — `src/__tests__/infrastructure/suricata.routes.test.ts`.
+- [x] F.4 Composition-root test: assert full `app.ts` wiring (both mounts + DI args) matches `composeSuricataModule`/`composeSuricataExternalModule` signatures — pin per repo's known "wiring is verified by hand" lesson.
+- [x] F.5 REFACTOR pass; `npm test` + `tsc --noEmit` green; delete Phase A stub 501 responses.
 
 ## Phase G — FE list + filters + KPIs (repo: ipnext-frontend)
 
@@ -120,10 +120,10 @@ Chain strategy: pending
 > Human OK already given for the sidecar approach (D5). Kept isolated because it touches shared
 > CI/CD. Merge only after BE-3 exists so the sidecar has a consumer; can run in parallel otherwise.
 
-- [ ] J.1 `package.json`: add `"playwright-core": "1.XX.Y"` pinned exact (no `^`).
-- [ ] J.2 Edit `.github/workflows/deploy.yml`: add sidecar step before "Deploy container" (image `mcr.microsoft.com/playwright:v1.XX.Y-noble`, `--network ipnext-net --network-alias playwright --memory 1g --shm-size 1g --init`, port not published) + `-e SURICATA_BROWSER_WS=ws://playwright:3000/` on the BE container.
-- [ ] J.3 TDD composition: `playwright-core` version in `package.json` === sidecar tag in `deploy.yml`, exact match, no `^` — `src/__tests__/infrastructure/suricata-playwright-version.test.ts`.
-- [ ] J.4 Update `env.example` with `SURICATA_*` vars (D11); set real secrets via `gh secret set` (not committed).
+- [x] J.1 `package.json`: add `"playwright-core": "1.XX.Y"` pinned exact (no `^`).
+- [x] J.2 Edit `.github/workflows/deploy.yml`: add sidecar step before "Deploy container" (image `mcr.microsoft.com/playwright:v1.XX.Y-noble`, `--network ipnext-net --network-alias playwright --memory 1g --shm-size 1g --init`, port not published) + `-e SURICATA_BROWSER_WS=ws://playwright:3000/` on the BE container.
+- [x] J.3 TDD composition: `playwright-core` version in `package.json` === sidecar tag in `deploy.yml`, exact match, no `^` — `src/__tests__/infrastructure/suricata-playwright-version.test.ts`.
+- [x] J.4 Update `env.example` with `SURICATA_*` vars (D11); set real secrets via `gh secret set` (not committed).
 - [ ] J.5 Manual smoke (D14 steps 2–5): flip `suricata-sync-enabled`, verify `SuricataSyncRun.outcome='ok'`; then flip `suricata-reply-enabled` and send ONE real reply to a hand-picked ticket.
 
 ## Key Open Item Surfaced (not a business decision — a spec/design conflict)
