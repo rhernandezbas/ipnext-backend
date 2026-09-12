@@ -260,8 +260,10 @@ WHERE r."code" IN ('super_admin', 'administrador', 'noc')
   AND p."action" = 'manage'
 ON CONFLICT ("roleId", "permissionId") DO NOTHING;
 
--- 7. Grant suricata.reply → super_admin + administrador (D2: mismo alcance que
---    manage — responder a un cliente real es tan sensible como administrar el módulo).
+-- 7. Grant suricata.reply → super_admin + administrador SOLAMENTE (más
+--    restringido que manage, que desde d2d14218 también incluye a noc:
+--    responder a un cliente real es un envío irreversible, asignar un
+--    ticket a un colega no).
 INSERT INTO "RbacRolePermission" ("roleId", "permissionId", "createdAt")
 SELECT r."id", p."id", NOW()
 FROM "RbacRole" r
