@@ -60,6 +60,24 @@ export class SuricataAttachmentNotFoundError extends DomainError {
 }
 
 /**
+ * suricata-tickets-mirror (fix wave) — el adjunto DECLARA (via `Content-Length`)
+ * un tamaño por encima de `SURICATA_MAX_ATTACHMENT_BYTES`. Se corta antes de
+ * materializar el body, asi el tope deja de aplicarse recien con los bytes ya
+ * en el heap del proceso.
+ *
+ * `message` = `too_large`, exactamente el mismo `lastError` que ya escribe el
+ * chequeo por longitud de buffer en `SyncSuricataTickets`: mismo motivo, dos
+ * puntos de deteccion (header primero, buffer como red de contencion cuando el
+ * server no declara el tamaño).
+ */
+export class SuricataAttachmentTooLargeError extends DomainError {
+  constructor() {
+    super('too_large', 'SURICATA_ATTACHMENT_TOO_LARGE');
+    this.name = 'SuricataAttachmentTooLargeError';
+  }
+}
+
+/**
  * suricata-tickets-mirror (fix wave) — el `href` de un adjunto sale del HTML de
  * un sistema de TERCEROS. `new URL(ref, baseUrl)` IGNORA la base cuando `ref`
  * es absoluta, asi que un DOM comprometido podria apuntar al sidecar (que vive

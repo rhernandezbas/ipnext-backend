@@ -31,6 +31,7 @@
  * (molde `ChatMediaDownloadScheduler`).
  */
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
+import { SuricataAttachmentTooLargeError } from '@domain/errors/suricata';
 import type { SuricataBrowserSession } from './PlaywrightSuricataScraper';
 import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from './selectors';
 
@@ -40,6 +41,12 @@ export interface PlaywrightBrowserSessionConfig {
   baseUrl: string;
   username: string;
   password: string;
+  /**
+   * D7.b's per-attachment ceiling, pushed down to the adapter so it can be
+   * enforced on the DECLARED size before the body is materialized. The
+   * buffer-length check in `SyncSuricataTickets` stays as the backstop.
+   */
+  maxAttachmentBytes: number;
 }
 
 function resolveUrl(baseUrl: string, path: string): string {
@@ -122,8 +129,30 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
     // event API assumes a local filesystem, which does not exist here.
     const context = await this.ensureContext();
     const response = await context.request.get(url);
+    const headers = response.headers();
+
+    // Enforce the ceiling on the DECLARED size FIRST. Checking only
+    // `buffer.length` afterwards means a hostile or simply huge attachment is
+    // fully resident in this process's heap before we decide to reject it —
+    // the sidecar happily streams 2 GB and the BE container OOMs. Rejecting on
+    // the header costs one round trip of headers and nothing else.
+    const declaredLength = Number(headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > this.cfg.maxAttachmentBytes) {
+      // Free the connection/response without reading it.
+      await response.dispose();
+      throw new SuricataAttachmentTooLargeError();
+    }
+
+    // RESIDUAL (accepted, documented): a response with NO `Content-Length`
+    // (chunked transfer) cannot be pre-empted here — `APIResponse` has no
+    // streaming/partial-read API, `body()` is all-or-nothing. Those fall
+    // through to `SyncSuricataTickets`'s buffer-length check, which is the
+    // behaviour that already existed. Full streaming with an early abort would
+    // need a different transport than `context.request` (which is also what
+    // carries the authenticated cookie), so it is deliberately out of scope
+    // for this fix.
     const buffer = await response.body();
-    const mimeType = response.headers()['content-type'] ?? 'application/octet-stream';
+    const mimeType = headers['content-type'] ?? 'application/octet-stream';
     return { buffer, mimeType };
   }
 }

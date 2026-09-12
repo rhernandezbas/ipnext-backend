@@ -12,6 +12,7 @@
 import { chromium } from 'playwright-core';
 import { PlaywrightBrowserSession } from '@infrastructure/adapters/suricata/PlaywrightBrowserSession';
 import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from '@infrastructure/adapters/suricata/selectors';
+import { SuricataAttachmentTooLargeError } from '@domain/errors/suricata';
 
 jest.mock('playwright-core', () => ({
   chromium: { connect: jest.fn() },
@@ -48,14 +49,22 @@ function makeFakePage(opts: { loginFormCount?: number } = {}) {
   };
 }
 
-function makeFakeContext(page: ReturnType<typeof makeFakePage>) {
+function makeFakeResponse(headers: Record<string, string> = { 'content-type': 'image/png' }) {
+  return {
+    body: jest.fn().mockResolvedValue(Buffer.from('IMG')),
+    headers: jest.fn().mockReturnValue(headers),
+    dispose: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+function makeFakeContext(
+  page: ReturnType<typeof makeFakePage>,
+  response: ReturnType<typeof makeFakeResponse> = makeFakeResponse(),
+) {
   return {
     newPage: jest.fn().mockResolvedValue(page),
     request: {
-      get: jest.fn().mockResolvedValue({
-        body: jest.fn().mockResolvedValue(Buffer.from('IMG')),
-        headers: jest.fn().mockReturnValue({ 'content-type': 'image/png' }),
-      }),
+      get: jest.fn().mockResolvedValue(response),
     },
   };
 }
@@ -66,6 +75,7 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
     baseUrl: 'https://suricata.example.com',
     username: 'bot-user',
     password: 'bot-pass',
+    maxAttachmentBytes: 10 * 1024 * 1024,
   };
 
   beforeEach(() => {
@@ -172,6 +182,85 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
 
     expect(context.request.get).toHaveBeenCalledWith('https://suricata.example.com/attachments/1.png');
     expect(result).toEqual({ buffer: Buffer.from('IMG'), mimeType: 'image/png' });
+  });
+
+  describe('attachment size ceiling is enforced BEFORE the body is materialized', () => {
+    it('a Content-Length over the ceiling aborts without ever calling response.body()', async () => {
+      const page = makeFakePage();
+      const response = makeFakeResponse({ 'content-type': 'application/octet-stream', 'content-length': '99999999' });
+      const context = makeFakeContext(page, response);
+      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1024 });
+
+      await expect(session.fetchBinary('https://suricata.example.com/big.bin')).rejects.toThrow(
+        SuricataAttachmentTooLargeError,
+      );
+      // The whole point: the 99MB never lands in this process's heap.
+      expect(response.body).not.toHaveBeenCalled();
+      expect(response.dispose).toHaveBeenCalled();
+    });
+
+    it('the rejection message is exactly `too_large`, matching the existing lastError convention', async () => {
+      const page = makeFakePage();
+      const response = makeFakeResponse({ 'content-length': '5000' });
+      const context = makeFakeContext(page, response);
+      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 100 });
+
+      let thrown: unknown;
+      try {
+        await session.fetchBinary('https://suricata.example.com/big.bin');
+      } catch (err) {
+        thrown = err;
+      }
+      expect((thrown as Error).message).toBe('too_large');
+    });
+
+    it('a Content-Length within the ceiling proceeds normally', async () => {
+      const page = makeFakePage();
+      const response = makeFakeResponse({ 'content-type': 'image/png', 'content-length': '3' });
+      const context = makeFakeContext(page, response);
+      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1024 });
+      const result = await session.fetchBinary('https://suricata.example.com/small.png');
+
+      expect(result).toEqual({ buffer: Buffer.from('IMG'), mimeType: 'image/png' });
+      expect(response.body).toHaveBeenCalled();
+    });
+
+    it('RESIDUAL — no Content-Length header: the body IS materialized, and the SyncSuricataTickets post-check stays the backstop', async () => {
+      const page = makeFakePage();
+      const response = makeFakeResponse({ 'content-type': 'image/png' }); // no content-length
+      const context = makeFakeContext(page, response);
+      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1 });
+      const result = await session.fetchBinary('https://suricata.example.com/unknown-size.png');
+
+      // Documented, deliberate: this adapter cannot pre-empt what the server
+      // does not declare. The 3-byte body comes back even though the ceiling
+      // is 1 byte, and `SyncSuricataTickets` rejects it by buffer length.
+      expect(result.buffer).toEqual(Buffer.from('IMG'));
+      expect(response.body).toHaveBeenCalled();
+    });
+
+    it('a garbage Content-Length is ignored rather than trusted (falls through to the backstop)', async () => {
+      const page = makeFakePage();
+      const response = makeFakeResponse({ 'content-type': 'image/png', 'content-length': 'not-a-number' });
+      const context = makeFakeContext(page, response);
+      const browser = { newContext: jest.fn().mockResolvedValue(context) };
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession({ ...cfg, maxAttachmentBytes: 1024 });
+      await expect(session.fetchBinary('https://suricata.example.com/x.png')).resolves.toBeTruthy();
+    });
   });
 
   it('connects to the sidecar via chromium.connect ONLY ONCE across multiple calls (lazy, memoized context)', async () => {

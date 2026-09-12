@@ -43,7 +43,7 @@ let resolved = false;
 export function getSharedSuricataSession(): SuricataSession<PlaywrightBrowserSession> | null {
   if (resolved) return shared;
 
-  const { baseUrl, browserWs, user, password } = config.suricata;
+  const { baseUrl, browserWs, user, password, maxAttachmentBytes } = config.suricata;
   resolved = true;
 
   if (!baseUrl || !browserWs) {
@@ -51,7 +51,13 @@ export function getSharedSuricataSession(): SuricataSession<PlaywrightBrowserSes
     return shared;
   }
 
-  const browserSession = new PlaywrightBrowserSession({ browserWs, baseUrl, username: user, password });
+  const browserSession = new PlaywrightBrowserSession({
+    browserWs,
+    baseUrl,
+    username: user,
+    password,
+    maxAttachmentBytes,
+  });
   shared = new SuricataSession(browserSession, new PgAdvisoryLock());
   return shared;
 }
