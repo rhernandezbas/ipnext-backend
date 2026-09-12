@@ -85,6 +85,30 @@ describe('ListSuricataTickets', () => {
     expect(result.data[0]?.areaName).toBe('Soporte Técnico');
   });
 
+  it('UI-1.b — each row carries the customer name/phone (operator needs to know WHO the ticket is about)', async () => {
+    const { useCase, tickets, tNoVerdict } = await seed();
+    await tickets.upsertByExternalId({
+      externalId: 'ext-1',
+      subject: 'Sin internet',
+      status: 'abierto',
+      priority: 'alta',
+      areaId: null,
+      customerName: 'María Gómez',
+      customerEmail: null,
+      customerPhone: '+549232455511',
+      externalClientRef: null,
+      clientId: null,
+      openedAt: '2026-09-01T00:00:00.000Z',
+      lastMessageAt: '2026-09-01T10:00:00.000Z',
+      contentHash: 'hash-v1',
+      syncedAt: '2026-09-01T00:00:00.000Z',
+    });
+    const result = await useCase.execute();
+    const row = result.data.find((t) => t.id === tNoVerdict.id);
+    expect(row?.customerName).toBe('María Gómez');
+    expect(row?.customerPhone).toBe('+549232455511');
+  });
+
   it('filters by assigneeId and resolves assigneeName', async () => {
     const { useCase, agent, tHumano } = await seed();
     const result = await useCase.execute({ filters: { assigneeId: agent.id } });

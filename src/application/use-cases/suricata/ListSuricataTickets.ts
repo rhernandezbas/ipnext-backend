@@ -72,6 +72,8 @@ export class ListSuricataTickets {
       priority: ticket.priority,
       areaId: ticket.areaId,
       areaName: ticket.areaId ? areaNameById.get(ticket.areaId) ?? null : null,
+      customerName: ticket.customerName,
+      customerPhone: ticket.customerPhone,
       botState,
       assigneeId: ticket.assigneeId,
       assigneeName: ticket.assigneeId ? userNameById.get(ticket.assigneeId) ?? null : null,

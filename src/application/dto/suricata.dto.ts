@@ -25,6 +25,8 @@ export interface SuricataTicketListItemDto {
   priority: string | null;
   areaId: string | null;
   areaName: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
   botState: SuricataBotState;
   assigneeId: string | null;
   assigneeName: string | null;
