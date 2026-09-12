@@ -12,7 +12,7 @@
 import { chromium } from 'playwright-core';
 import { PlaywrightBrowserSession } from '@infrastructure/adapters/suricata/PlaywrightBrowserSession';
 import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from '@infrastructure/adapters/suricata/selectors';
-import { SuricataAttachmentTooLargeError } from '@domain/errors/suricata';
+import { SuricataAttachmentTooLargeError, SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 
 jest.mock('playwright-core', () => ({
   chromium: { connect: jest.fn() },
@@ -49,10 +49,11 @@ function makeFakePage(opts: { loginFormCount?: number } = {}) {
   };
 }
 
-function makeFakeResponse(headers: Record<string, string> = { 'content-type': 'image/png' }) {
+function makeFakeResponse(headers: Record<string, string> = { 'content-type': 'image/png' }, status = 200) {
   return {
     body: jest.fn().mockResolvedValue(Buffer.from('IMG')),
     headers: jest.fn().mockReturnValue(headers),
+    status: jest.fn().mockReturnValue(status),
     dispose: jest.fn().mockResolvedValue(undefined),
   };
 }
@@ -188,8 +189,86 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
     const session = new PlaywrightBrowserSession(cfg);
     const result = await session.fetchBinary('https://suricata.example.com/attachments/1.png');
 
-    expect(context.request.get).toHaveBeenCalledWith('https://suricata.example.com/attachments/1.png');
+    expect(context.request.get).toHaveBeenCalledWith('https://suricata.example.com/attachments/1.png', {
+      maxRedirects: 0,
+    });
     expect(result).toEqual({ buffer: Buffer.from('IMG'), mimeType: 'image/png' });
+  });
+
+  describe('the SSRF guard is not evadable through a redirect', () => {
+    /**
+     * `PlaywrightSuricataScraper.fetchAttachment` validates the ORIGIN of the
+     * URL it hands down here, but that check only ever sees the INITIAL URL.
+     * `APIRequestContext.get` follows up to 20 redirects by default, so a
+     * same-origin attachment answering `302 Location: http://<internal-host>/`
+     * would make Playwright take the jump on its own, with the authenticated
+     * session, and the body of the FINAL hop would be persisted to MinIO
+     * exactly as if the guard did not exist.
+     */
+    it('a 302 pointing at another origin is refused as invalid_origin, and its body is never read', async () => {
+      const page = makeFakePage();
+      const response = makeFakeResponse({ location: 'http://169.254.169.254/latest/meta-data/' }, 302);
+      const context = makeFakeContext(page, response);
+      const browser = makeFakeBrowser(context);
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+
+      await expect(session.fetchBinary('https://suricata.example.com/attachments/1.png')).rejects.toThrow(
+        SuricataAttachmentInvalidOriginError,
+      );
+      // The jump is never taken and nothing from the target is materialized.
+      expect(response.body).not.toHaveBeenCalled();
+      expect(response.dispose).toHaveBeenCalled();
+    });
+
+    it('tells Playwright not to follow redirects at all (maxRedirects: 0)', async () => {
+      const page = makeFakePage();
+      const context = makeFakeContext(page);
+      const browser = makeFakeBrowser(context);
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+      await session.fetchBinary('https://suricata.example.com/attachments/1.png');
+
+      // Without this, the 3xx check below never even runs: Playwright resolves
+      // the final hop and hands us a 200 from wherever it landed.
+      expect(context.request.get).toHaveBeenCalledWith('https://suricata.example.com/attachments/1.png', {
+        maxRedirects: 0,
+      });
+    });
+
+    it('the rejection message is exactly `invalid_origin`, the same lastError the origin guard already writes', async () => {
+      const page = makeFakePage();
+      const response = makeFakeResponse({ location: '/otra/cosa' }, 301);
+      const context = makeFakeContext(page, response);
+      const browser = makeFakeBrowser(context);
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+
+      let thrown: unknown;
+      try {
+        await session.fetchBinary('https://suricata.example.com/attachments/1.png');
+      } catch (err) {
+        thrown = err;
+      }
+      // Even a SAME-origin redirect is refused: this adapter cannot re-run the
+      // scraper's origin check, so every 3xx is treated the same way.
+      expect((thrown as Error).message).toBe('invalid_origin');
+    });
+
+    it('a plain 200 is unaffected', async () => {
+      const page = makeFakePage();
+      const context = makeFakeContext(page);
+      const browser = makeFakeBrowser(context);
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+      const result = await session.fetchBinary('https://suricata.example.com/attachments/1.png');
+
+      expect(result).toEqual({ buffer: Buffer.from('IMG'), mimeType: 'image/png' });
+    });
   });
 
   describe('attachment size ceiling is enforced BEFORE the body is materialized', () => {

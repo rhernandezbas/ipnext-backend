@@ -35,7 +35,7 @@
  * recovers on the next tick instead of requiring a BE restart.
  */
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
-import { SuricataAttachmentTooLargeError } from '@domain/errors/suricata';
+import { SuricataAttachmentTooLargeError, SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 import type { SuricataBrowserSession } from './PlaywrightSuricataScraper';
 import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from './selectors';
 
@@ -147,6 +147,13 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
     }
   }
 
+  /**
+   * RESIDUAL (accepted): `page.goto` has no redirect switch, so this method
+   * cannot pin the final origin the way `fetchBinary` does. Scoped risk: every
+   * url reaching here is built by `PlaywrightSuricataScraper` from
+   * `cfg.baseUrl` + a constant path — never from an href in third-party HTML —
+   * and the result is parsed into typed rows, never persisted as raw bytes.
+   */
   async fetchHtml(url: string): Promise<string> {
     const context = await this.ensureContext();
     const page = await context.newPage();
@@ -163,7 +170,27 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
     // session cookie and works against a REMOTE browser; the `download`
     // event API assumes a local filesystem, which does not exist here.
     const context = await this.ensureContext();
-    const response = await context.request.get(url);
+    // `maxRedirects: 0` ("pass `0` to not follow redirects", playwright-core
+    // 1.63 `APIRequestContext.get`) is what makes the SSRF guard in
+    // `PlaywrightSuricataScraper.fetchAttachment` actually binding. That guard
+    // only ever sees the INITIAL url; by default this call follows up to 20
+    // redirects, so a same-origin attachment answering
+    // `302 Location: http://<internal-host>/` would be chased here, with the
+    // authenticated session, and the final hop's body persisted to MinIO as if
+    // no guard existed.
+    const response = await context.request.get(url, { maxRedirects: 0 });
+
+    // Any 3xx is refused rather than followed. This adapter deliberately does
+    // NOT try to re-validate the `Location` origin: it does not own the
+    // baseUrl/origin policy (the scraper does), and Suricata attachments are
+    // served directly. A legitimate redirect showing up here is a change in the
+    // remote system that must be reviewed, not silently followed.
+    const status = response.status();
+    if (status >= 300 && status < 400) {
+      await response.dispose();
+      throw new SuricataAttachmentInvalidOriginError();
+    }
+
     const headers = response.headers();
 
     // Enforce the ceiling on the DECLARED size FIRST. Checking only
