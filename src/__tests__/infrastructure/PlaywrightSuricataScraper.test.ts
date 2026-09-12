@@ -4,6 +4,7 @@ import {
   type SuricataBrowserSession,
 } from '@infrastructure/adapters/suricata/PlaywrightSuricataScraper';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
+import { SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 
 /**
  * suricata-tickets-mirror (Phase C, task C.4, D0/D3/D4) — orchestration tests:
@@ -73,6 +74,58 @@ describe('PlaywrightSuricataScraper', () => {
 
     expect(browserSession.fetchBinary).toHaveBeenCalledWith('https://suricata.example.com/attachments/att-1.png');
     expect(result).toEqual({ buffer: Buffer.from('IMG'), mimeType: 'image/png', fileName: 'att-1.png' });
+  });
+
+  describe('SSRF guard — the attachment href comes from a THIRD-PARTY DOM', () => {
+    // `new URL(ref, baseUrl)` IGNORES the base when `ref` is absolute, so a
+    // poisoned/compromised Suricata page could aim the sidecar (which sits on
+    // the internal `ipnext-net`) at any host it likes, and the response would
+    // be persisted and later served by us.
+    const hostile = [
+      ['another public host', 'https://evil.example.com/payload.png'],
+      ['an internal service', 'http://minio:9000/ipnext/secrets.json'],
+      ['the cloud metadata endpoint', 'http://169.254.169.254/latest/meta-data/iam/security-credentials/'],
+      ['a different port on the same host', 'https://suricata.example.com:8443/att.png'],
+      ['a different scheme on the same host', 'http://suricata.example.com/att.png'],
+      ['a file:// ref', 'file:///etc/passwd'],
+      ['a protocol-relative ref', '//evil.example.com/payload.png'],
+    ] as const;
+
+    it.each(hostile)('rejects %s without ever calling fetchBinary', async (_label, ref) => {
+      const browserSession = makeFakeBrowserSession();
+      const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
+      const scraper = new PlaywrightSuricataScraper(session, cfg);
+
+      await expect(scraper.fetchAttachment(ref)).rejects.toThrow(SuricataAttachmentInvalidOriginError);
+      expect(browserSession.fetchBinary).not.toHaveBeenCalled();
+    });
+
+    it('the thrown error message is exactly `invalid_origin`, so the sync marks the row failed/invalid_origin', async () => {
+      const browserSession = makeFakeBrowserSession();
+      const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
+      const scraper = new PlaywrightSuricataScraper(session, cfg);
+
+      let thrown: unknown;
+      try {
+        await scraper.fetchAttachment('http://169.254.169.254/latest/meta-data/');
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect((thrown as Error).message).toBe('invalid_origin');
+    });
+
+    it('still accepts a same-origin ABSOLUTE ref (not everything absolute is hostile)', async () => {
+      const browserSession = makeFakeBrowserSession({
+        fetchBinary: jest.fn().mockResolvedValue({ buffer: Buffer.from('IMG'), mimeType: 'image/png' }),
+      });
+      const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
+      const scraper = new PlaywrightSuricataScraper(session, cfg);
+
+      await scraper.fetchAttachment('https://suricata.example.com/attachments/att-9.png');
+
+      expect(browserSession.fetchBinary).toHaveBeenCalledWith('https://suricata.example.com/attachments/att-9.png');
+    });
   });
 
   it('D0 — each call acquires and releases the session independently (never once for the whole run)', async () => {

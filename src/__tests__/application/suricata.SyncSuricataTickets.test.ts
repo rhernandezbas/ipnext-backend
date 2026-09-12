@@ -443,6 +443,46 @@ describe('SyncSuricataTickets', () => {
     });
   });
 
+  describe('SSRF guard — an attachment pointing outside baseUrl', () => {
+    it('leaves the row failed with lastError=invalid_origin and stores no bytes', async () => {
+      const { scraper, attachments, fileStorage, useCase } = makeHarness();
+      scraper.areas = [];
+      scraper.pagesByNumber.set(1, {
+        tickets: [{ externalId: 't-1', subject: 'adjunto hostil', status: 'abierto', priority: null, areaExternalId: null, lastMessageAt: '2026-09-01T10:00:00.000Z', messageCount: 1 }],
+        hasNextPage: false,
+      });
+      const hostileRef = 'http://169.254.169.254/latest/meta-data/';
+      scraper.ticketDetailsByExternalId.set(
+        't-1',
+        ticketDetail({
+          externalId: 't-1',
+          areaExternalId: null,
+          messages: [
+            {
+              externalId: 't-1-m1',
+              author: 'Juan',
+              authorKind: 'customer',
+              body: 'mira esto',
+              sentAt: '2026-09-01T10:00:00.000Z',
+              attachments: [{ externalRef: hostileRef, fileName: 'x.png', mimeType: 'image/png', sizeBytes: 10 }],
+            },
+          ],
+        }),
+      );
+      scraper.invalidOriginAttachmentRefs.add(hostileRef);
+
+      const run = await useCase.execute();
+
+      expect(run.attachmentsStored).toBe(0);
+      const retriable = await attachments.listRetriable({ maxAttempts: 5 });
+      expect(retriable).toHaveLength(1);
+      expect(retriable[0].status).toBe('failed');
+      expect(retriable[0].lastError).toBe('invalid_origin');
+      expect(retriable[0].storageKey).toBeNull();
+      expect(fileStorage.store.size).toBe(0);
+    });
+  });
+
   describe('MIRROR-8 — read-only guard', () => {
     it('a sync run never invokes anything beyond the four read-only SuricataScraperPort methods', async () => {
       const { tickets, messages, attachments, areas, syncRuns, fileStorage } = makeHarness();

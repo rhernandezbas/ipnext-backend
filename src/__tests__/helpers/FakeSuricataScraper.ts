@@ -5,6 +5,7 @@ import type {
   SuricataTicketDetail,
   SuricataFetchedAttachment,
 } from '@domain/ports/SuricataScraperPort';
+import { SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 
 /**
  * suricata-tickets-mirror (Phase C, task C.4, D3/D12) — test double for
@@ -32,6 +33,12 @@ export class FakeSuricataScraper implements SuricataScraperPort {
   /** Keyed by attachment `externalRef`. */
   public attachmentsByRef = new Map<string, SuricataFetchedAttachment>();
   public failingAttachmentRefs = new Set<string>();
+  /**
+   * Refs the REAL adapter would refuse for pointing outside `baseUrl` (SSRF
+   * guard). Throws the same typed error `PlaywrightSuricataScraper` throws, so
+   * the use case's handling of it is exercised end to end.
+   */
+  public invalidOriginAttachmentRefs = new Set<string>();
   public fetchAttachmentCalls: string[] = [];
 
   async listAreas(): Promise<SuricataAreaSummary[]> {
@@ -55,6 +62,9 @@ export class FakeSuricataScraper implements SuricataScraperPort {
 
   async fetchAttachment(ref: string): Promise<SuricataFetchedAttachment> {
     this.fetchAttachmentCalls.push(ref);
+    if (this.invalidOriginAttachmentRefs.has(ref)) {
+      throw new SuricataAttachmentInvalidOriginError();
+    }
     if (this.failingAttachmentRefs.has(ref)) {
       throw new Error(`fake: attachment fetch failed for ${ref}`);
     }

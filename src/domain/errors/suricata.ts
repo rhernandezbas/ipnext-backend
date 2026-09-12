@@ -60,6 +60,26 @@ export class SuricataAttachmentNotFoundError extends DomainError {
 }
 
 /**
+ * suricata-tickets-mirror (fix wave) — el `href` de un adjunto sale del HTML de
+ * un sistema de TERCEROS. `new URL(ref, baseUrl)` IGNORA la base cuando `ref`
+ * es absoluta, asi que un DOM comprometido podria apuntar al sidecar (que vive
+ * en la red interna `ipnext-net`) contra cualquier host — MinIO, el endpoint de
+ * metadata del cloud, lo que sea — y el resultado quedaria persistido y
+ * servible por nosotros. Esto corta ese vector ANTES de cualquier fetch.
+ *
+ * El `message` es EXACTAMENTE `invalid_origin` porque `SyncSuricataTickets`
+ * persiste `err.message` crudo en `SuricataAttachment.lastError` (mismo criterio
+ * que `too_large`): es un motivo legible en la fila, no una URL hostil filtrada
+ * a la DB.
+ */
+export class SuricataAttachmentInvalidOriginError extends DomainError {
+  constructor() {
+    super('invalid_origin', 'SURICATA_ATTACHMENT_INVALID_ORIGIN');
+    this.name = 'SuricataAttachmentInvalidOriginError';
+  }
+}
+
+/**
  * suricata-tickets-mirror (Phase C, task C.5) — `finish(id, ...)` recibió un
  * id de corrida que `start()` nunca creó (molde `AttachmentNotFoundError`).
  */

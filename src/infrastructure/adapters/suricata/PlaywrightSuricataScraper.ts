@@ -24,6 +24,7 @@ import type {
   SuricataTicketDetail,
   SuricataFetchedAttachment,
 } from '@domain/ports/SuricataScraperPort';
+import { SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 import { SuricataSession, type SuricataAuthSession } from './SuricataSession';
 import { parseSuricataAreaList, parseSuricataTicketListPage, parseSuricataTicketDetail } from './selectors';
 
@@ -51,6 +52,46 @@ const TICKET_DETAIL_PATH = '/tickets';
 
 function resolveUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
+}
+
+/** Only these two ever reach the sidecar. `file:`, `data:`, `gopher:` etc. are out. */
+const ALLOWED_ATTACHMENT_PROTOCOLS = new Set(['http:', 'https:']);
+
+/**
+ * SSRF guard for attachment refs (fix wave).
+ *
+ * `listAreas`/`listTicketPage`/`getTicket` build their URLs from constants, so
+ * `new URL(path, baseUrl)` there is always same-origin by construction. An
+ * ATTACHMENT ref is different: it is an `href` lifted verbatim out of
+ * Suricata's HTML, i.e. attacker-influenceable input. And `new URL` DISCARDS
+ * the base whenever the ref is absolute (`http://169.254.169.254/...`) or
+ * protocol-relative (`//evil.example.com/...`) — so "resolving against baseUrl"
+ * is not, by itself, any containment at all.
+ *
+ * The sidecar runs inside the internal Docker network, holds an authenticated
+ * session, and whatever it downloads gets persisted to MinIO and served back
+ * through our own attachment route. So this compares the RESOLVED origin
+ * (scheme + host + port) against `baseUrl`'s and refuses anything else, before
+ * a single byte is requested.
+ */
+function assertSameOriginAttachment(baseUrl: string, resolvedUrl: string): void {
+  let resolved: URL;
+  let base: URL;
+  try {
+    resolved = new URL(resolvedUrl);
+    base = new URL(baseUrl);
+  } catch {
+    throw new SuricataAttachmentInvalidOriginError();
+  }
+
+  if (!ALLOWED_ATTACHMENT_PROTOCOLS.has(resolved.protocol)) {
+    throw new SuricataAttachmentInvalidOriginError();
+  }
+  // `origin` folds scheme + host + port together, so an http downgrade or a
+  // port swap on the same hostname is rejected too.
+  if (resolved.origin !== base.origin) {
+    throw new SuricataAttachmentInvalidOriginError();
+  }
 }
 
 export class PlaywrightSuricataScraper implements SuricataScraperPort {
@@ -83,8 +124,12 @@ export class PlaywrightSuricataScraper implements SuricataScraperPort {
   }
 
   async fetchAttachment(ref: string): Promise<SuricataFetchedAttachment> {
+    // Validated BEFORE the mutex is acquired: a hostile ref should not make the
+    // sync lane queue up behind (or hold up) anything.
+    const url = resolveUrl(this.cfg.baseUrl, ref);
+    assertSameOriginAttachment(this.cfg.baseUrl, url);
+
     return this.session.withSession({ priority: 'low', timeoutMs: this.cfg.sessionTimeoutMs }, async (s) => {
-      const url = resolveUrl(this.cfg.baseUrl, ref);
       const { buffer, mimeType } = await s.fetchBinary(url);
       const fileName = ref.split('/').pop() || ref;
       return { buffer, mimeType, fileName };
