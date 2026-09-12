@@ -687,7 +687,7 @@ import { PrismaAuditEventRepository } from '../adapters/prisma/PrismaAuditEventR
 import { PrismaSessionRepository } from '../adapters/prisma/PrismaSessionRepository';
 import { auditMutationsMiddleware } from './middleware/auditMutationsMiddleware';
 import { machineActorMiddleware } from './middleware/machineActorMiddleware';
-import { API_MESSAGING_USER_LOGIN } from '@domain/constants/machineUsers';
+import { API_MESSAGING_USER_LOGIN, API_SURICATA_USER_LOGIN } from '@domain/constants/machineUsers';
 import { PrismaRbacUserRoleRepository } from '../adapters/prisma/PrismaRbacUserRoleRepository';
 import { PrismaRbacRolePermissionRepository } from '../adapters/prisma/PrismaRbacRolePermissionRepository';
 import { requirePermission } from './middleware/requirePermission';
@@ -807,6 +807,30 @@ import { composeAlertsModule } from './composeAlertsModule';
 import { composeAssistantModule } from './composeAssistantModule';
 // ── ai-assistant-multiagent — MOTOR del asistente; wiring en composeAssistantEngine ─────
 import { composeAssistantEngine } from './composeAssistantEngine';
+// ── suricata-tickets-mirror (Fase A) — panel interno; wiring en composeSuricataModule ───
+import { composeSuricataModule } from './composeSuricataModule';
+// ── suricata-tickets-mirror (Fase A) — endpoint externo; wiring en composeSuricataExternalModule ─
+import { composeSuricataExternalModule } from './composeSuricataExternalModule';
+// ── suricata-tickets-mirror (Fase D, D3/D8) — repos + use case del endpoint externo ─
+import { PrismaSuricataTicketRepository } from '@infrastructure/adapters/prisma/PrismaSuricataTicketRepository';
+import { PrismaSuricataAttachmentRepository } from '@infrastructure/adapters/prisma/PrismaSuricataAttachmentRepository';
+import { PrismaSuricataVerdictRepository } from '@infrastructure/adapters/prisma/PrismaSuricataVerdictRepository';
+import { SubmitSuricataVerdict } from '@application/use-cases/suricata/SubmitSuricataVerdict';
+// ── suricata-tickets-mirror (Fase E, D3/D10) — repo + use case + guarded port del reply interno ─
+import { PrismaSuricataReplyAuditRepository } from '@infrastructure/adapters/prisma/PrismaSuricataReplyAuditRepository';
+import { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
+// ⚠️ CONSERVATIVE GUARD (Fase E, ver el doc comment del archivo): NUNCA
+// `PlaywrightSuricataReply` acá hasta que la Fase J exista de verdad — este
+// port falla SIEMPRE, sin importar el flag/RBAC, porque no hay ningún driver
+// Playwright real todavía.
+import { UnavailableSuricataReplyPort } from '@infrastructure/adapters/suricata/UnavailableSuricataReplyPort';
+// ── suricata-tickets-mirror (Fase F, D3/D13) — repos + use cases del panel READ ─
+import { PrismaSuricataMessageRepository } from '@infrastructure/adapters/prisma/PrismaSuricataMessageRepository';
+import { PrismaSuricataAreaRepository } from '@infrastructure/adapters/prisma/PrismaSuricataAreaRepository';
+import { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
+import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
+import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
+import { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
 import { ChatMessageThreadReader } from '@infrastructure/adapters/assistant/ChatMessageThreadReader';
 import { CustomerAssistantClientResolver } from '@infrastructure/adapters/assistant/CustomerAssistantClientResolver';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
@@ -3283,6 +3307,69 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // así la configuración puede estar viva y editándose con el bot completamente mudo.
   app.use('/api/assistant', composeAssistantModule({ authAdapter, sessionRepo, requirePerm }));
 
+  // ─── suricata-tickets-mirror (Fase A — BE Slice 0, D8; Fase E — reply real) ──
+  // Espejo READ-ONLY de tickets de Suricata Cx + veredicto del bot + reply guardado.
+  // Fase E reemplaza SOLO `POST /tickets/:id/reply` (el resto sigue 501, Fase F
+  // scope). Heavy wiring vive en composeSuricataModule.
+  //
+  // ⚠️ Guard de 3 capas independientes contra un envío real HOY (ninguna sola
+  // basta, ver `UnavailableSuricataReplyPort.ts`):
+  //   1. `suricata-reply-enabled` — flag sembrado `false` (migración Fase A).
+  //   2. `suricata.reply` — RBAC grantado solo a super_admin/administrador.
+  //   3. `UnavailableSuricataReplyPort` — el port wireado ACÁ SIEMPRE tira
+  //      `SuricataReplyDriverUnavailableError` (502), sin importar 1 y 2: no
+  //      existe ningún driver Playwright real hasta la Fase J (D5).
+  const suricataInternalTicketRepo = new PrismaSuricataTicketRepository();
+  const suricataReplyAuditRepo = new PrismaSuricataReplyAuditRepository();
+  const suricataInternalFeatureFlagRepo = new PrismaFeatureFlagRepository();
+  const replyToSuricataTicket = new ReplyToSuricataTicket(
+    suricataInternalTicketRepo,
+    suricataReplyAuditRepo,
+    new UnavailableSuricataReplyPort(),
+  );
+  // Fase F (D3/D13) — panel READ routes + assignment PATCH, mismo mount.
+  // `rbacUserRepo` (declarado arriba, L1243) se REUSA para resolver
+  // `assigneeName` — ningún 2º rbacUserRepo (mismo criterio D8 que el
+  // `requirePerm` inyectado).
+  const suricataInternalMessageRepo = new PrismaSuricataMessageRepository();
+  const suricataInternalAttachmentRepo = new PrismaSuricataAttachmentRepository();
+  const suricataInternalAreaRepo = new PrismaSuricataAreaRepository();
+  const suricataInternalVerdictRepo = new PrismaSuricataVerdictRepository();
+  const listSuricataTickets = new ListSuricataTickets(
+    suricataInternalTicketRepo,
+    suricataInternalVerdictRepo,
+    suricataInternalAreaRepo,
+    rbacUserRepo,
+  );
+  const getSuricataTicketDetail = new GetSuricataTicketDetail(
+    suricataInternalTicketRepo,
+    suricataInternalMessageRepo,
+    suricataInternalAttachmentRepo,
+    suricataInternalVerdictRepo,
+    suricataInternalAreaRepo,
+    rbacUserRepo,
+  );
+  const computeSuricataKpis = new ComputeSuricataKpis(suricataInternalTicketRepo, suricataInternalVerdictRepo);
+  const setSuricataAssignee = new SetSuricataAssignee(suricataInternalTicketRepo, rbacUserRepo);
+  app.use('/api/suricata', composeSuricataModule({
+    authAdapter,
+    sessionRepo,
+    requirePerm,
+    replyToSuricataTicket,
+    featureFlags: suricataInternalFeatureFlagRepo,
+    listSuricataTickets,
+    getSuricataTicketDetail,
+    computeSuricataKpis,
+    setSuricataAssignee,
+    areaRepo: suricataInternalAreaRepo,
+    attachmentRepo: suricataInternalAttachmentRepo,
+    fileStorage: taskPhotoStorage,
+  }));
+  // [suricata-internal-mount-end]
+  // ↑ Fase H gap (D7.c): `attachmentRepo`/`fileStorage` habilitan la ruta
+  // espejo interna del adjunto (MISMO storage compartido `taskPhotoStorage`
+  // que la ruta externa) para que el detalle del panel sirva audio inline.
+
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
   {
     const conversationRepo = new PrismaConversationRepository();
@@ -3979,6 +4066,40 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // Compensation port — hard-delete the post if the attach phase fails (all-or-nothing 5xx).
     newsPostRepo,
   );
+
+  // ─── suricata-tickets-mirror (Fase D, D0/D7.c/D8) — endpoint EXTERNO ────────
+  // ⚠️ ORDEN LOAD-BEARING: este mount DEBE quedar registrado ANTES del mount
+  // GLOBAL de abajo (prefijo `/api/external/v1` + `createApiKeyMiddleware()` sin
+  // key dedicada) — Express matchea en orden de registro; si cayera DESPUÉS, la
+  // key GLOBAL interceptaría `/suricata/*` y la key dedicada
+  // (`config.suricata.externalApiKey`) nunca se evaluaría (mismo incidente
+  // documentado para external-bulk-messaging arriba). Pineado por
+  // `suricata-composition.test.ts`.
+  // Fase D reemplaza el Slice 0 (501 dark) por la key dedicada +
+  // `machineActorMiddleware` (D8), ahora que `config.suricata.*` (D11) y el
+  // usuario máquina `api-suricata` (`bootstrapApiSuricataUser`, main.ts)
+  // existen. `submittedBy` en `SubmitSuricataVerdict` es un LITERAL
+  // (`API_SURICATA_USER_LOGIN`), no lee `req.user` — el middleware de acá es
+  // solo para `auditMutationsMiddleware` (molde external-bulk-messaging).
+  const suricataTicketRepo = new PrismaSuricataTicketRepository();
+  const suricataAttachmentRepo = new PrismaSuricataAttachmentRepository();
+  const suricataVerdictRepo = new PrismaSuricataVerdictRepository();
+  const suricataFeatureFlagRepo = new PrismaFeatureFlagRepository();
+  app.use('/api/external/v1/suricata',
+    createApiKeyMiddleware(config.suricata.externalApiKey),
+    machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN),
+    composeSuricataExternalModule({
+      submitSuricataVerdict: new SubmitSuricataVerdict(suricataTicketRepo, suricataVerdictRepo),
+      ticketRepo: suricataTicketRepo,
+      attachmentRepo: suricataAttachmentRepo,
+      // D7.a — MISMO storage/bucket que task-photos, aislado por prefijo de key
+      // (`suricata/<sha256>`), MISMA instancia ya construida arriba.
+      fileStorage: taskPhotoStorage,
+      featureFlags: suricataFeatureFlagRepo,
+    }),
+  );
+  // [suricata-external-mount-end]
+
   app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts, {
     createTicket,
     rbacUserRepo,

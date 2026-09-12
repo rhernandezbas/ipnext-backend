@@ -793,4 +793,62 @@ export const config = {
   firebase: {
     serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON ?? '',
   },
+
+  /**
+   * suricata-tickets-mirror (D11) — Suricata Cx integration: headless Playwright
+   * mirror sync (Phase C) + guarded reply (Phase E). Opt-in, NOT in REQUIRED_VARS
+   * (same pattern as iclass/uisp/router): missing credentials/browserWs leave the
+   * feature dark — `bootstrapSuricataSync` (Phase C) returns null,
+   * `createApiKeyMiddleware(externalApiKey)` 401s on an empty key (D8), and
+   * `SuricataSession` (Phase B) is simply never constructed. The boot NEVER
+   * fails for this integration.
+   */
+  suricata: {
+    baseUrl: process.env.SURICATA_BASE_URL ?? '',
+    user: process.env.SURICATA_USER ?? '',
+    password: process.env.SURICATA_PASSWORD ?? '',
+    /** ws:// del sidecar Playwright run-server (D5). Vacío ⇒ feature inerte. */
+    browserWs: process.env.SURICATA_BROWSER_WS ?? '',
+    /** Key M2M dedicada de /api/external/v1/suricata/*; vacía ⇒ 401 fail-closed. */
+    externalApiKey: process.env.SURICATA_EXTERNAL_API_KEY ?? '',
+    /**
+     * Frecuencia del tick de sync. Piso 60s (no martillar un sitio ajeno),
+     * techo 24h (fat-finger de unidades). Inválido/ausente → default 15min.
+     */
+    syncIntervalMs: parseIntervalMs(process.env.SURICATA_SYNC_INTERVAL_MS, {
+      default: 900_000,
+      min: 60_000,
+      max: 86_400_000,
+    }),
+    /** MIRROR-1/D6.a — ventana del backfill inicial, en días. */
+    backfillDays: parsePositiveInt(process.env.SURICATA_BACKFILL_DAYS, {
+      default: 90,
+      min: 1,
+      max: 3650,
+    }),
+    /** D6.a — tope de páginas de la lista por corrida (evita un scrape sin techo). */
+    maxPagesPerRun: parsePositiveInt(process.env.SURICATA_MAX_PAGES_PER_RUN, {
+      default: 20,
+      min: 1,
+      max: 10_000,
+    }),
+    /**
+     * D4 — cuánto espera un "Responder" (priority 'high') en cola por la sesión
+     * compartida antes de `SuricataSessionBusyError` (503). Mismo criterio
+     * defensivo que `gestionReal.balanceRefreshTimeoutMs`: piso 1s (un valor
+     * ínfimo apagaría la feature en la práctica), techo 60s (un operador
+     * esperando una respuesta no debería colgar más que eso).
+     */
+    replyQueueTimeoutMs: parsePositiveInt(process.env.SURICATA_REPLY_QUEUE_TIMEOUT_MS, {
+      default: 20_000,
+      min: 1_000,
+      max: 60_000,
+    }),
+    /** D7.b — tope por adjunto; por encima, status='failed'/lastError='too_large'. */
+    maxAttachmentBytes: parsePositiveInt(process.env.SURICATA_MAX_ATTACHMENT_BYTES, {
+      default: 10 * 1024 * 1024,
+      min: 1024,
+      max: 100 * 1024 * 1024,
+    }),
+  },
 };

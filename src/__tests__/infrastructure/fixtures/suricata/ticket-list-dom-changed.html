@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <!-- D6.d fixture: simulates an upstream redesign where none of the expected
+       classes exist anymore. The parser must not throw -- it degrades to an
+       empty result, structurally indistinguishable from a legitimately empty
+       list. Telling the two apart is the use case's job (invariant 1: page 1
+       returning zero tickets over a 200 response means the run fails loudly),
+       not the parser's. -->
+  <div class="new-ticket-widget">
+    <div class="row">No tengo internet</div>
+    <div class="row">Consulta de factura</div>
+  </div>
+</body>
+</html>

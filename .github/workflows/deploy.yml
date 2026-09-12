@@ -45,6 +45,31 @@ jobs:
             prominense-be:latest \
             npm run bootstrap-rbac
 
+      - name: Deploy Suricata Playwright sidecar
+        # suricata-tickets-mirror (Fase J, D5) — sidecar oficial de Playwright
+        # corriendo `run-server`; el backend habla con él por WebSocket via
+        # `playwright-core` (versión EXACTA, pineada en package.json — un test
+        # de composición asserta esta igualdad). Puerto NO publicado al host:
+        # solo alcanzable por la red `ipnext-net` (run-server no tiene auth).
+        # --shm-size 1g: el default de Docker (64MB) hace que Chromium muera
+        # con pestañas grandes. --init evita zombies de los procesos del browser.
+        # Hardening (review adversarial de seguridad, post-Fase J): SIN `npx -y`
+        # — la imagen YA trae el playwright pineado por el tag, `-y` forzaba
+        # una resolución contra el registry de npm en CADA restart (egress
+        # externo del que el sync quedaría dependiente); `--user pwuser` +
+        # `--cap-drop ALL` + `--security-opt no-new-privileges` porque este
+        # container renderiza HTML de un sitio ajeno — si un exploit de
+        # renderer escapa, no debe aterrizar como root en la red interna.
+        run: |
+          set -e
+          docker network create ipnext-net 2>/dev/null || true
+          docker rm -f ipnext-playwright 2>/dev/null || true
+          docker run -d --name ipnext-playwright --network ipnext-net --network-alias playwright \
+            --restart unless-stopped --memory 1g --shm-size 1g --init \
+            --user pwuser --cap-drop ALL --security-opt no-new-privileges \
+            mcr.microsoft.com/playwright:v1.63.0-noble \
+            npx playwright run-server --port 3000 --host 0.0.0.0
+
       - name: Deploy container
         # FIREBASE_SERVICE_ACCOUNT_JSON va por env: (NO inline ${{ }} en el shell):
         # el JSON contiene comillas dobles que ROMPEN el quoting del `docker run`
@@ -145,6 +170,11 @@ jobs:
             -e TWILIO_MESSAGING_SERVICE_SID="${{ secrets.TWILIO_MESSAGING_SERVICE_SID }}" \
             -e MESSAGING_BULK_RATE_PER_SEC="${{ secrets.MESSAGING_BULK_RATE_PER_SEC }}" \
             -e PORTAL_TICKET_AREA_NAME="${{ secrets.PORTAL_TICKET_AREA_NAME }}" \
+            -e SURICATA_BASE_URL="${{ secrets.SURICATA_BASE_URL }}" \
+            -e SURICATA_USER="${{ secrets.SURICATA_USER }}" \
+            -e SURICATA_PASSWORD="${{ secrets.SURICATA_PASSWORD }}" \
+            -e SURICATA_BROWSER_WS="ws://playwright:3000/" \
+            -e SURICATA_EXTERNAL_API_KEY="${{ secrets.SURICATA_EXTERNAL_API_KEY }}" \
             prominense-be:latest
           docker network connect easypanel-bd_owners ipnext-new-backend
 
