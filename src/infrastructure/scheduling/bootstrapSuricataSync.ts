@@ -11,8 +11,10 @@
  * that also requires the actual sidecar/credentials to exist.
  *
  * Phase J — real wiring: when both envs ARE set, this constructs the real
- * object graph (`PlaywrightBrowserSession` → `SuricataSession` →
- * `PlaywrightSuricataScraper` → `SyncSuricataTickets` → `SuricataSyncScheduler`).
+ * object graph (`getSharedSuricataSession()` → `PlaywrightSuricataScraper` →
+ * `SyncSuricataTickets` → `SuricataSyncScheduler`). The session is NOT built
+ * here: it comes from `sharedSuricataSession`, the single construction site,
+ * so the sync and reply lanes hold the same D4 priority queue.
  * Construction itself does ZERO network I/O: `PlaywrightBrowserSession`
  * connects to the sidecar LAZILY, on the first call a sync tick actually
  * makes — so an unreachable/not-yet-deployed sidecar never crashes the boot,
@@ -21,8 +23,7 @@
  * `ChatMediaDownloadScheduler`).
  */
 import { config } from '../config';
-import { PlaywrightBrowserSession } from '../adapters/suricata/PlaywrightBrowserSession';
-import { SuricataSession } from '../adapters/suricata/SuricataSession';
+import { getSharedSuricataSession } from '../adapters/suricata/sharedSuricataSession';
 import { PlaywrightSuricataScraper } from '../adapters/suricata/PlaywrightSuricataScraper';
 import { PgAdvisoryLock } from '../adapters/pg/PgAdvisoryLock';
 import { PrismaSuricataTicketRepository } from '../adapters/prisma/PrismaSuricataTicketRepository';
@@ -41,15 +42,19 @@ const SURICATA_SYNC_SESSION_TIMEOUT_MS = 5_000;
 export async function bootstrapSuricataSync(
   intervalMs = config.suricata.syncIntervalMs,
 ): Promise<SuricataSyncScheduler | null> {
-  const { baseUrl, browserWs, user, password, backfillDays, maxPagesPerRun, maxAttachmentBytes } = config.suricata;
+  const { baseUrl, backfillDays, maxPagesPerRun, maxAttachmentBytes } = config.suricata;
 
-  if (!baseUrl || !browserWs) {
+  // D4 — the SHARED session, never a private one: the reply lane must be able
+  // to jump the queue of a running sync tick, which only works if both lanes
+  // hold the same object (see `sharedSuricataSession`). It returns null under
+  // exactly the same env gate this bootstrap used to check inline.
+  const session = getSharedSuricataSession();
+
+  if (!session || !baseUrl) {
     console.warn('[suricata-sync] SURICATA_BASE_URL/SURICATA_BROWSER_WS missing -- scheduler disabled');
     return null;
   }
 
-  const browserSession = new PlaywrightBrowserSession({ browserWs, baseUrl, username: user, password });
-  const session = new SuricataSession(browserSession, new PgAdvisoryLock());
   const scraper = new PlaywrightSuricataScraper(session, { baseUrl, sessionTimeoutMs: SURICATA_SYNC_SESSION_TIMEOUT_MS });
 
   const ticketRepo = new PrismaSuricataTicketRepository();
