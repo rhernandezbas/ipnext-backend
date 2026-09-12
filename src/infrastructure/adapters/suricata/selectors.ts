@@ -47,6 +47,35 @@ export const SURICATA_SELECTORS = {
   attachmentLink: 'a.attachment-link',
 } as const;
 
+/**
+ * ⚠️ RIESGO ALTO — SELECTORES DE LOGIN/AUTENTICACIÓN, TAMBIÉN SINTÉTICOS
+ * =========================================================================
+ * Mismo disclaimer que el resto de `SURICATA_SELECTORS` de arriba, pero para
+ * el flujo de login que consume `PlaywrightBrowserSession` (Phase J, D5): estos
+ * valores fueron escritos a mano por la sesión de apply que agregó el driver
+ * real de Playwright, SIN acceso a Suricata Cx ni credenciales desde este
+ * entorno. `ensureAuthenticated`/`SuricataSession` (Phase B) ya están
+ * unit-testeados con fakes y NO dependen de este DOM real — lo único que se
+ * apoya en estos selectores concretos es `PlaywrightBrowserSession`.
+ * NO los toques a ciegas asumiendo que están mal, pero TAMPOCO asumas que
+ * están bien: el ÚNICO lugar que lo confirma es el smoke manual de D14 (deploy
+ * dark → sidecar arriba → flip de `suricata-sync-enabled` → mirar
+ * `SuricataSyncRun.outcome`). Si ese smoke falla en el paso de login, el
+ * primer sospechoso es ESTE bloque.
+ */
+export const SURICATA_AUTH_PATHS = {
+  /** D4 — ruta barata para clasificar autenticación por marcador de DOM. */
+  authenticatedProbe: '/',
+  loginPath: '/login',
+} as const;
+
+export const SURICATA_AUTH_SELECTORS = {
+  loginForm: 'form#login-form',
+  usernameField: 'input[name="username"]',
+  passwordField: 'input[name="password"]',
+  submitButton: 'button[type="submit"]',
+} as const;
+
 function toIntOrZero(raw: string): number {
   const n = parseInt(raw, 10);
   return Number.isNaN(n) ? 0 : n;
