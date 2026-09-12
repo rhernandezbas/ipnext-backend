@@ -159,6 +159,93 @@ describe('ReplyToSuricataTicket', () => {
     });
   });
 
+  describe('REPLY-5 — a post-send bookkeeping failure is never reported as "not sent"', () => {
+    it('sendReply succeeds but markOutcome(sent) rejects -> resolves as sent, never throws', async () => {
+      const tickets = new InMemorySuricataTicketRepository();
+      const ticket = await seedTicket(tickets);
+      const realAudits = new InMemorySuricataReplyAuditRepository();
+      const markOutcomeCalls: string[] = [];
+      const audits: SuricataReplyAuditRepository = {
+        record: (input) => realAudits.record(input),
+        markOutcome: async (id, input) => {
+          markOutcomeCalls.push(input.outcome);
+          // DB momentarily unavailable exactly at the "flip to sent" write.
+          throw new Error('connection terminated unexpectedly');
+        },
+      };
+      const port = spyPort(async () => {});
+      const useCase = new ReplyToSuricataTicket(tickets, audits, port);
+      const body = 'Ya revisamos tu reclamo';
+
+      const result = await useCase.execute({
+        ticketId: ticket.id,
+        actorId: 'user-1',
+        body,
+        confirm: computeSuricataReplyConfirmation(body),
+      });
+
+      // The message DID leave. The operator must never see an error that
+      // invites a retry, or the customer gets the same message twice.
+      expect(port.calls).toEqual([[ticket.externalId, body]]);
+      expect(result.replyAuditId).toEqual(expect.any(String));
+      expect(result.sent).toBe(true);
+      // ...but the failure is explicit, not swallowed into a clean success.
+      expect(result.auditPersisted).toBe(false);
+      // Exactly ONE markOutcome attempt, and it was 'sent'. The catch must NOT
+      // fall through and actively re-label the attempt as 'failed' — that is
+      // the whole bug. (The row keeps the provisional 'failed' that `record`
+      // wrote per D10; it simply could not be flipped, which is what
+      // `auditPersisted: false` reports.)
+      expect(markOutcomeCalls).toEqual(['sent']);
+    });
+
+    it('the happy path reports auditPersisted true', async () => {
+      const port = spyPort(async () => {});
+      const { tickets, useCase } = makeHarness(port);
+      const ticket = await seedTicket(tickets);
+      const body = 'Ya revisamos tu reclamo';
+
+      const result = await useCase.execute({
+        ticketId: ticket.id,
+        actorId: 'user-1',
+        body,
+        confirm: computeSuricataReplyConfirmation(body),
+      });
+
+      expect(result.sent).toBe(true);
+      expect(result.auditPersisted).toBe(true);
+    });
+
+    it('a send that really fails still throws, and a markOutcome(failed) that also fails does not mask it', async () => {
+      const tickets = new InMemorySuricataTicketRepository();
+      const ticket = await seedTicket(tickets);
+      const realAudits = new InMemorySuricataReplyAuditRepository();
+      const audits: SuricataReplyAuditRepository = {
+        record: (input) => realAudits.record(input),
+        markOutcome: async () => {
+          throw new Error('connection terminated unexpectedly');
+        },
+      };
+      const port = spyPort(async () => {
+        throw new SuricataSessionBusyError();
+      });
+      const useCase = new ReplyToSuricataTicket(tickets, audits, port);
+      const body = 'hola';
+
+      let thrown: unknown;
+      try {
+        await useCase.execute({ ticketId: ticket.id, actorId: 'user-1', body, confirm: computeSuricataReplyConfirmation(body) });
+      } catch (err) {
+        thrown = err;
+      }
+
+      // The ORIGINAL send failure is what the operator must see — not the
+      // audit-write error that happened while recording it.
+      expect(thrown).toBeInstanceOf(SuricataReplySendFailedError);
+      expect((thrown as SuricataReplySendFailedError).code).toBe('SURICATA_SESSION_BUSY');
+    });
+  });
+
   describe('REPLY-6 — scoped to reply only', () => {
     it('only sends the message: no other ticket field mutated by this use case', async () => {
       const port = spyPort(async () => {});
