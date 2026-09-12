@@ -1,15 +1,17 @@
 /**
- * suricata-tickets-mirror (task A.7, D8) — composition-root test, molde
- * `external-bulk-messaging-composition.test.ts` (a) "assertions estáticas".
+ * suricata-tickets-mirror (task A.7, updated Fase D task D.7, D8) —
+ * composition-root test, molde `external-bulk-messaging-composition.test.ts`
+ * (a) "assertions estáticas".
  *
- * Fase A es un SLICE 0 dark: `composeSuricataModule`/`composeSuricataExternalModule`
- * devuelven 501 para todo. La ÚNICA invariante real de esta fase (D8) es de
- * ORDEN: si el mount de `/api/external/v1/suricata` quedara DESPUÉS del mount
+ * `composeSuricataModule` (panel interno) sigue en 501 (Fase F). Fase D
+ * reemplazó el Slice 0 dark del endpoint EXTERNO por la key dedicada real +
+ * `machineActorMiddleware` — la invariante de ORDEN (D8) sigue siendo la
+ * misma: si el mount de `/api/external/v1/suricata` quedara DESPUÉS del mount
  * GLOBAL `/api/external/v1`, la key GLOBAL interceptaría el prefijo dedicado y
- * la key de `config.suricata.externalApiKey` (Fase D) nunca se evaluaría —
- * mismo incidente ya documentado para `external-bulk-messaging`. Por eso este
- * test lee el FUENTE de `app.ts` (ningún test de este repo importa `app.ts` —
- * ver la nota de `assistant-composition.test.ts` / `external-bulk-messaging-composition.test.ts`
+ * `config.suricata.externalApiKey` nunca se evaluaría — mismo incidente ya
+ * documentado para `external-bulk-messaging`. Por eso este test lee el FUENTE
+ * de `app.ts` (ningún test de este repo importa `app.ts` — ver la nota de
+ * `assistant-composition.test.ts` / `external-bulk-messaging-composition.test.ts`
  * sobre por qué: levantaría media aplicación).
  */
 import { readFileSync } from 'fs';
@@ -63,9 +65,13 @@ describe('suricata-tickets-mirror composition root — assertions estáticas (D8
     expect(suricataExternalIdx).toBeLessThan(globalExternalIdx);
   });
 
-  it('el mount externo invoca composeSuricataExternalModule() (Slice 0 — sin key dedicada todavía, ver comentario D8)', () => {
+  it('el mount externo aplica createApiKeyMiddleware(config.suricata.externalApiKey) (Fase D, D8)', () => {
     expect(appSrc).toMatch(
-      /app\.use\('\/api\/external\/v1\/suricata',\s*composeSuricataExternalModule\(\)\)/,
+      /app\.use\(\s*'\/api\/external\/v1\/suricata',\s*createApiKeyMiddleware\(config\.suricata\.externalApiKey\)/,
     );
+  });
+
+  it('el mount externo aplica machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN) (Fase D, D8, auditoría)', () => {
+    expect(appSrc).toContain('machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN)');
   });
 });

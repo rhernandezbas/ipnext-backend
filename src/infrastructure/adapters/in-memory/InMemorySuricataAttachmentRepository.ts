@@ -71,4 +71,9 @@ export class InMemorySuricataAttachmentRepository implements SuricataAttachmentR
     row.lastError = input.error;
     return { ...row };
   }
+
+  async findById(id: string): Promise<SuricataAttachmentRecord | null> {
+    const row = this.rows.find((r) => r.id === id);
+    return row ? { ...row } : null;
+  }
 }

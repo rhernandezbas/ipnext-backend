@@ -687,7 +687,7 @@ import { PrismaAuditEventRepository } from '../adapters/prisma/PrismaAuditEventR
 import { PrismaSessionRepository } from '../adapters/prisma/PrismaSessionRepository';
 import { auditMutationsMiddleware } from './middleware/auditMutationsMiddleware';
 import { machineActorMiddleware } from './middleware/machineActorMiddleware';
-import { API_MESSAGING_USER_LOGIN } from '@domain/constants/machineUsers';
+import { API_MESSAGING_USER_LOGIN, API_SURICATA_USER_LOGIN } from '@domain/constants/machineUsers';
 import { PrismaRbacUserRoleRepository } from '../adapters/prisma/PrismaRbacUserRoleRepository';
 import { PrismaRbacRolePermissionRepository } from '../adapters/prisma/PrismaRbacRolePermissionRepository';
 import { requirePermission } from './middleware/requirePermission';
@@ -811,6 +811,11 @@ import { composeAssistantEngine } from './composeAssistantEngine';
 import { composeSuricataModule } from './composeSuricataModule';
 // ── suricata-tickets-mirror (Fase A) — endpoint externo; wiring en composeSuricataExternalModule ─
 import { composeSuricataExternalModule } from './composeSuricataExternalModule';
+// ── suricata-tickets-mirror (Fase D, D3/D8) — repos + use case del endpoint externo ─
+import { PrismaSuricataTicketRepository } from '@infrastructure/adapters/prisma/PrismaSuricataTicketRepository';
+import { PrismaSuricataAttachmentRepository } from '@infrastructure/adapters/prisma/PrismaSuricataAttachmentRepository';
+import { PrismaSuricataVerdictRepository } from '@infrastructure/adapters/prisma/PrismaSuricataVerdictRepository';
+import { SubmitSuricataVerdict } from '@application/use-cases/suricata/SubmitSuricataVerdict';
 import { ChatMessageThreadReader } from '@infrastructure/adapters/assistant/ChatMessageThreadReader';
 import { CustomerAssistantClientResolver } from '@infrastructure/adapters/assistant/CustomerAssistantClientResolver';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
@@ -3991,18 +3996,37 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     newsPostRepo,
   );
 
-  // ─── suricata-tickets-mirror (Fase A — BE Slice 0, D8) — endpoint EXTERNO ────
+  // ─── suricata-tickets-mirror (Fase D, D0/D7.c/D8) — endpoint EXTERNO ────────
   // ⚠️ ORDEN LOAD-BEARING: este mount DEBE quedar registrado ANTES del mount
   // GLOBAL de abajo (prefijo `/api/external/v1` + `createApiKeyMiddleware()` sin
   // key dedicada) — Express matchea en orden de registro; si cayera DESPUÉS, la
   // key GLOBAL interceptaría `/suricata/*` y la key dedicada
-  // (`config.suricata.externalApiKey`, Fase D) nunca se evaluaría (mismo
-  // incidente documentado para external-bulk-messaging arriba). Pineado por
+  // (`config.suricata.externalApiKey`) nunca se evaluaría (mismo incidente
+  // documentado para external-bulk-messaging arriba). Pineado por
   // `suricata-composition.test.ts`.
-  // Slice 0: SIN `createApiKeyMiddleware`/`machineActorMiddleware` todavía —
-  // `config.suricata.*` y el usuario máquina `api-suricata` nacen en la Fase D
-  // (ver composeSuricataExternalModule.ts). El 501 de acá no expone ningún dato.
-  app.use('/api/external/v1/suricata', composeSuricataExternalModule());
+  // Fase D reemplaza el Slice 0 (501 dark) por la key dedicada +
+  // `machineActorMiddleware` (D8), ahora que `config.suricata.*` (D11) y el
+  // usuario máquina `api-suricata` (`bootstrapApiSuricataUser`, main.ts)
+  // existen. `submittedBy` en `SubmitSuricataVerdict` es un LITERAL
+  // (`API_SURICATA_USER_LOGIN`), no lee `req.user` — el middleware de acá es
+  // solo para `auditMutationsMiddleware` (molde external-bulk-messaging).
+  const suricataTicketRepo = new PrismaSuricataTicketRepository();
+  const suricataAttachmentRepo = new PrismaSuricataAttachmentRepository();
+  const suricataVerdictRepo = new PrismaSuricataVerdictRepository();
+  const suricataFeatureFlagRepo = new PrismaFeatureFlagRepository();
+  app.use('/api/external/v1/suricata',
+    createApiKeyMiddleware(config.suricata.externalApiKey),
+    machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN),
+    composeSuricataExternalModule({
+      submitSuricataVerdict: new SubmitSuricataVerdict(suricataTicketRepo, suricataVerdictRepo),
+      ticketRepo: suricataTicketRepo,
+      attachmentRepo: suricataAttachmentRepo,
+      // D7.a — MISMO storage/bucket que task-photos, aislado por prefijo de key
+      // (`suricata/<sha256>`), MISMA instancia ya construida arriba.
+      fileStorage: taskPhotoStorage,
+      featureFlags: suricataFeatureFlagRepo,
+    }),
+  );
   // [suricata-external-mount-end]
 
   app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts, {

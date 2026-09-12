@@ -342,6 +342,17 @@ const statusMap: Record<string, number> = {
   STORE_ORDER_INSTALLMENTS_INVALID: 400,
   UNSUPPORTED_STORE_PRODUCT_IMAGE_TYPE: 415,
   STORE_PRODUCT_IMAGE_TOO_LARGE: 413,
+  // suricata-tickets-mirror (Phase D, suricata-bot-verdict) — VERDICT-2's
+  // conditional business rule (resuelto=false missing motivo/respuestaSugerida).
+  // 400, NOT 422: spec.md is explicit ("Any violation MUST respond 400 before
+  // persisting anything") — this DIFFERS from design.md D9's illustrative 422,
+  // spec.md wins as the wire-contract source of truth (apply-phase deviation).
+  SURICATA_VERDICT_INVALID: 400,
+  // VERDICT-3 — the externalId in the path doesn't match any mirrored ticket.
+  SURICATA_TICKET_NOT_FOUND: 404,
+  // D7.c — attachment id doesn't belong to the ticket in the path (or was
+  // never stored) — 404, never 200 (never leaks another ticket's binary).
+  SURICATA_ATTACHMENT_NOT_FOUND: 404,
 };
 
 /** Express global error-handling middleware. */

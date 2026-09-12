@@ -99,4 +99,10 @@ export class PrismaSuricataAttachmentRepository implements SuricataAttachmentRep
     if (!row) throw new SuricataAttachmentNotFoundError(id);
     return toDomain(row);
   }
+
+  async findById(id: string): Promise<SuricataAttachmentRecord | null> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (prisma as any).suricataAttachment.findUnique({ where: { id } });
+    return row ? toDomain(row) : null;
+  }
 }

@@ -148,3 +148,34 @@ export interface FinishSuricataSyncRunInput {
   error?: string | null;
   selectorMisses?: string[] | null;
 }
+
+/**
+ * suricata-tickets-mirror (Phase D, task D.1, design D9) — append-only bot
+ * verdict history. `motivo`/`respuestaSugerida` are nullable at the record
+ * level (the schema keeps them optional columns); the CONDITIONAL requirement
+ * ("required when resuelto=false") is a business rule enforced by
+ * `SubmitSuricataVerdict`, never at this storage layer (spec VERDICT-2).
+ */
+export interface SuricataVerdictRecord {
+  id: string;
+  ticketId: string;
+  resuelto: boolean;
+  analisis: string;
+  motivo: string | null;
+  respuestaSugerida: string | null;
+  /** The ticket's `contentHash` AT THE MOMENT of this verdict (D9) — never updated afterward. */
+  ticketContentHash: string;
+  /** Login of the machine actor that submitted this verdict (`api-suricata`). */
+  submittedBy: string;
+  createdAt: string;
+}
+
+export interface CreateSuricataVerdictInput {
+  ticketId: string;
+  resuelto: boolean;
+  analisis: string;
+  motivo: string | null;
+  respuestaSugerida: string | null;
+  ticketContentHash: string;
+  submittedBy: string;
+}

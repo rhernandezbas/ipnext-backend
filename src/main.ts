@@ -22,6 +22,7 @@ import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/p
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
 import { bootstrapApiMessagingUser } from './infrastructure/bootstrap/bootstrapApiMessagingUser';
+import { bootstrapApiSuricataUser } from './infrastructure/bootstrap/bootstrapApiSuricataUser';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
@@ -58,6 +59,16 @@ void (async () => {
   // el usuario existe aunque la feature esté apagada). Hash inusable, distinto por
   // deploy, NUNCA literal en git (D2).
   await bootstrapApiMessagingUser(new PrismaRbacUserRepository(), {
+    passwordHash: bcrypt.hashSync(randomUUID(), 10),
+  });
+
+  // (a''') suricata-tickets-mirror (Phase D, D8/D11) — system "api-suricata"
+  // user, MUST exist before the first external verdict submission:
+  // `SubmitSuricataVerdict` stamps it as `SuricataTicketVerdict.submittedBy`
+  // and `machineActorMiddleware` (app.ts mount) attaches it for audit. Runs
+  // UNCONDITIONALLY and idempotent, independent of the `suricata-verdict-enabled`
+  // flag (dark-launch friendly, same criterion as `api-messaging` above).
+  await bootstrapApiSuricataUser(new PrismaRbacUserRepository(), {
     passwordHash: bcrypt.hashSync(randomUUID(), 10),
   });
 

@@ -69,3 +69,47 @@ export class SuricataSyncRunNotFoundError extends DomainError {
     this.name = 'SuricataSyncRunNotFoundError';
   }
 }
+
+/**
+ * suricata-tickets-mirror (Phase D, task D.3, spec VERDICT-2) — `resuelto:
+ * false` submitted without `motivo` and/or `respuestaSugerida` (both
+ * required in that case, per the spec's conditional requirement). Mapped to
+ * 400 (statusMap `SURICATA_VERDICT_INVALID`) — spec.md is explicit: "Any
+ * violation MUST respond 400 before persisting anything" (VERDICT-2). This
+ * intentionally DIFFERS from design.md D9's illustrative "422
+ * VALIDATION_ERROR" — spec.md is the authoritative contract for this
+ * endpoint's wire behavior; see the apply-phase deviation note.
+ */
+export class InvalidSuricataVerdictError extends DomainError {
+  constructor(public readonly missingFields: string[]) {
+    super(`Invalid Suricata verdict: missing ${missingFields.join(', ')}`, 'SURICATA_VERDICT_INVALID');
+    this.name = 'InvalidSuricataVerdictError';
+  }
+}
+
+/**
+ * suricata-tickets-mirror (Phase D, task D.3, spec VERDICT-3) — a verdict was
+ * submitted (or an attachment requested, D7.c) for an `externalId` that has
+ * no mirrored `SuricataTicket` row. Mapped to 404, nothing persisted.
+ */
+export class SuricataTicketNotFoundError extends DomainError {
+  constructor(public readonly externalId: string) {
+    super(`Suricata ticket with externalId ${externalId} not found`, 'SURICATA_TICKET_NOT_FOUND');
+    this.name = 'SuricataTicketNotFoundError';
+  }
+}
+
+/**
+ * suricata-tickets-mirror (Phase D, design D0/D7.c) — the external verdict
+ * router (verdict submission + attachment content proxy) is gated by the
+ * `suricata-verdict-enabled` feature flag, dark by default (D14). Mapped to
+ * 403 via the PRE-EXISTING `FEATURE_DISABLED` code (already mapped in
+ * `errorHandler.ts`, reused across capabilities — molde
+ * `FeatureExternalBulkDisabledError`).
+ */
+export class SuricataVerdictFeatureDisabledError extends DomainError {
+  constructor(message = 'Suricata verdict/attachment capability is disabled') {
+    super(message, 'FEATURE_DISABLED');
+    this.name = 'SuricataVerdictFeatureDisabledError';
+  }
+}
