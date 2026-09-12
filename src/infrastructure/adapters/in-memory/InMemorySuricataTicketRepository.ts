@@ -1,6 +1,10 @@
 import { randomUUID } from 'crypto';
-import type { SuricataTicketRepository } from '@domain/ports/SuricataTicketRepository';
+import type {
+  SuricataTicketRepository,
+  ListSuricataTicketsFilters,
+} from '@domain/ports/SuricataTicketRepository';
 import type { SuricataTicketRecord, UpsertSuricataTicketInput } from '@domain/entities/suricata';
+import { SuricataTicketNotFoundError } from '@domain/errors/suricata';
 
 /** In-memory `SuricataTicketRepository` for use-case tests (D6.b idempotency). */
 export class InMemorySuricataTicketRepository implements SuricataTicketRepository {
@@ -56,5 +60,21 @@ export class InMemorySuricataTicketRepository implements SuricataTicketRepositor
   async findById(id: string): Promise<SuricataTicketRecord | null> {
     const row = this.rows.find((r) => r.id === id);
     return row ? { ...row } : null;
+  }
+
+  async list(filters: ListSuricataTicketsFilters): Promise<SuricataTicketRecord[]> {
+    return this.rows
+      .filter((r) => filters.status === undefined || r.status === filters.status)
+      .filter((r) => filters.priority === undefined || r.priority === filters.priority)
+      .filter((r) => filters.areaId === undefined || r.areaId === filters.areaId)
+      .filter((r) => filters.assigneeId === undefined || r.assigneeId === filters.assigneeId)
+      .map((r) => ({ ...r }));
+  }
+
+  async setAssignee(id: string, assigneeId: string | null): Promise<SuricataTicketRecord> {
+    const row = this.rows.find((r) => r.id === id);
+    if (!row) throw new SuricataTicketNotFoundError(id);
+    row.assigneeId = assigneeId;
+    return { ...row };
   }
 }

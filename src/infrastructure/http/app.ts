@@ -824,6 +824,13 @@ import { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSu
 // port falla SIEMPRE, sin importar el flag/RBAC, porque no hay ningún driver
 // Playwright real todavía.
 import { UnavailableSuricataReplyPort } from '@infrastructure/adapters/suricata/UnavailableSuricataReplyPort';
+// ── suricata-tickets-mirror (Fase F, D3/D13) — repos + use cases del panel READ ─
+import { PrismaSuricataMessageRepository } from '@infrastructure/adapters/prisma/PrismaSuricataMessageRepository';
+import { PrismaSuricataAreaRepository } from '@infrastructure/adapters/prisma/PrismaSuricataAreaRepository';
+import { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
+import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
+import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
+import { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
 import { ChatMessageThreadReader } from '@infrastructure/adapters/assistant/ChatMessageThreadReader';
 import { CustomerAssistantClientResolver } from '@infrastructure/adapters/assistant/CustomerAssistantClientResolver';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
@@ -3320,12 +3327,41 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     suricataReplyAuditRepo,
     new UnavailableSuricataReplyPort(),
   );
+  // Fase F (D3/D13) — panel READ routes + assignment PATCH, mismo mount.
+  // `rbacUserRepo` (declarado arriba, L1243) se REUSA para resolver
+  // `assigneeName` — ningún 2º rbacUserRepo (mismo criterio D8 que el
+  // `requirePerm` inyectado).
+  const suricataInternalMessageRepo = new PrismaSuricataMessageRepository();
+  const suricataInternalAttachmentRepo = new PrismaSuricataAttachmentRepository();
+  const suricataInternalAreaRepo = new PrismaSuricataAreaRepository();
+  const suricataInternalVerdictRepo = new PrismaSuricataVerdictRepository();
+  const listSuricataTickets = new ListSuricataTickets(
+    suricataInternalTicketRepo,
+    suricataInternalVerdictRepo,
+    suricataInternalAreaRepo,
+    rbacUserRepo,
+  );
+  const getSuricataTicketDetail = new GetSuricataTicketDetail(
+    suricataInternalTicketRepo,
+    suricataInternalMessageRepo,
+    suricataInternalAttachmentRepo,
+    suricataInternalVerdictRepo,
+    suricataInternalAreaRepo,
+    rbacUserRepo,
+  );
+  const computeSuricataKpis = new ComputeSuricataKpis(suricataInternalTicketRepo, suricataInternalVerdictRepo);
+  const setSuricataAssignee = new SetSuricataAssignee(suricataInternalTicketRepo, rbacUserRepo);
   app.use('/api/suricata', composeSuricataModule({
     authAdapter,
     sessionRepo,
     requirePerm,
     replyToSuricataTicket,
     featureFlags: suricataInternalFeatureFlagRepo,
+    listSuricataTickets,
+    getSuricataTicketDetail,
+    computeSuricataKpis,
+    setSuricataAssignee,
+    areaRepo: suricataInternalAreaRepo,
   }));
   // [suricata-internal-mount-end]
 

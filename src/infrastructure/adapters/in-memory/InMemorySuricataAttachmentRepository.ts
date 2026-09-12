@@ -76,4 +76,8 @@ export class InMemorySuricataAttachmentRepository implements SuricataAttachmentR
     const row = this.rows.find((r) => r.id === id);
     return row ? { ...row } : null;
   }
+
+  async listByTicketId(ticketId: string): Promise<SuricataAttachmentRecord[]> {
+    return this.rows.filter((r) => r.ticketId === ticketId).map((r) => ({ ...r }));
+  }
 }

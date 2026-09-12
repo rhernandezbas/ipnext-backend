@@ -42,4 +42,18 @@ export class InMemorySuricataVerdictRepository implements SuricataVerdictReposit
     const sorted = [...rows].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     return { ...sorted[sorted.length - 1] };
   }
+
+  async latestByTicketIds(ticketIds: string[]): Promise<Map<string, SuricataVerdictRecord>> {
+    const wanted = new Set(ticketIds);
+    const result = new Map<string, SuricataVerdictRecord>();
+    // Same stable-sort-then-reduce trick as `latestByTicket` — ascending order,
+    // last write per ticketId wins.
+    const sorted = [...this.rows]
+      .filter((r) => wanted.has(r.ticketId))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const row of sorted) {
+      result.set(row.ticketId, { ...row });
+    }
+    return result;
+  }
 }

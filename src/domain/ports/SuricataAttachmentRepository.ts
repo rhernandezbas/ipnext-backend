@@ -25,4 +25,10 @@ export interface SuricataAttachmentRepository {
    * stays dumb, same criterion as the rest of this port.
    */
   findById(id: string): Promise<SuricataAttachmentRecord | null>;
+  /**
+   * suricata-tickets-mirror (Phase F, task F.2, spec UI-3) — full attachment
+   * list for a ticket's detail view (Conversation tab renders these inline,
+   * grouped by `messageId`).
+   */
+  listByTicketId(ticketId: string): Promise<SuricataAttachmentRecord[]>;
 }

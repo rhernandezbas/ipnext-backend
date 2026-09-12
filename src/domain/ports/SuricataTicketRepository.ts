@@ -1,10 +1,20 @@
 import type { SuricataTicketRecord, UpsertSuricataTicketInput } from '@domain/entities/suricata';
 
 /**
- * Phase C scope only (backfill/incremental persistence). `list`/`kpis`/
- * `setAssignee` (design D3 table) are Phase F's panel-read scope and will
- * extend this interface — and both adapters — when that phase lands.
+ * suricata-tickets-mirror (Phase F, task F.1, design D3) — base filters for
+ * the panel list. Every field is an EXACT match; omitted fields are not
+ * filtered. `botState` is deliberately NOT here — it is a DERIVED value
+ * (depends on the ticket's latest verdict, a different repository) applied
+ * by `ListSuricataTickets`, which also owns sorting and pagination over the
+ * set this method returns.
  */
+export interface ListSuricataTicketsFilters {
+  status?: string;
+  priority?: string;
+  areaId?: string;
+  assigneeId?: string;
+}
+
 export interface SuricataTicketRepository {
   /** Idempotent by `externalId` (D6.b) — insert-if-new, update otherwise. */
   upsertByExternalId(input: UpsertSuricataTicketInput): Promise<SuricataTicketRecord>;
@@ -16,4 +26,19 @@ export interface SuricataTicketRepository {
    * its Prominense-local id, never by Suricata's `externalId`.
    */
   findById(id: string): Promise<SuricataTicketRecord | null>;
+  /**
+   * suricata-tickets-mirror (Phase F, task F.1/F.2, design D3) — ALL tickets
+   * matching the given base filters, unpaged and unsorted. Also backs
+   * `ComputeSuricataKpis` with an empty filter object (whole mirror).
+   */
+  list(filters: ListSuricataTicketsFilters): Promise<SuricataTicketRecord[]>;
+  /**
+   * suricata-tickets-mirror (Phase F, task F.1/F.2, spec UI-7) —
+   * Prominense-ONLY assignment: a plain local UPDATE, NEVER a write to
+   * Suricata. `assigneeId: null` clears the assignment. Assumes the caller
+   * already verified the ticket exists (`SetSuricataAssignee` calls
+   * `findById` first, same precedent as `markStored`/`markFailed` on the
+   * attachment repo).
+   */
+  setAssignee(id: string, assigneeId: string | null): Promise<SuricataTicketRecord>;
 }

@@ -63,4 +63,21 @@ export class PrismaSuricataVerdictRepository implements SuricataVerdictRepositor
     });
     return row ? toDomain(row) : null;
   }
+
+  async latestByTicketIds(ticketIds: string[]): Promise<Map<string, SuricataVerdictRecord>> {
+    if (ticketIds.length === 0) return new Map();
+    // ONE query for every ticket id (task F.1 — never N+1); ascending order so
+    // the last write per ticketId in the reduce below is always the newest.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).suricataTicketVerdict.findMany({
+      where: { ticketId: { in: ticketIds } },
+      orderBy: { createdAt: 'asc' },
+    });
+    const result = new Map<string, SuricataVerdictRecord>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const row of rows as any[]) {
+      result.set(row.ticketId, toDomain(row));
+    }
+    return result;
+  }
 }

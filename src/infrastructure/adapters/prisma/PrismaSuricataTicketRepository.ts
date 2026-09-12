@@ -1,5 +1,9 @@
-import type { SuricataTicketRepository } from '@domain/ports/SuricataTicketRepository';
+import type {
+  SuricataTicketRepository,
+  ListSuricataTicketsFilters,
+} from '@domain/ports/SuricataTicketRepository';
 import type { SuricataTicketRecord, UpsertSuricataTicketInput } from '@domain/entities/suricata';
+import { SuricataTicketNotFoundError } from '@domain/errors/suricata';
 import { prisma } from '../../database/prisma';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,5 +96,33 @@ export class PrismaSuricataTicketRepository implements SuricataTicketRepository 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma as any).suricataTicket.findUnique({ where: { id } });
     return row ? toDomain(row) : null;
+  }
+
+  async list(filters: ListSuricataTicketsFilters): Promise<SuricataTicketRecord[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).suricataTicket.findMany({
+      where: {
+        ...(filters.status !== undefined ? { status: filters.status } : {}),
+        ...(filters.priority !== undefined ? { priority: filters.priority } : {}),
+        ...(filters.areaId !== undefined ? { areaId: filters.areaId } : {}),
+        ...(filters.assigneeId !== undefined ? { assigneeId: filters.assigneeId } : {}),
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return rows.map((r: any) => toDomain(r));
+  }
+
+  async setAssignee(id: string, assigneeId: string | null): Promise<SuricataTicketRecord> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const row = await (prisma as any).suricataTicket.update({
+        where: { id },
+        data: { assigneeId },
+      });
+      return toDomain(row);
+    } catch (e) {
+      if ((e as { code?: string } | null)?.code === 'P2025') throw new SuricataTicketNotFoundError(id);
+      throw e;
+    }
   }
 }

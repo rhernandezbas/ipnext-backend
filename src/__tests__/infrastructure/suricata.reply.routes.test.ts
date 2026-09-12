@@ -16,7 +16,15 @@ import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
 import { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataReplyAuditRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataReplyAuditRepository';
+import { InMemorySuricataMessageRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataMessageRepository';
+import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAttachmentRepository';
+import { InMemorySuricataAreaRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAreaRepository';
+import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
+import { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
+import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
+import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
+import { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
 import { InMemoryRbacRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacRoleRepository';
 import { InMemoryRbacUserRoleRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRoleRepository';
@@ -109,6 +117,17 @@ async function buildApp(opts: BuildAppOpts = {}) {
 
   const replyToSuricataTicket = new ReplyToSuricataTicket(tickets, audits, replyPort);
 
+  // Fase F — deps del panel read/assignee, no ejercitadas por ESTE archivo
+  // (ver `suricata.routes.test.ts`), pero requeridas por `ComposeSuricataModuleDeps`.
+  const messages = new InMemorySuricataMessageRepository();
+  const attachments = new InMemorySuricataAttachmentRepository();
+  const areaRepo = new InMemorySuricataAreaRepository();
+  const verdicts = new InMemorySuricataVerdictRepository();
+  const listSuricataTickets = new ListSuricataTickets(tickets, verdicts, areaRepo, userRepo);
+  const getSuricataTicketDetail = new GetSuricataTicketDetail(tickets, messages, attachments, verdicts, areaRepo, userRepo);
+  const computeSuricataKpis = new ComputeSuricataKpis(tickets, verdicts);
+  const setSuricataAssignee = new SetSuricataAssignee(tickets, userRepo);
+
   const app = express();
   app.use(cookieParser());
   app.use(express.json());
@@ -121,6 +140,11 @@ async function buildApp(opts: BuildAppOpts = {}) {
       requirePerm,
       replyToSuricataTicket,
       featureFlags,
+      listSuricataTickets,
+      getSuricataTicketDetail,
+      computeSuricataKpis,
+      setSuricataAssignee,
+      areaRepo,
     }),
   );
   app.use(errorHandler);

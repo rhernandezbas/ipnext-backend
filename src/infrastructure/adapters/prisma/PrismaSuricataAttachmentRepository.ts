@@ -105,4 +105,11 @@ export class PrismaSuricataAttachmentRepository implements SuricataAttachmentRep
     const row = await (prisma as any).suricataAttachment.findUnique({ where: { id } });
     return row ? toDomain(row) : null;
   }
+
+  async listByTicketId(ticketId: string): Promise<SuricataAttachmentRecord[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rows = await (prisma as any).suricataAttachment.findMany({ where: { ticketId } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return rows.map((r: any) => toDomain(r));
+  }
 }

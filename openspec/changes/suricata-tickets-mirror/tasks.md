@@ -88,11 +88,11 @@ Chain strategy: pending
 
 ## Phase F — BE panel read routes (repo: ipnext-backend)
 
-- [ ] F.1 TDD + implement `ListSuricataTickets`, `GetSuricataTicketDetail`, `ComputeSuricataKpis`, `SetSuricataAssignee` use cases against InMemory repos: each filter (status/priority/area/botState) independently; KPI percentages computed by hand in the test; `setAssignee` never calls any Suricata port.
-- [ ] F.2 Implement `GET /api/suricata/tickets`, `GET /:id`, `GET /areas`, `GET /kpis`, `PATCH /:id/assignee` in `composeSuricataModule.ts`, gated by session + `suricata.read` (`manage` for assignee).
-- [ ] F.3 TDD routes with supertest + InMemory repos seeded per scenario, including RBAC-gate 403 for missing permission — `src/__tests__/infrastructure/suricata.routes.test.ts`.
-- [ ] F.4 Composition-root test: assert full `app.ts` wiring (both mounts + DI args) matches `composeSuricataModule`/`composeSuricataExternalModule` signatures — pin per repo's known "wiring is verified by hand" lesson.
-- [ ] F.5 REFACTOR pass; `npm test` + `tsc --noEmit` green; delete Phase A stub 501 responses.
+- [x] F.1 TDD + implement `ListSuricataTickets`, `GetSuricataTicketDetail`, `ComputeSuricataKpis`, `SetSuricataAssignee` use cases against InMemory repos: each filter (status/priority/area/botState) independently; KPI percentages computed by hand in the test; `setAssignee` never calls any Suricata port.
+- [x] F.2 Implement `GET /api/suricata/tickets`, `GET /:id`, `GET /areas`, `GET /kpis`, `PATCH /:id/assignee` in `composeSuricataModule.ts`, gated by session + `suricata.read` (`manage` for assignee).
+- [x] F.3 TDD routes with supertest + InMemory repos seeded per scenario, including RBAC-gate 403 for missing permission — `src/__tests__/infrastructure/suricata.routes.test.ts`.
+- [x] F.4 Composition-root test: assert full `app.ts` wiring (both mounts + DI args) matches `composeSuricataModule`/`composeSuricataExternalModule` signatures — pin per repo's known "wiring is verified by hand" lesson.
+- [x] F.5 REFACTOR pass; `npm test` + `tsc --noEmit` green; delete Phase A stub 501 responses.
 
 ## Phase G — FE list + filters + KPIs (repo: ipnext-frontend)
 

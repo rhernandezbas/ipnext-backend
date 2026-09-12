@@ -4,7 +4,12 @@ import type { AuthProvider } from '@domain/ports/AuthProvider';
 import type { SessionRepository } from '@domain/ports/SessionRepository';
 import type { PermissionAction, RbacModuleCode } from '@domain/entities/rbac';
 import type { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
+import type { SuricataAreaRepository } from '@domain/ports/SuricataAreaRepository';
 import type { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
+import type { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
+import type { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
+import type { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
+import type { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
 import { createAuthMiddleware } from './middleware/authMiddleware';
 
 export interface ComposeSuricataModuleDeps {
@@ -16,6 +21,16 @@ export interface ComposeSuricataModuleDeps {
   replyToSuricataTicket: ReplyToSuricataTicket;
   /** suricata-tickets-mirror (Fase E) — gate del flag `suricata-reply-enabled` (Fase A, dark). */
   featureFlags: FeatureFlagRepository;
+  /** suricata-tickets-mirror (Fase F) — GET /tickets, spec UI-1. */
+  listSuricataTickets: ListSuricataTickets;
+  /** suricata-tickets-mirror (Fase F) — GET /tickets/:id, spec UI-2..UI-5. */
+  getSuricataTicketDetail: GetSuricataTicketDetail;
+  /** suricata-tickets-mirror (Fase F) — GET /kpis, spec UI-6. */
+  computeSuricataKpis: ComputeSuricataKpis;
+  /** suricata-tickets-mirror (Fase F) — PATCH /tickets/:id/assignee, spec UI-7. */
+  setSuricataAssignee: SetSuricataAssignee;
+  /** suricata-tickets-mirror (Fase F) — GET /areas, catálogo simple, sin caso de uso dedicado. */
+  areaRepo: SuricataAreaRepository;
 }
 
 /** suricata-tickets-mirror (Fase A, dark por default) — Fase A migration ya lo sembró en `false`. */
@@ -38,25 +53,50 @@ const ReplyBodySchema = z.object({
   confirm: z.string().min(1),
 });
 
+// suricata-tickets-mirror (Fase F, spec UI-1, design D13) — `botState` values
+// mirror `SuricataBotState` (domain/entities/suricataBotState.ts) 1:1.
+const ListQuerySchema = z.object({
+  status: z.string().min(1).optional(),
+  priority: z.string().min(1).optional(),
+  areaId: z.string().min(1).optional(),
+  assigneeId: z.string().min(1).optional(),
+  botState: z.enum(['sin_analizar', 'resuelto_bot', 'requiere_humano', 'stale']).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+// spec UI-7 — `assigneeId: null` clears the assignment; an empty string is
+// rejected (not a valid RbacUser id), same criterion as `ReplyBodySchema`.
+const AssigneeBodySchema = z.object({
+  assigneeId: z.string().min(1).nullable(),
+});
+
 /**
  * suricata-tickets-mirror (Fase A — BE Slice 0, design.md D8/D14) — wiring del
  * panel INTERNO (sesión + `suricata.read`/`manage`/`reply`), fuera del cuerpo de
  * `app.ts` (mismo criterio que `composeAlertsModule`/`composeAssistantModule`:
  * evitar inflar el God Object de 3326 líneas).
  *
- * Fase E reemplaza SOLO `POST /tickets/:id/reply` (spec `suricata-ticket-reply`
- * REPLY-1..6, design D10) — el resto de las rutas (`GET /tickets`, `GET /:id`,
- * `GET /areas`, `GET /kpis`, `PATCH /:id/assignee`) siguen 501 (Fase F scope).
+ * Fase E implementó `POST /tickets/:id/reply` (spec `suricata-ticket-reply`
+ * REPLY-1..6, design D10). Fase F (this file's current state) adds the
+ * panel's READ routes plus the assignment PATCH (spec `suricata-tickets-ui`
+ * UI-1..UI-7, design D13): `GET /tickets`, `GET /tickets/:id`, `GET /areas`,
+ * `GET /kpis`, `PATCH /tickets/:id/assignee`. No stub route remains — every
+ * path this router exposes is fully implemented.
  *
  * RBAC-2/REPLY-1 — `suricata.reply` es una acción DEDICADA (no `send`), y el
  * `requirePerm` middleware corre ANTES del handler: un caller sin el permiso
  * nunca ejecuta el body de la ruta, así que el `SuricataReplyPort` NUNCA se
  * invoca (el spy en `suricata.reply.routes.test.ts` lo prueba con calls=0).
+ * Fase F sigue el mismo criterio: `suricata.read` gatea toda lectura,
+ * `suricata.manage` gatea SOLO la asignación (spec UI-7/UI-8).
  */
 export function composeSuricataModule(deps: ComposeSuricataModuleDeps): Router {
   const router = Router();
   const auth = createAuthMiddleware(deps.authAdapter, deps.sessionRepo);
   const requireReply = deps.requirePerm('suricata', 'reply');
+  const requireRead = deps.requirePerm('suricata', 'read');
+  const requireManage = deps.requirePerm('suricata', 'manage');
 
   /** Fail-safe a OFF, mismo criterio que el kill-switch de external-bulk-messaging. */
   async function isReplyEnabled(): Promise<boolean> {
@@ -95,10 +135,75 @@ export function composeSuricataModule(deps: ComposeSuricataModuleDeps): Router {
     },
   );
 
-  // ─── Fase F scope: GET /tickets, GET /:id, GET /areas, GET /kpis, PATCH /:id/assignee ─
-  router.use((_req, res) => {
-    res.status(501).json({ error: 'Not implemented', code: 'NOT_IMPLEMENTED' });
+  // ─── GET /tickets (UI-1) ─────────────────────────────────────────────
+  router.get('/tickets', auth, requireRead, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const query = parseOr400(ListQuerySchema, req.query, res);
+      if (query === null) return;
+      const { page, limit, ...filters } = query;
+      const result = await deps.listSuricataTickets.execute({ filters, page, limit });
+      res.status(200).json(result);
+    } catch (err) {
+      next(err);
+    }
   });
+
+  // ─── GET /areas — catálogo simple para el filtro de área (UI-1) ────────
+  router.get('/areas', auth, requireRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const areas = await deps.areaRepo.list();
+      res.status(200).json(areas.map((a) => ({ id: a.id, name: a.name, active: a.active })));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── GET /kpis (UI-6) ────────────────────────────────────────────────
+  router.get('/kpis', auth, requireRead, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const kpis = await deps.computeSuricataKpis.execute();
+      res.status(200).json(kpis);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── GET /tickets/:id (UI-2..UI-5) — mirror-only, zero live Suricata calls ──
+  router.get(
+    '/tickets/:id',
+    auth,
+    requireRead,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const detail = await deps.getSuricataTicketDetail.execute(req.params['id'] as string);
+        res.status(200).json(detail);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ─── PATCH /tickets/:id/assignee (UI-7) — Prominense-ONLY, never writes to
+  // Suricata. Gated by `suricata.manage`, distinct from the `suricata.read`
+  // gate on every other route in this router (UI-8).
+  router.patch(
+    '/tickets/:id/assignee',
+    auth,
+    requireManage,
+    async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const body = parseOr400(AssigneeBodySchema, req.body, res);
+        if (body === null) return;
+        const updated = await deps.setSuricataAssignee.execute({
+          ticketId: req.params['id'] as string,
+          assigneeId: body.assigneeId,
+        });
+        res.status(200).json({ id: updated.id, assigneeId: updated.assigneeId });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
   return router;
 }
