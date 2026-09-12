@@ -22,6 +22,26 @@ describe("RBAC_MODULES includes 'suricata' (suricata-tickets-mirror, RBAC-EXT-2)
     const m: RbacModuleCode = 'suricata';
     expect(m).toBe('suricata');
   });
+
+  /**
+   * NEGATIVE witness — the positive one above passes just as happily if
+   * `RbacModuleCode` is ever widened to `string`, so on its own it proves
+   * nothing about the union being CLOSED. Here the compiler is the runner
+   * (molde `assistant-composition.test.ts`'s `refreshBalance` arity pin):
+   * `@ts-expect-error` FAILS the build when the error it expects disappears,
+   * so relaxing the type breaks this test loudly.
+   */
+  it('RbacModuleCode is a CLOSED union — an invented module code does NOT compile', () => {
+    // @ts-expect-error — 'ghost' is not a member of RBAC_MODULES, so it must not be assignable.
+    const invented: RbacModuleCode = 'ghost';
+    expect(RBAC_MODULES).not.toContain(invented);
+  });
+
+  it('PermissionAction is a CLOSED union too — an invented action does NOT compile', () => {
+    // @ts-expect-error — 'teleport' is not a known action code.
+    const invented: PermissionAction = 'teleport';
+    expect(KNOWN_ACTIONS).not.toContain(invented);
+  });
 });
 
 describe("KNOWN_ACTIONS includes the DEDICATED 'reply' sub-action (RBAC-EXT-2)", () => {
