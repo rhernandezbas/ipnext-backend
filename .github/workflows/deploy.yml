@@ -53,14 +53,22 @@ jobs:
         # solo alcanzable por la red `ipnext-net` (run-server no tiene auth).
         # --shm-size 1g: el default de Docker (64MB) hace que Chromium muera
         # con pestañas grandes. --init evita zombies de los procesos del browser.
+        # Hardening (review adversarial de seguridad, post-Fase J): SIN `npx -y`
+        # — la imagen YA trae el playwright pineado por el tag, `-y` forzaba
+        # una resolución contra el registry de npm en CADA restart (egress
+        # externo del que el sync quedaría dependiente); `--user pwuser` +
+        # `--cap-drop ALL` + `--security-opt no-new-privileges` porque este
+        # container renderiza HTML de un sitio ajeno — si un exploit de
+        # renderer escapa, no debe aterrizar como root en la red interna.
         run: |
           set -e
           docker network create ipnext-net 2>/dev/null || true
           docker rm -f ipnext-playwright 2>/dev/null || true
           docker run -d --name ipnext-playwright --network ipnext-net --network-alias playwright \
             --restart unless-stopped --memory 1g --shm-size 1g --init \
+            --user pwuser --cap-drop ALL --security-opt no-new-privileges \
             mcr.microsoft.com/playwright:v1.63.0-noble \
-            npx -y playwright@1.63.0 run-server --port 3000 --host 0.0.0.0
+            npx playwright run-server --port 3000 --host 0.0.0.0
 
       - name: Deploy container
         # FIREBASE_SERVICE_ACCOUNT_JSON va por env: (NO inline ${{ }} en el shell):
