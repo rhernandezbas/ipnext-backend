@@ -96,18 +96,18 @@ Chain strategy: pending
 
 ## Phase G — FE list + filters + KPIs (repo: ipnext-frontend)
 
-- [ ] G.1 Read `suricata-tickets-mockup.html` (read-only) for layout reference.
-- [ ] G.2 Create `ipnext-frontend/src/pages/suricata/api/suricataClient.ts` (typed client mirroring D13 DTOs field-by-field).
-- [ ] G.3 TDD + implement `ipnext-frontend/src/pages/suricata/SuricataTicketList.tsx` + `.module.css`: filters (status/priority/area/botState), badges, assigned agent (UI-1).
-- [ ] G.4 TDD + implement `SuricataKpiStrip.tsx`: 4 KPI values from `GET /kpis`, recompute after verdict (UI-6).
-- [ ] G.5 Register route in FE router; gate visibility behind `suricata.read` permission.
+- [x] G.1 Read `suricata-tickets-mockup.html` (read-only) for layout reference.
+- [x] G.2 Create `ipnext-frontend/src/pages/suricata/api/suricataClient.ts` (typed client mirroring D13 DTOs field-by-field).
+- [x] G.3 TDD + implement `ipnext-frontend/src/pages/suricata/SuricataTicketList.tsx` + `.module.css`: filters (status/priority/area/botState), badges, assigned agent (UI-1).
+- [x] G.4 TDD + implement `SuricataKpiStrip.tsx`: 4 KPI values from `GET /kpis`, recompute after verdict (UI-6).
+- [x] G.5 Register route in FE router; gate visibility behind `suricata.read` permission.
 
 ## Phase H — FE detail tabs (repo: ipnext-frontend)
 
-- [ ] H.1 TDD + implement `SuricataTicketDetail.tsx` (Conversation/AI Analysis/Client Data tabs, mirror-only, zero live Suricata calls) — UI-2.
-- [ ] H.2 TDD + implement Conversation tab: ordered timeline, inline `<audio>` for audio attachments, not bare links (UI-3).
-- [ ] H.3 TDD + implement AI Analysis tab: current verdict fields; explicit empty state when none (UI-4).
-- [ ] H.4 TDD + implement Client Data tab: 5 sections per D13.b (history, current claim, same-root-cause flag, equipment/signal, GR debt), read-only, "sin cliente vinculado" when `clientId` is null (UI-5).
+- [x] H.1 TDD + implement `SuricataTicketDetailPage.tsx` (Conversation/AI Analysis/Client Data tabs, mirror-only, zero live Suricata calls) — UI-2.
+- [x] H.2 TDD + implement Conversation tab: ordered timeline, inline `<audio>` for audio attachments, not bare links (UI-3).
+- [x] H.3 TDD + implement AI Analysis tab: current verdict fields; explicit empty state when none (UI-4).
+- [x] H.4 TDD + implement Client Data tab: 5 sections per spec UI-5 (history, current claim, same-root-cause flag, equipment/signal, GR debt), read-only, "sin cliente vinculado" when `clientId` is null (UI-5).
 
 ## Phase I — FE reply + assignment (repo: ipnext-frontend)
 
