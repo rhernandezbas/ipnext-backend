@@ -807,6 +807,10 @@ import { composeAlertsModule } from './composeAlertsModule';
 import { composeAssistantModule } from './composeAssistantModule';
 // ── ai-assistant-multiagent — MOTOR del asistente; wiring en composeAssistantEngine ─────
 import { composeAssistantEngine } from './composeAssistantEngine';
+// ── suricata-tickets-mirror (Fase A) — panel interno; wiring en composeSuricataModule ───
+import { composeSuricataModule } from './composeSuricataModule';
+// ── suricata-tickets-mirror (Fase A) — endpoint externo; wiring en composeSuricataExternalModule ─
+import { composeSuricataExternalModule } from './composeSuricataExternalModule';
 import { ChatMessageThreadReader } from '@infrastructure/adapters/assistant/ChatMessageThreadReader';
 import { CustomerAssistantClientResolver } from '@infrastructure/adapters/assistant/CustomerAssistantClientResolver';
 import { PrismaZoneRepository } from '../adapters/prisma/PrismaZoneRepository';
@@ -3283,6 +3287,13 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   // así la configuración puede estar viva y editándose con el bot completamente mudo.
   app.use('/api/assistant', composeAssistantModule({ authAdapter, sessionRepo, requirePerm }));
 
+  // ─── suricata-tickets-mirror (Fase A — BE Slice 0, D8) — panel interno ───────
+  // Espejo READ-ONLY de tickets de Suricata Cx + veredicto del bot + reply guardado.
+  // Slice 0: TODAS las rutas devuelven 501 (D14 "wiring vacío") — reclama las líneas
+  // de este God Object antes que otra sesión. Heavy wiring vive en composeSuricataModule.
+  app.use('/api/suricata', composeSuricataModule({ authAdapter, sessionRepo, requirePerm }));
+  // [suricata-internal-mount-end]
+
   // ─── messaging-inbox (F1) — Chatwoot webhook ingest + inbox reads/send ───────
   {
     const conversationRepo = new PrismaConversationRepository();
@@ -3979,6 +3990,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     // Compensation port — hard-delete the post if the attach phase fails (all-or-nothing 5xx).
     newsPostRepo,
   );
+
+  // ─── suricata-tickets-mirror (Fase A — BE Slice 0, D8) — endpoint EXTERNO ────
+  // ⚠️ ORDEN LOAD-BEARING: este mount DEBE quedar registrado ANTES del mount
+  // GLOBAL de abajo (prefijo `/api/external/v1` + `createApiKeyMiddleware()` sin
+  // key dedicada) — Express matchea en orden de registro; si cayera DESPUÉS, la
+  // key GLOBAL interceptaría `/suricata/*` y la key dedicada
+  // (`config.suricata.externalApiKey`, Fase D) nunca se evaluaría (mismo
+  // incidente documentado para external-bulk-messaging arriba). Pineado por
+  // `suricata-composition.test.ts`.
+  // Slice 0: SIN `createApiKeyMiddleware`/`machineActorMiddleware` todavía —
+  // `config.suricata.*` y el usuario máquina `api-suricata` nacen en la Fase D
+  // (ver composeSuricataExternalModule.ts). El 501 de acá no expone ningún dato.
+  app.use('/api/external/v1/suricata', composeSuricataExternalModule());
+  // [suricata-external-mount-end]
+
   app.use('/api/external/v1', createApiKeyMiddleware(), createExternalV1Router(listClients, getDetail, listContracts, {
     createTicket,
     rbacUserRepo,

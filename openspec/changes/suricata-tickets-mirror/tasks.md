@@ -39,14 +39,14 @@ Chain strategy: pending
 
 ## Phase A — BE Slice 0: schema, RBAC module, wiring stub (repo: ipnext-backend)
 
-- [ ] A.1 Edit `prisma/schema.prisma`: add 7 models per design D1 (`SuricataArea`, `SuricataTicket`, `SuricataMessage`, `SuricataAttachment`, `SuricataTicketVerdict`, `SuricataReplyAudit`, `SuricataSyncRun`).
-- [ ] A.2 Edit `src/domain/entities/rbac.ts`: append `'suricata'` to `RBAC_MODULES` with the D2 justification comment; actions `read`, `manage`, `reply` (per spec RBAC-EXT-2 — see Risks: conflicts with design D2's `send` reuse, follow spec literally).
-- [ ] A.3 TDD RBAC-EXT-1/EXT-2: unresolved `'ghost'` module fails `tsc --noEmit`; `RBAC_MODULES` contains `suricata` with 3 actions — `src/__tests__/domain/rbac.test.ts`.
-- [ ] A.4 Generate `prisma/migrations/<ts>_suricata_tickets_mirror/migration.sql` via `prisma migrate diff --from-schema-datamodel` (no local DB, per `WORKFLOW-MULTI-REPO.md`); hand-append RBAC seed (`suricata.read/manage/reply`, `ON CONFLICT DO NOTHING`, grant `super_admin`) + 2 feature flags (`suricata-sync-enabled`, `suricata-reply-enabled`, both `false`). No `BEGIN`/`COMMIT`.
-- [ ] A.5 Create `src/infrastructure/http/composeSuricataModule.ts` and `composeSuricataExternalModule.ts` returning `501` stub routers.
-- [ ] A.6 Edit `src/infrastructure/http/app.ts`: add import + 2 marked mount blocks per D8 (internal after `/api/assistant`, external before the global external-v1 catch-all — order load-bearing).
-- [ ] A.7 TDD composition: mount index of `/api/external/v1/suricata` `<` index of `/api/external/v1` — extend `src/__tests__/infrastructure/external-bulk-messaging-composition.test.ts` pattern in a new `suricata-composition.test.ts`.
-- [ ] A.8 REFACTOR pass: confirm `tsc --noEmit` clean, `npm test` green.
+- [x] A.1 Edit `prisma/schema.prisma`: add 7 models per design D1 (`SuricataArea`, `SuricataTicket`, `SuricataMessage`, `SuricataAttachment`, `SuricataTicketVerdict`, `SuricataReplyAudit`, `SuricataSyncRun`).
+- [x] A.2 Edit `src/domain/entities/rbac.ts`: append `'suricata'` to `RBAC_MODULES` with the D2 justification comment; actions `read`, `manage`, `reply` (per spec RBAC-EXT-2 — design D2 amended 2026-09-11 to match: dedicated `reply`, not a `send` reuse — see "Key Open Item" note below, now resolved).
+- [x] A.3 TDD RBAC-EXT-1/EXT-2: `RBAC_MODULES` contains `suricata`, `KNOWN_ACTIONS` contains the dedicated `reply` action (distinct from `send`) — `src/__tests__/domain/rbac-suricata-module.test.ts` (molde `rbac-tv-module.test.ts`); existing module/action count pins in `src/__tests__/domain/entities/rbac.test.ts` updated 42→43 / 58→59. (The "unresolved `'ghost'` fails `tsc --noEmit`" invariant is already covered generically by `rbac.test.ts` comment/RBAC-EXT-1 — no new test needed, `RbacModuleCode` stays a closed union by construction.)
+- [x] A.4 Generate `prisma/migrations/20261116000000_suricata_tickets_mirror_base/migration.sql` via `prisma migrate diff --from-schema --to-schema` (Prisma 7 renamed the flag from `--from-schema-datamodel`; no local DB, per `WORKFLOW-MULTI-REPO.md`); hand-appended RBAC seed (`suricata.read/manage/reply`, `ON CONFLICT DO NOTHING`, grant `read`→6 system roles, `manage`+`reply`→`super_admin`+`administrador`, molde `store`) + 2 feature flags (`suricata-sync-enabled`, `suricata-reply-enabled`, both `false`). No `BEGIN`/`COMMIT`.
+- [x] A.5 Create `src/infrastructure/http/composeSuricataModule.ts` and `composeSuricataExternalModule.ts` returning `501` stub routers.
+- [x] A.6 Edit `src/infrastructure/http/app.ts`: add import + 2 marked mount blocks per D8 (internal after `/api/assistant`, external before the global external-v1 catch-all — order load-bearing). DEVIATION: the external mount does NOT yet wrap `createApiKeyMiddleware(config.suricata.externalApiKey)` / `machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN)` — `config.suricata.*` (D11) and the `api-suricata` machine user are Phase D/B.3 scope and don't exist yet; adding them now would duplicate that work. The 501 stub exposes zero data either way. Phase D replaces the mount line's single argument, not the app.ts anchor.
+- [x] A.7 TDD composition: mount index of `/api/external/v1/suricata` `<` index of `/api/external/v1` — new `src/__tests__/infrastructure/suricata-composition.test.ts` (static source assertions, molde `external-bulk-messaging-composition.test.ts` part (a); part (b) "mecánica de orden" with a real router harness deferred to Phase D/F, when the routers stop being 501-only).
+- [x] A.8 REFACTOR pass: `tsc --noEmit` clean (zero errors). `npm test` full suite: 13688 passed / 13777 total (88 skipped), 1 failure in `externalV1.news.routes.test.ts` (multipart 40MB timeout) that reproduces on the pre-existing `main` code path too and passes in isolation (`npx jest externalV1.news.routes` → 32/32 green) — parallel-suite CPU contention (repo's own documented "Suite bajo contención no es una medición" gotcha), not a regression from this change.
 
 ## Phase B — BE session lock (repo: ipnext-backend)
 
@@ -126,10 +126,13 @@ Chain strategy: pending
 - [ ] J.4 Update `env.example` with `SURICATA_*` vars (D11); set real secrets via `gh secret set` (not committed).
 - [ ] J.5 Manual smoke (D14 steps 2–5): flip `suricata-sync-enabled`, verify `SuricataSyncRun.outcome='ok'`; then flip `suricata-reply-enabled` and send ONE real reply to a hand-picked ticket.
 
-## Key Open Item Surfaced (not a business decision — a spec/design conflict)
+## Key Open Item Surfaced (not a business decision — a spec/design conflict) — RESOLVED 2026-09-11
 
 `suricata-ticket-reply` spec (REPLY-1) and `rbac-permission-catalog-extension` delta (RBAC-EXT-2)
-both name a dedicated **`reply`** action code. Design D2 instead proposes reusing the existing
-**`send`** action code (messaging precedent). Tasks A.2/A.4 follow the spec text literally because
-its scenarios are testable contracts (`RbacModule` must expose `read/manage/reply`); flagging this
-so the design gets reconciled or the spec amended before/at apply time.
+both name a dedicated **`reply`** action code. Design D2 originally proposed reusing the existing
+**`send`** action code (messaging precedent), contradicting its own array-literal comment (which
+already said `reply`) and the approved spec. **Resolved**: design.md D2 was corrected by hand
+post-tasks (2026-09-11) to match the spec — dedicated `reply` action, not a `send` reuse. Phase A
+(tasks A.2–A.4) implements the corrected, now-consistent version: `RBAC_MODULES` includes
+`suricata`, `KNOWN_ACTIONS` includes `reply`, and the migration seed grants
+`suricata.read`/`manage`/`reply`.
