@@ -40,8 +40,15 @@ describe('RBAC_MODULES constant', () => {
   // portal-push-notifications: agrega el módulo `push` sobre esa base de 39 -> 40.
   // wifi-self-service (F0): agrega el módulo `wifi` sobre esa base de 40 -> 41.
   // store-backend: agrega el módulo `store` sobre esa base de 41 -> 42.
-  it('contains exactly 42 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians + 1 promos + 1 push + 1 wifi + 1 store)', () => {
-    expect(RBAC_MODULES).toHaveLength(42);
+  // suricata-tickets-mirror (Phase A): agrega el módulo `suricata` sobre esa base de 42 -> 43.
+  it('contains exactly 43 module codes (14 original + 11 Phase 2 + 1 contracts + 1 uisp + 1 tv + 1 recapture + 1 pppoe + 1 plan + 1 zones + 1 actions + 1 messaging + 1 news + 1 assistant + 1 finance + 1 technicians + 1 promos + 1 push + 1 wifi + 1 store + 1 suricata)', () => {
+    expect(RBAC_MODULES).toHaveLength(43);
+  });
+
+  it('includes the suricata module (suricata-tickets-mirror — espejo de tickets de Suricata Cx)', () => {
+    // Módulo PROPIO, no una sub-acción de `tickets`: espeja un sistema ajeno y expone
+    // una acción (`reply`) que escribe hacia afuera, a un cliente real.
+    expect(RBAC_MODULES).toContain('suricata');
   });
 
   it('includes the wifi module (wifi-self-service)', () => {
@@ -198,8 +205,12 @@ describe('KNOWN_ACTIONS constant', () => {
   // acciones (manage_costs/manage_targets/manage_inflation) y iclass-gps-audit sumó 2
   // (location_read/location_audit), ambos sobre la misma base de 53. Unidas las cinco,
   // el conteo REAL es 58 — verificado contando el array, sin duplicados.
-  it('contains exactly 58 valid action codes (53 prior + 3 finance-growth Fase 1: manage_costs/manage_targets/manage_inflation — `sync` already existed, reused — + 2 iclass-gps-audit: location_read/location_audit)', () => {
-    expect(KNOWN_ACTIONS).toHaveLength(58);
+  it('contains exactly 59 valid action codes (58 prior + 1 suricata-tickets-mirror: reply — dedicada, NO reusa `send`)', () => {
+    expect(KNOWN_ACTIONS).toHaveLength(59);
+  });
+
+  it("includes reply (suricata-tickets-mirror — responder al cliente real vía Suricata, acción dedicada distinta de 'send')", () => {
+    expect(KNOWN_ACTIONS).toContain('reply');
   });
 
   it('includes the 3 finance-growth Fase 1 sub-actions (manage_costs/manage_targets/manage_inflation)', () => {

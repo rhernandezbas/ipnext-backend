@@ -108,6 +108,12 @@ export const KNOWN_ACTIONS = [
   'manage_costs',
   'manage_targets',
   'manage_inflation',
+  // suricata-tickets-mirror — acción DEDICADA para responder al cliente real
+  // desde el espejo de Suricata (design.md D2, corrección post-tasks
+  // 2026-09-11: NO se reusa 'send' de messaging-inbox — un envío a un
+  // cliente vía Suricata es una escritura irreversible hacia un sistema
+  // ajeno, riesgo distinto al de responder un WhatsApp interno).
+  'reply',
 ] as const;
 // NOTE: 'read' and 'manage' are already in KNOWN_ACTIONS (base actions).
 // uisp module uses those base actions — no new action codes needed.
@@ -206,6 +212,12 @@ export const RBAC_MODULES = [
   // administrar cuentas del portal. Usa las base actions read/manage sin
   // agregar action codes nuevos (mismo criterio que 'promos'/'wifi').
   'store',
+  // suricata-tickets-mirror — espejo de los tickets de Suricata Cx + veredicto del bot.
+  // Módulo PROPIO y no una sub-acción de `tickets` a propósito: `tickets` es el dominio
+  // INTERNO de Prominense; esto es el espejo de un sistema ajeno, con una acción
+  // (`reply`) que escribe hacia afuera, a un cliente real. Misma separación que
+  // `assistant` vs `messaging`.
+  'suricata',
 ] as const;
 
 export type RbacModuleCode = (typeof RBAC_MODULES)[number];

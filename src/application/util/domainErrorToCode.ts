@@ -7,6 +7,7 @@ import {
   IClassNodeNotAssignableError,
 } from '@domain/errors/iclass';
 import { MissingTemplateVariablesError, TemplateInUseByCampaignError, ManualRecipientsNotFoundError, BulkRecipientsNotPermittedError } from '@domain/errors/messaging-bulk';
+import { InvalidSuricataVerdictError, SuricataReplySendFailedError } from '@domain/errors/suricata';
 
 /** Shape of a domain error mapped to a transport-agnostic result. */
 export interface DomainErrorCode {
@@ -41,6 +42,12 @@ export interface DomainErrorCode {
    * para que el FE muestre exactamente qué bloqueó el envío masivo.
    */
   forbidden?: string[];
+  /**
+   * suricata-tickets-mirror (Phase E, design D10) — surfaced from
+   * `SuricataReplySendFailedError`: the id of the `SuricataReplyAudit` row for
+   * this attempt, so the operator can look up exactly what was attempted.
+   */
+  replyAuditId?: string;
 }
 
 /**
@@ -82,6 +89,17 @@ export function domainErrorToCode(err: unknown): DomainErrorCode | null {
   }
   if (err instanceof BulkRecipientsNotPermittedError) {
     result.forbidden = err.forbidden;
+  }
+  // suricata-tickets-mirror (Phase D) — surfaces WHICH fields were missing
+  // (`motivo`/`respuestaSugerida`) so the bot caller can retry with a
+  // complete payload instead of guessing from the message string.
+  if (err instanceof InvalidSuricataVerdictError) {
+    result.missingFields = err.missingFields;
+  }
+  // suricata-tickets-mirror (Phase E) — the operator needs the audit id to
+  // look up exactly what was attempted, design D10.
+  if (err instanceof SuricataReplySendFailedError) {
+    result.replyAuditId = err.replyAuditId;
   }
   return result;
 }

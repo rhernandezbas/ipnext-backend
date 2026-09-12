@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <div class="ticket-detail" data-ticket-id="1001">
+    <h1 class="ticket-detail-subject">No tengo internet</h1>
+    <span class="ticket-detail-status" data-status="abierto"></span>
+    <span class="ticket-detail-priority" data-priority="alta"></span>
+    <span class="ticket-detail-area" data-area-id="area-1"></span>
+    <div class="ticket-detail-customer"
+         data-name="Juan Perez"
+         data-email="juan@example.com"
+         data-phone="+5491122334455"
+         data-external-ref="CLI-9090"></div>
+    <span class="ticket-detail-opened-at" data-opened-at="2026-08-01T09:00:00.000Z"></span>
+    <span class="ticket-detail-last-message-at" data-last-message-at="2026-09-01T10:00:00.000Z"></span>
+    <div class="message-list">
+      <div class="message-row" data-message-id="m-1" data-author="Juan Perez" data-author-kind="customer" data-sent-at="2026-09-01T09:55:00.000Z">
+        <div class="message-body">No tengo internet desde ayer</div>
+      </div>
+      <div class="message-row" data-message-id="m-2" data-author="Soporte" data-author-kind="agent" data-sent-at="2026-09-01T10:00:00.000Z">
+        <div class="message-body">Estamos revisando, ¿podés mandar una foto del router?</div>
+        <a class="attachment-link" href="/attachments/att-1.png" data-filename="captura.png" data-mime-type="image/png" data-size-bytes="20480">captura.png</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

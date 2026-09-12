@@ -17,10 +17,12 @@ import { bootstrapSnoozeReactivation } from './infrastructure/scheduling/bootstr
 import { bootstrapTeamLocationIngest } from './infrastructure/scheduling/bootstrapTeamLocationIngest';
 import { bootstrapFinanceReceiptsIngest } from './infrastructure/scheduling/bootstrapFinanceReceiptsIngest';
 import { bootstrapFinanceSnapshotJob } from './infrastructure/scheduling/bootstrapFinanceSnapshotJob';
+import { bootstrapSuricataSync } from './infrastructure/scheduling/bootstrapSuricataSync';
 import { PrismaIClassClosureConfigRepository } from './infrastructure/adapters/prisma/PrismaIClassClosureConfigRepository';
 import { PrismaRbacUserRepository } from './infrastructure/adapters/prisma/PrismaRbacUserRepository';
 import { bootstrapSystemUsers } from './infrastructure/bootstrap/bootstrapSystemUsers';
 import { bootstrapApiMessagingUser } from './infrastructure/bootstrap/bootstrapApiMessagingUser';
+import { bootstrapApiSuricataUser } from './infrastructure/bootstrap/bootstrapApiSuricataUser';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
@@ -57,6 +59,16 @@ void (async () => {
   // el usuario existe aunque la feature esté apagada). Hash inusable, distinto por
   // deploy, NUNCA literal en git (D2).
   await bootstrapApiMessagingUser(new PrismaRbacUserRepository(), {
+    passwordHash: bcrypt.hashSync(randomUUID(), 10),
+  });
+
+  // (a''') suricata-tickets-mirror (Phase D, D8/D11) — system "api-suricata"
+  // user, MUST exist before the first external verdict submission:
+  // `SubmitSuricataVerdict` stamps it as `SuricataTicketVerdict.submittedBy`
+  // and `machineActorMiddleware` (app.ts mount) attaches it for audit. Runs
+  // UNCONDITIONALLY and idempotent, independent of the `suricata-verdict-enabled`
+  // flag (dark-launch friendly, same criterion as `api-messaging` above).
+  await bootstrapApiSuricataUser(new PrismaRbacUserRepository(), {
     passwordHash: bcrypt.hashSync(randomUUID(), 10),
   });
 
@@ -123,6 +135,13 @@ void (async () => {
   void bootstrapChatMediaDownload()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[chat-media-download] bootstrap failed (server kept alive):', (err as Error).message));
+  // suricata-tickets-mirror (Phase C) — espejo de tickets de Suricata Cx —
+  // opt-in (envs SURICATA_*, D5/D11), dark by default (flag
+  // 'suricata-sync-enabled'). Devuelve null hasta que exista el sidecar
+  // Playwright (Fase J) -- ver DEVIATION en bootstrapSuricataSync.ts.
+  void bootstrapSuricataSync()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[suricata-sync] bootstrap failed (server kept alive):', (err as Error).message));
   // Watcher full-auto de fibra (K3 fiber-auto-watcher) — opt-in (envs SMARTOLT_*),
   // dark by default (flag 'fiber-auto-provision-watcher', separado del flag del wizard).
   void bootstrapAutoProvisionFiber()

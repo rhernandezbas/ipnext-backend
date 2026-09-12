@@ -3424,6 +3424,9 @@ model RbacUser {
   mentionsMade            ConversationMention[]  @relation("ConversationMentionByUser")
   // portal-promos — back-relation de las promos publicadas por este usuario.
   portalPromosAuthored    PortalPromo[]
+  // suricata-tickets-mirror — back-relation de la asignación INTERNA de Prominense
+  // sobre un ticket espejado (SetNull on delete: NUNCA se escribe a Suricata).
+  suricataTicketsAssigned SuricataTicket[]
 
   @@index([login])
   @@index([iclassTeamLogin])
@@ -4767,4 +4770,160 @@ model WifiGuestIntent {
   /// Sellado tras el ÚNICO re-push del flujo deleting. null = nunca re-pusheado.
   retriedAt DateTime?
   createdAt DateTime  @default(now())
+}
+
+// =============================================
+// suricata-tickets-mirror — espejo de tickets de Suricata Cx (sistema ajeno,
+// sin REST API) + veredicto del bot. Ver design.md D1. 7 tablas nuevas,
+// TODO aditivo: Suricata nunca recibe una escritura desde el sync (solo el
+// reply, Fase E, escribe hacia afuera). El back-relation de assignee vive en
+// RbacUser (suricataTicketsAssigned) — asignación INTERNA de Prominense,
+// jamás sincronizada a Suricata.
+// =============================================
+
+model SuricataArea {
+  id         String           @id @default(uuid())
+  /// id de área en Suricata — clave de idempotencia del catálogo.
+  externalId String           @unique
+  name       String
+  /// D6.c: un área que desaparece del catálogo remoto pasa a false — JAMÁS delete
+  /// (SuricataTicket.areaId es SetNull; borrar corrompería la KPI por área retroactivamente).
+  active     Boolean          @default(true)
+  syncedAt   DateTime
+  tickets    SuricataTicket[]
+}
+
+model SuricataTicket {
+  id         String    @id @default(uuid())
+  /// CLAVE DE IDEMPOTENCIA (D6.b) — todo upsert, nunca create.
+  externalId String    @unique
+  subject    String
+  /// D1.a: string CRUDO de Suricata, sin normalizar — un valor nuevo no debe
+  /// reventar el sync. La normalización a buckets de filtro vive en el DTO.
+  status     String
+  priority   String?
+  areaId     String?
+  area       SuricataArea? @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  customerName      String?
+  customerEmail     String?
+  customerPhone     String?
+  /// Lo que Suricata muestre como id de cliente (D13.b, tab Client Data).
+  externalClientRef String?
+  /// Match LOCAL contra Client — nullable, best-effort (D13.b), sin FK física.
+  clientId          String?
+  openedAt          DateTime?
+  lastMessageAt     DateTime?
+  /// Asignación INTERNA de Prominense — NUNCA se escribe a Suricata (proposal, out of scope).
+  assigneeId    String?
+  assignee      RbacUser? @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  /// sha256 del render canónico del ticket (D6.b) — corta upserts inútiles y
+  /// congela el punto de comparación de un SuricataTicketVerdict (D9, `stale`).
+  contentHash   String
+  firstSyncedAt DateTime  @default(now())
+  syncedAt      DateTime
+  messages      SuricataMessage[]
+  attachments   SuricataAttachment[]
+  verdicts      SuricataTicketVerdict[]
+  replies       SuricataReplyAudit[]
+
+  @@index([status, lastMessageAt])
+  @@index([areaId])
+  @@index([assigneeId])
+  @@index([clientId])
+}
+
+model SuricataMessage {
+  id         String   @id @default(uuid())
+  ticketId   String
+  ticket     SuricataTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  /// idempotencia por mensaje.
+  externalId String   @unique
+  author     String
+  /// 'customer' | 'agent' | 'system' | 'unknown'.
+  authorKind String
+  body       String
+  sentAt     DateTime
+  attachments SuricataAttachment[]
+
+  @@index([ticketId, sentAt])
+}
+
+model SuricataAttachment {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    SuricataTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  messageId String?
+  message   SuricataMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  /// url/id en Suricata.
+  externalRef String
+  fileName    String
+  mimeType    String   @default("application/octet-stream")
+  sizeBytes   Int?
+  /// null hasta bajarlo; dedup de contenido (D7.b) — la key de storage ES el sha256.
+  sha256      String?
+  /// 'suricata/<sha256>' — null mientras status != 'stored'.
+  storageKey  String?
+  /// 'pending' | 'stored' | 'failed'.
+  status      String   @default("pending")
+  /// tope 5 (molde ChatMessageAttachment MEDIA-3) — pasado el tope, status='failed', sin loop.
+  attempts    Int      @default(0)
+  lastError   String?
+
+  @@unique([ticketId, externalRef])
+  @@index([status, attempts])
+}
+
+model SuricataTicketVerdict {
+  id       String   @id @default(uuid())
+  ticketId String
+  ticket   SuricataTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  resuelto Boolean
+  analisis String
+  /// requerido si resuelto=false (regla de negocio en el use case, no acá).
+  motivo            String?
+  respuestaSugerida String?
+  /// contentHash del ticket AL MOMENTO del veredicto (D9) — si difiere del actual,
+  /// el DTO deriva `stale` (no es columna, no se borra ni se oculta).
+  ticketContentHash String
+  /// login del actor máquina (api-suricata).
+  submittedBy String
+  createdAt   DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+model SuricataReplyAudit {
+  id       String   @id @default(uuid())
+  ticketId String
+  ticket   SuricataTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  /// RbacUser que confirmó — soft reference (sin @relation física), mismo criterio
+  /// que `iclassTeamLogin`: el audit sobrevive aunque el actor se borre.
+  actorId  String
+  /// el texto EXACTO que se intentó enviar.
+  body        String
+  /// 'sent' | 'failed'. Se escribe la fila ANTES de tomar la sesión (D10):
+  /// auditar el INTENTO, no el éxito.
+  outcome     String
+  error       String?
+  attemptedAt DateTime @default(now())
+  sentAt      DateTime?
+
+  @@index([ticketId, attemptedAt])
+}
+
+model SuricataSyncRun {
+  id                String    @id @default(uuid())
+  startedAt         DateTime  @default(now())
+  finishedAt        DateTime?
+  /// 'running' | 'ok' | 'degraded' | 'failed' (D6.d).
+  outcome           String    @default("running")
+  ticketsSeen       Int       @default(0)
+  ticketsUpserted   Int       @default(0)
+  messagesUpserted  Int       @default(0)
+  attachmentsStored Int       @default(0)
+  error             String?
+  /// D6.d — qué selector no matcheó (campo obligatorio ausente).
+  selectorMisses    Json?
+
+  @@index([startedAt])
 }
