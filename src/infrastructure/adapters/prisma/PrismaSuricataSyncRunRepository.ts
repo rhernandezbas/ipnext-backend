@@ -66,25 +66,34 @@ export class PrismaSuricataSyncRunRepository implements SuricataSyncRunRepositor
   }
 
   /**
-   * Watermark source for the incremental sweep — ONLY `outcome: 'ok'` qualifies.
+   * Watermark source for the incremental sweep — the last run that mirrored
+   * EVERY ticket it saw: `outcome: 'ok'`, or `degraded` with `error IS NULL`.
    *
-   * A `degraded` run finished with at least one ticket it could NOT mirror
-   * (e.g. `SuricataSessionBusyError` losing the priority queue to a concurrent
-   * reply). If a degraded run were allowed to be the reference point, the next
-   * run's cutoff (`lastRun.startedAt`) would sit AFTER that ticket's
-   * `lastMessageAt`, so the activity-descending sweep would stop before ever
-   * reaching it again: the ticket (and, via the pagination `break`, everything
-   * older behind it) would be abandoned permanently with no retry.
+   * BLOCKS the watermark: a ticket that could NOT be mirrored (e.g.
+   * `SuricataSessionBusyError` losing the priority queue to a concurrent
+   * reply). `SyncSuricataTickets` records exactly those in `error`. If such a
+   * run were the reference point, the next run's cutoff (`lastRun.startedAt`)
+   * would sit AFTER that ticket's `lastMessageAt`, so the activity-descending
+   * sweep would stop before ever reaching it again: the ticket (and, via the
+   * pagination `break`, everything older behind it) would be abandoned
+   * permanently with no retry. Pinning the watermark instead makes the next run
+   * re-sweep the same window. Re-sweeping is cheap: D6.b's content-hash check
+   * skips the detail fetch for every ticket that did succeed.
    *
-   * Keeping the watermark pinned to the last genuinely `ok` run makes the next
-   * run re-sweep the same window and re-attempt whatever failed. Re-sweeping is
-   * cheap: D6.b's content-hash check skips the detail fetch for every ticket
-   * that did succeed, so only the failed ones do real work.
+   * Does NOT block the watermark: a selector miss (D6.d invariant 2). That row
+   * went through `syncOneTicket` and IS mirrored — only a field like `subject`
+   * or `lastMessageAt` is incomplete — and a selector breaking against
+   * third-party HTML is this scraper's EXPECTED failure mode, not a transient
+   * one. Blocking on it would leave the sync in permanent backfill, re-scanning
+   * the whole `SURICATA_BACKFILL_DAYS` window on every run forever, which can
+   * exceed `SURICATA_MAX_PAGES_PER_RUN` and REDUCE coverage instead of
+   * protecting it. The miss stays visible via `outcome='degraded'` +
+   * `selectorMisses`.
    */
   async lastSuccessful(): Promise<SuricataSyncRunRecord | null> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma as any).suricataSyncRun.findFirst({
-      where: { outcome: 'ok' },
+      where: { OR: [{ outcome: 'ok' }, { outcome: 'degraded', error: null }] },
       orderBy: { finishedAt: 'desc' },
     });
     return row ? toDomain(row) : null;

@@ -306,6 +306,116 @@ describe('SyncSuricataTickets', () => {
     });
   });
 
+  describe('D6.d — a selector miss must NOT block the watermark', () => {
+    it('a run with selector misses but ZERO failed tickets is still the reference for the next run', async () => {
+      const { scraper, tickets, syncRuns, useCase } = makeHarness();
+      scraper.areas = [];
+      // An empty `subject` is D6.d invariant 2: the subject cell selector did
+      // not match. The row is STILL mirrored by `syncOneTicket` -- no ticket is
+      // lost, only a field is incomplete.
+      scraper.pagesByNumber.set(1, {
+        tickets: [
+          {
+            externalId: 't-miss',
+            subject: '',
+            status: 'abierto',
+            priority: null,
+            areaExternalId: null,
+            lastMessageAt: '2026-09-01T10:00:00.000Z',
+            messageCount: 1,
+          },
+        ],
+        hasNextPage: false,
+      });
+      scraper.ticketDetailsByExternalId.set(
+        't-miss',
+        ticketDetail({ externalId: 't-miss', subject: '', areaExternalId: null }),
+      );
+
+      const firstRun = await useCase.execute();
+
+      // Still VISIBLE as degraded -- a broken selector must never be silent.
+      expect(firstRun.outcome).toBe('degraded');
+      expect(firstRun.selectorMisses).toEqual(['t-miss']);
+      // ...but nothing was left unmirrored, so there is no `error`.
+      expect(firstRun.error).toBeNull();
+      expect(await tickets.findByExternalId('t-miss')).not.toBeNull();
+
+      // THE BUG: treating a selector miss as watermark-blocking pins the sync in
+      // PERMANENT backfill — every later run re-sweeps the entire
+      // `SURICATA_BACKFILL_DAYS` window, which can exceed `maxPagesPerRun` and
+      // actually REDUCE coverage. Only a genuinely unmirrored ticket may block.
+      const reference = await syncRuns.lastSuccessful();
+      expect(reference?.id).toBe(firstRun.id);
+
+      // Second run: a ticket whose activity predates the first run's start must
+      // fall below the incremental cutoff and never be re-opened.
+      scraper.getTicketCalls.length = 0;
+      scraper.pagesByNumber.set(1, {
+        tickets: [
+          {
+            externalId: 't-older',
+            subject: 'anterior a la marca de agua',
+            status: 'cerrado',
+            priority: null,
+            areaExternalId: null,
+            lastMessageAt: '2026-09-02T10:00:00.000Z',
+            messageCount: 1,
+          },
+        ],
+        hasNextPage: false,
+      });
+      scraper.ticketDetailsByExternalId.set('t-older', ticketDetail({ externalId: 't-older', areaExternalId: null }));
+
+      const secondRun = await useCase.execute();
+
+      expect(scraper.getTicketCalls).toEqual([]); // incremental, not a re-backfill
+      expect(secondRun.ticketsSeen).toBe(0);
+    });
+
+    it('a ticket that genuinely failed to mirror DOES still block the watermark, even alongside selector misses', async () => {
+      const { scraper, syncRuns, useCase } = makeHarness();
+      scraper.areas = [];
+      scraper.pagesByNumber.set(1, {
+        tickets: [
+          {
+            externalId: 't-miss',
+            subject: '',
+            status: 'abierto',
+            priority: null,
+            areaExternalId: null,
+            lastMessageAt: '2026-09-01T10:00:00.000Z',
+            messageCount: 1,
+          },
+          {
+            externalId: 't-fails',
+            subject: 'falla',
+            status: 'abierto',
+            priority: null,
+            areaExternalId: null,
+            lastMessageAt: '2026-09-01T09:00:00.000Z',
+            messageCount: 1,
+          },
+        ],
+        hasNextPage: false,
+      });
+      scraper.ticketDetailsByExternalId.set(
+        't-miss',
+        ticketDetail({ externalId: 't-miss', subject: '', areaExternalId: null }),
+      );
+      scraper.failingTicketExternalIds.add('t-fails');
+
+      const run = await useCase.execute();
+
+      expect(run.outcome).toBe('degraded');
+      expect(run.selectorMisses).toEqual(['t-miss']);
+      expect(run.error).toContain('t-fails');
+      // The MIRROR-4 guarantee is untouched: a ticket that was never mirrored
+      // keeps the cutoff where it is so the next run re-attempts it.
+      expect(await syncRuns.lastSuccessful()).toBeNull();
+    });
+  });
+
   describe('MIRROR-6 — area catalog refresh without orphan loss', () => {
     it('a ticket keeps its area reference after that area disappears from the upstream catalog', async () => {
       const { scraper, tickets, areas, useCase } = makeHarness();

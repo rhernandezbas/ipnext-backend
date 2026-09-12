@@ -72,10 +72,12 @@ export class SyncSuricataTickets {
       await this.areas.upsertMany(scrapedAreas.map((a) => ({ externalId: a.externalId, name: a.name, syncedAt: nowIso })));
       await this.areas.deactivateMissing(scrapedAreas.map((a) => a.externalId));
 
-      // `lastSuccessful()` reports the last run that closed `ok` — a
-      // `degraded` run is deliberately NOT a reference point, because it left
-      // at least one ticket unmirrored and advancing past it would abandon
-      // that ticket forever (see `PrismaSuricataSyncRunRepository`).
+      // `lastSuccessful()` reports the last run that mirrored EVERY ticket it
+      // saw. A run that left a ticket unmirrored (`error` set below) is
+      // deliberately NOT a reference point, because advancing past it would
+      // abandon that ticket forever. A selector miss does NOT disqualify a run:
+      // that row was still mirrored, only with an incomplete field (see
+      // `PrismaSuricataSyncRunRepository.lastSuccessful`).
       const lastRun = await this.syncRuns.lastSuccessful();
       const isBackfill = !lastRun;
       // Watermark = the PREVIOUS run's start (not finish) so a ticket touched
@@ -160,6 +162,10 @@ export class SyncSuricataTickets {
         page += 1;
       }
 
+      // `degraded` is a VISIBILITY flag: either something did not parse or
+      // something did not mirror. It is not the watermark predicate — `error`
+      // is (set below only for tickets that were genuinely not mirrored), so a
+      // selector miss alone stays visible without freezing the cutoff.
       const outcome: 'ok' | 'degraded' =
         selectorMisses.length > 0 || failedTicketExternalIds.length > 0 ? 'degraded' : 'ok';
       const error =

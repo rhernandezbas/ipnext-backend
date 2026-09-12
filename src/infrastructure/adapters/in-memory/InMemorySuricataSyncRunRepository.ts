@@ -39,14 +39,23 @@ export class InMemorySuricataSyncRunRepository implements SuricataSyncRunReposit
   }
 
   /**
-   * ONLY `ok` counts. A `degraded` run left at least one ticket unsynced, so
-   * treating it as the watermark would move the incremental cutoff PAST a
-   * ticket that was never mirrored — abandoning it permanently. Mirrors
-   * `PrismaSuricataSyncRunRepository.lastSuccessful`.
+   * The watermark reference is a run that mirrored EVERY ticket it saw: `ok`,
+   * or `degraded` with no ticket-level failure (`error === null`).
+   *
+   * What must block: a ticket that was never mirrored. Advancing the cutoff
+   * past it abandons it permanently, so any run that recorded one (`error !==
+   * null`, and every `failed` run) is excluded.
+   *
+   * What must NOT block: a selector miss. That row WAS mirrored, only with an
+   * incomplete field, and a broken selector against third-party HTML is the
+   * expected (non-transient) failure mode here — blocking on it would pin the
+   * sync in permanent backfill. It still shows up as `degraded`/`selectorMisses`.
+   *
+   * Mirrors `PrismaSuricataSyncRunRepository.lastSuccessful`.
    */
   async lastSuccessful(): Promise<SuricataSyncRunRecord | null> {
     const successful = this.rows
-      .filter((r) => r.outcome === 'ok')
+      .filter((r) => r.outcome === 'ok' || (r.outcome === 'degraded' && r.error === null))
       .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? ''));
     return successful[0] ? { ...successful[0] } : null;
   }
