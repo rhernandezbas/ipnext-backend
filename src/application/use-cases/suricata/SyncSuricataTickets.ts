@@ -72,6 +72,10 @@ export class SyncSuricataTickets {
       await this.areas.upsertMany(scrapedAreas.map((a) => ({ externalId: a.externalId, name: a.name, syncedAt: nowIso })));
       await this.areas.deactivateMissing(scrapedAreas.map((a) => a.externalId));
 
+      // `lastSuccessful()` reports the last run that closed `ok` — a
+      // `degraded` run is deliberately NOT a reference point, because it left
+      // at least one ticket unmirrored and advancing past it would abandon
+      // that ticket forever (see `PrismaSuricataSyncRunRepository`).
       const lastRun = await this.syncRuns.lastSuccessful();
       const isBackfill = !lastRun;
       // Watermark = the PREVIOUS run's start (not finish) so a ticket touched
@@ -102,6 +106,22 @@ export class SyncSuricataTickets {
           });
         }
 
+        // The `stop = true; break` below is an EARLY EXIT that relies on D6.a:
+        // the Suricata list is ordered by activity DESCENDING, so the first row
+        // at/below the cutoff means every remaining row is older too. Two
+        // reasons this stays safe rather than skipping live tickets behind an
+        // old one:
+        //   1. Ordering is part of the PORT contract
+        //      (`SuricataScraperPort.listTicketPage`: "1-indexed, ordered by
+        //      activity descending (D6.a)"), so any adapter that cannot honour
+        //      it is the thing to fix, not this loop. Residual: that ordering
+        //      is asserted on the port, not verified against the live Suricata
+        //      DOM — if the real list ever comes back unordered, this early
+        //      exit under-reads a page (D14 smoke is where that would surface).
+        //   2. Under-reading is recoverable, not lossy: a skipped ticket keeps
+        //      its old/absent `contentHash`, and the cutoff can only ever
+        //      regress to the last `ok` run, so a later run re-sweeps the same
+        //      window instead of losing the ticket permanently.
         for (const summary of pageResult.tickets) {
           if (isBackfill && backfillCutoff && summary.lastMessageAt && summary.lastMessageAt < backfillCutoff) {
             stop = true;

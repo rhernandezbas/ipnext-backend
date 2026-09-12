@@ -65,10 +65,26 @@ export class PrismaSuricataSyncRunRepository implements SuricataSyncRunRepositor
     }
   }
 
+  /**
+   * Watermark source for the incremental sweep — ONLY `outcome: 'ok'` qualifies.
+   *
+   * A `degraded` run finished with at least one ticket it could NOT mirror
+   * (e.g. `SuricataSessionBusyError` losing the priority queue to a concurrent
+   * reply). If a degraded run were allowed to be the reference point, the next
+   * run's cutoff (`lastRun.startedAt`) would sit AFTER that ticket's
+   * `lastMessageAt`, so the activity-descending sweep would stop before ever
+   * reaching it again: the ticket (and, via the pagination `break`, everything
+   * older behind it) would be abandoned permanently with no retry.
+   *
+   * Keeping the watermark pinned to the last genuinely `ok` run makes the next
+   * run re-sweep the same window and re-attempt whatever failed. Re-sweeping is
+   * cheap: D6.b's content-hash check skips the detail fetch for every ticket
+   * that did succeed, so only the failed ones do real work.
+   */
   async lastSuccessful(): Promise<SuricataSyncRunRecord | null> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = await (prisma as any).suricataSyncRun.findFirst({
-      where: { outcome: { in: ['ok', 'degraded'] } },
+      where: { outcome: 'ok' },
       orderBy: { finishedAt: 'desc' },
     });
     return row ? toDomain(row) : null;

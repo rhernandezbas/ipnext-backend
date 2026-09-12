@@ -261,6 +261,51 @@ describe('SyncSuricataTickets', () => {
     });
   });
 
+  describe('MIRROR-4 — a degraded run must NOT advance the incremental watermark', () => {
+    it('retries on the next run a ticket that failed (e.g. session busy) during a degraded run', async () => {
+      const { scraper, tickets, syncRuns, useCase } = makeHarness();
+      scraper.areas = [];
+      const summary = {
+        externalId: 't-busy',
+        subject: 'sesion ocupada',
+        status: 'abierto',
+        priority: null,
+        areaExternalId: null,
+        // Older than "now", so on any run that treats the previous (degraded)
+        // run's startedAt as the watermark this ticket falls below the cutoff
+        // and is skipped forever.
+        lastMessageAt: '2026-09-01T10:00:00.000Z',
+        messageCount: 1,
+      };
+      scraper.pagesByNumber.set(1, { tickets: [summary], hasNextPage: false });
+      scraper.ticketDetailsByExternalId.set('t-busy', ticketDetail({ externalId: 't-busy', areaExternalId: null }));
+      scraper.failingTicketExternalIds.add('t-busy');
+
+      const firstRun = await useCase.execute();
+      expect(firstRun.outcome).toBe('degraded');
+      expect(await tickets.findByExternalId('t-busy')).toBeNull();
+
+      // A `degraded` run is NOT a reference point: `lastSuccessful()` must keep
+      // reporting the last genuinely `ok` run (here: none at all), so the next
+      // run sweeps the same window again and re-attempts the failed ticket.
+      expect(await syncRuns.lastSuccessful()).toBeNull();
+
+      // Second run: the transient condition cleared.
+      scraper.failingTicketExternalIds.delete('t-busy');
+      scraper.getTicketCalls.length = 0;
+
+      const secondRun = await useCase.execute();
+
+      expect(scraper.getTicketCalls).toEqual(['t-busy']); // actually retried
+      expect(secondRun.outcome).toBe('ok');
+      expect(secondRun.ticketsUpserted).toBe(1);
+      expect(await tickets.findByExternalId('t-busy')).not.toBeNull();
+      // Only now that a run closed `ok` does the watermark move.
+      const successful = await syncRuns.lastSuccessful();
+      expect(successful?.id).toBe(secondRun.id);
+    });
+  });
+
   describe('MIRROR-6 — area catalog refresh without orphan loss', () => {
     it('a ticket keeps its area reference after that area disappears from the upstream catalog', async () => {
       const { scraper, tickets, areas, useCase } = makeHarness();

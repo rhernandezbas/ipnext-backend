@@ -38,9 +38,15 @@ export class InMemorySuricataSyncRunRepository implements SuricataSyncRunReposit
     return { ...row };
   }
 
+  /**
+   * ONLY `ok` counts. A `degraded` run left at least one ticket unsynced, so
+   * treating it as the watermark would move the incremental cutoff PAST a
+   * ticket that was never mirrored — abandoning it permanently. Mirrors
+   * `PrismaSuricataSyncRunRepository.lastSuccessful`.
+   */
   async lastSuccessful(): Promise<SuricataSyncRunRecord | null> {
     const successful = this.rows
-      .filter((r) => r.outcome === 'ok' || r.outcome === 'degraded')
+      .filter((r) => r.outcome === 'ok')
       .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? ''));
     return successful[0] ? { ...successful[0] } : null;
   }
