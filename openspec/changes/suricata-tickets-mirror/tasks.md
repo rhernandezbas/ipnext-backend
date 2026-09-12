@@ -111,9 +111,9 @@ Chain strategy: pending
 
 ## Phase I — FE reply + assignment (repo: ipnext-frontend)
 
-- [ ] I.1 TDD + implement double-confirm reply modal: shows final text, computes `sha256(body)` client-side, sends `{body, confirm}`; button disabled (not hidden) without `suricata.reply` (UI-8, D10).
-- [ ] I.2 TDD + implement assignment field in detail view, `PATCH /assignee`, gated by `suricata.manage`.
-- [ ] I.3 Handle 400/502/503 responses with visible error state, never a false-success toast (REPLY-5).
+- [x] I.1 TDD + implement double-confirm reply modal: shows final text, computes `sha256(body)` client-side, sends `{body, confirm}`; button disabled (not hidden) without `suricata.reply` (UI-8, D10). **Deviation**: composer is HIDDEN (not disabled) without `suricata.reply`, per this apply session's explicit orchestrator instruction ("si no tiene el permiso, no se muestra el composer") — overrides this task's literal wording.
+- [x] I.2 TDD + implement assignment field in detail view, `PATCH /assignee`, gated by `suricata.manage`.
+- [x] I.3 Handle 400/502/503 responses with visible error state, never a false-success toast (REPLY-5).
 
 ## Phase J — Infra: Playwright sidecar (ISOLATED, pre-authorized, own PR) (repo: ipnext-backend)
 
