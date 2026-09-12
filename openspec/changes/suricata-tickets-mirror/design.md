@@ -210,7 +210,7 @@ ticket de Suricata trae nombre, teléfono y audios de **clientes reales**. Alcan
 | Permiso | Roles |
 |---|---|
 | `suricata.read` | `super_admin`, `administrador`, `noc` |
-| `suricata.manage` | `super_admin`, `administrador` |
+| `suricata.manage` | `super_admin`, `administrador`, `noc` |
 | `suricata.reply` | `super_admin`, `administrador` |
 
 `noc` es el rol de atención de este sistema: de los 6 `SYSTEM_ROLES` no existe ningún
@@ -487,7 +487,7 @@ Contrato: `POST /api/suricata/tickets/:id/reply` con body `{ body: string, confi
 `confirm` es el **sha256 de `body`** calculado por el cliente. El BE recalcula y compara; distinto →
 **400 `REPLY_CONFIRMATION_MISMATCH`**, sin enviar nada. Así el segundo paso del FE confirma
 **exactamente el texto que se va a enviar**, y un click accidental sobre un payload viejo o mutado
-no puede disparar un envío. Gate RBAC `suricata.send` + flag `suricata-reply-enabled`.
+no puede disparar un envío. Gate RBAC `suricata.reply` + flag `suricata-reply-enabled`.
 
 **Auditoría del INTENTO, no del éxito**: la fila `SuricataReplyAudit` se escribe **antes** de tomar
 la sesión, con `outcome='failed'` provisorio; al volver se hace `markOutcome('sent', sentAt)` o se
@@ -591,7 +591,7 @@ botState: 'sin_analizar' | 'resuelto_bot' | 'requiere_humano' | 'stale'
 **D13.a — FE**: `ipnext-frontend/src/pages/suricata/` (CSS Modules, molde de la página de tickets
 internos). Lista + filtros + detalle con 3 tabs + tira de KPIs, según el mockup aprobado. Tipos
 espejo campo-a-campo del DTO; la validación en cliente es UX, la autoridad es el BE. El botón
-Responder pide confirmación mostrando el texto final y manda su sha256 (D10); sin `suricata.send` el
+Responder pide confirmación mostrando el texto final y manda su sha256 (D10); sin `suricata.reply` el
 botón se ve **deshabilitado, no oculto** (convención del repo).
 
 **D13.b — Tab "Client Data" (cierra Q7)**: muestra **lo que Suricata ya dio** (nombre, email,
@@ -630,7 +630,7 @@ el reply es el último flag en prenderse.
 | **Playwright en el runtime de prod** | **ALTO — requiere OK humano (D5)**. Mitigado por sidecar: imagen del BE sin cambios, crash aislado, memoria acotada. `deploy.yml` NO se toca hasta la confirmación |
 | Suricata cambia el DOM | Selectores en UN archivo + 2 invariantes duras + `SuricataSyncRun.outcome` visible en las KPIs (D6.d). Falla ruidosa y sin escrituras parciales |
 | Login concurrente / cuenta bloqueada | Mutex + advisory lock (D4) + máximo 2 intentos de auth por operación. Sin reintento en loop |
-| Respuesta enviada por error a un cliente real | RBAC `suricata.send` + flag + confirmación por hash del texto (D10) + audit del INTENTO. **Irreversible por definición**: ningún control lo deshace |
+| Respuesta enviada por error a un cliente real | RBAC `suricata.reply` + flag + confirmación por hash del texto (D10) + audit del INTENTO. **Irreversible por definición**: ningún control lo deshace |
 | `app.ts` God Object | Le sumamos ~12 líneas en 2 bloques con marcador; el peso vive en `composeSuricataModule`. **Mitigado, no resuelto** (deuda pre-existente) |
 | Crecimiento de adjuntos / PII | Dedup por sha256 + tope de 10 MB por archivo + bucket privado con proxy autenticado. **Sin retención automática — deuda declarada**: borrar evidencia de soporte necesita política de negocio |
 | Alerta proactiva del sync roto | **No se agrega canal nuevo** en este change: queda en `SuricataSyncRun` + panel + log. Deuda declarada |
