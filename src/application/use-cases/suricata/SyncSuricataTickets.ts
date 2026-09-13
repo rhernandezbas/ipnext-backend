@@ -125,11 +125,22 @@ export class SyncSuricataTickets {
         //      regress to the last `ok` run, so a later run re-sweeps the same
         //      window instead of losing the ticket permanently.
         for (const summary of pageResult.tickets) {
-          if (isBackfill && backfillCutoff && summary.lastMessageAt && summary.lastMessageAt < backfillCutoff) {
+          // Fix wave 2026-09-13 -- comparing the raw STRINGS here is only
+          // correct when every timestamp shares the exact same textual
+          // format. `summary.lastMessageAt` now carries a real `-03:00`
+          // offset (Argentina local, see `toIsoArgentina` in selectors.ts)
+          // while `watermark`/`backfillCutoff` are UTC `.toISOString()`
+          // (`Z`). Those sort DIFFERENTLY as text even for the identical
+          // instant (`"...T05:..-03:00"` < `"...T08:...Z"` lexicographically
+          // despite being the SAME moment) -- comparing as real timestamps
+          // is the only format-agnostic way to preserve D6.a's ordering
+          // guarantee.
+          const lastMessageAtMs = summary.lastMessageAt ? new Date(summary.lastMessageAt).getTime() : NaN;
+          if (isBackfill && backfillCutoff && !Number.isNaN(lastMessageAtMs) && lastMessageAtMs < new Date(backfillCutoff).getTime()) {
             stop = true;
             break;
           }
-          if (!isBackfill && watermark && summary.lastMessageAt && summary.lastMessageAt <= watermark) {
+          if (!isBackfill && watermark && !Number.isNaN(lastMessageAtMs) && lastMessageAtMs <= new Date(watermark).getTime()) {
             stop = true;
             break;
           }

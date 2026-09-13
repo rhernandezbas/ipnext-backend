@@ -150,6 +150,57 @@ describe('SyncSuricataTickets', () => {
       expect(scraper.getTicketCalls).toEqual(['t-new']);
       expect(run.ticketsUpserted).toBe(1);
     });
+
+    it('fix wave 2026-09-13 -- a genuinely newer ticket is NOT skipped when its lastMessageAt carries a real UTC offset (Argentina, -03:00) instead of Z, even though it sorts LOWER as a raw string than the Z-formatted watermark', async () => {
+      const { scraper, syncRuns, useCase } = makeHarness();
+      scraper.areas = [];
+      const priorRun = await syncRuns.start();
+      const finished = await syncRuns.finish(priorRun.id, {
+        outcome: 'ok',
+        ticketsSeen: 1,
+        ticketsUpserted: 1,
+        messagesUpserted: 1,
+        attachmentsStored: 0,
+      });
+      // The watermark IS this run's own startedAt (`.toISOString()`, Z format).
+      const watermarkMs = new Date(finished.startedAt).getTime();
+
+      // A message that arrived 5 minutes AFTER the watermark, rendered the way
+      // `toIsoArgentina` (selectors.ts) actually produces it: local time,
+      // `-03:00` suffix, never `Z`. As a raw STRING this sorts BELOW the
+      // watermark (its hour digits are always ~3 less), which is exactly the
+      // bug: `"...T05:..-03:00" < "...T08:...Z"` even though 05:00-03:00 is
+      // LATER than 08:00Z minus a few minutes.
+      const trulyNewerUtc = new Date(watermarkMs + 5 * 60_000);
+      const argentinaOffsetMs = 3 * 60 * 60_000;
+      const argentinaLocal = new Date(trulyNewerUtc.getTime() - argentinaOffsetMs);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const lastMessageAtArgentina =
+        `${argentinaLocal.getUTCFullYear()}-${pad(argentinaLocal.getUTCMonth() + 1)}-${pad(argentinaLocal.getUTCDate())}` +
+        `T${pad(argentinaLocal.getUTCHours())}:${pad(argentinaLocal.getUTCMinutes())}:${pad(argentinaLocal.getUTCSeconds())}-03:00`;
+
+      scraper.pagesByNumber.set(1, {
+        tickets: [
+          {
+            externalId: 't-new-arg',
+            subject: 'Ticket nuevo (hora Argentina)',
+            status: 'abierto',
+            priority: 'alta',
+            areaExternalId: null,
+            lastMessageAt: lastMessageAtArgentina,
+            messageCount: 1,
+          },
+        ],
+        hasNextPage: false,
+      });
+      scraper.ticketDetailsByExternalId.set('t-new-arg', ticketDetail({ externalId: 't-new-arg', areaExternalId: null }));
+
+      const run = await useCase.execute();
+
+      expect(run.ticketsSeen).toBe(1);
+      expect(scraper.getTicketCalls).toEqual(['t-new-arg']);
+      expect(run.ticketsUpserted).toBe(1);
+    });
   });
 
   describe('MIRROR-3 — idempotent persistence', () => {
