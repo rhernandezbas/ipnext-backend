@@ -400,23 +400,39 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
 
 ## Phase H — Final composition hardening, full-suite verification, rollout doc (repo: ipnext-backend)
 
-- [ ] H.1 Composition-root test: assert full `app.ts` external-block wiring matches
+- [x] H.1 Composition-root test: assert full `app.ts` external-block wiring matches
       `composeSuricataExternalModule`'s final `ComposeSuricataExternalModuleDeps` signature (7 write
       deps + 3 read deps) — extend `suricata-composition.test.ts`, pin per this repo's known "wiring
-      is verified by hand" lesson (molde mirror Phase F.4).
-- [ ] H.2 Re-run A.15's import-hygiene assertion against the FINAL file (not just the Phase A stub) —
+      is verified by hand" lesson (molde mirror Phase F.4). Implemented as a new describe block
+      asserting all 12 actual deps-object field names are wired in `app.ts`'s external block (note:
+      the final interface is 12 fields total — 5 shared infra/verdict + 3 Phase-C read + 4 Phase
+      D/E/F/G write use cases — not a clean 7+3 split as this line's estimate assumed; flagged for
+      `sdd-verify`, not silently resolved, no behavior gap). Also added: all 4 write routes + 3 read
+      routes mounted exactly once (regex count), and the internal reply route's three guards (flag
+      `suricata-reply-enabled`, `requirePerm('suricata','reply')`, `auth`→`requireReply` order in
+      `composeSuricataModule.ts`) still present untouched.
+- [x] H.2 Re-run A.15's import-hygiene assertion against the FINAL file (not just the Phase A stub) —
       confirm it still holds after D/E/F/G's edits added real driver construction to
-      `bootstrapSuricataActionPorts.ts`, never to `composeSuricataExternalModule.ts`.
-- [ ] H.3 Full `npm test` + `tsc --noEmit` green across the whole change (not just per-phase).
-- [ ] H.4 Update `env.example` if any new env vars were introduced by Phase B's capture (unlikely —
+      `bootstrapSuricataActionPorts.ts`, never to `composeSuricataExternalModule.ts`. Re-ran: still
+      green, zero offending imports found in the final file.
+- [x] H.3 Full `npm test` + `tsc --noEmit` green across the whole change (not just per-phase). See
+      Work Unit Evidence below for exact numbers.
+- [x] H.4 Update `env.example` if any new env vars were introduced by Phase B's capture (unlikely —
       `config.suricata.*` already exists per the mirror change's B.3); otherwise confirm no new vars
-      are needed.
-- [ ] H.5 Document the D11 rollout order in a short operator note (or PR description): flip
+      are needed. Confirmed: no new vars needed. `bootstrapSuricataActionPorts.ts` reuses
+      `config.suricata.replyQueueTimeoutMs` (existing `SURICATA_REPLY_QUEUE_TIMEOUT_MS`) for the
+      note/status/close drivers' `sessionTimeoutMs`; the reply adapter is a plain HTTP client with no
+      dedicated env var of its own (its PAT/bot id come from Suricata's own `metadata-merchant`
+      response at call time, not from env).
+- [x] H.5 Document the D11 rollout order in a short operator note (or PR description): flip
       `suricata-bot-note-enabled` → verify on one real ticket + its audit row (`outcome:'applied'`,
       payload exact) → `suricata-bot-status-enabled` → same verification → `suricata-bot-close-enabled`
       → same verification → `suricata-bot-reply-enabled` last, same verification. Rollback: flip the
       four flags `false` (inert, no deploy); reply/close/note actions already sent are irreversible —
-      inherent to an autonomous design, which is why reply is flipped last (design D11/D12).
+      inherent to an autonomous design, which is why reply is flipped last (design D11/D12). Written
+      to `openspec/changes/suricata-bot-autonomous-actions/rollout.md` — includes endpoint-by-endpoint
+      request/response examples, auth header, the reply "sends REAL messages" warning, and both open
+      `sdd-verify` reconciliation items (flag-key naming spec-vs-design, CLOSE-5 stale wording).
 
 ---
 

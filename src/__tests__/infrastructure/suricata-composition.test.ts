@@ -165,3 +165,85 @@ describe('suricata-bot-autonomous-actions — import-hygiene invariant (task A.1
     expect(offenders).toEqual([]);
   });
 });
+
+/**
+ * suricata-bot-autonomous-actions (Phase H, task H.1, design D7/D9) — final
+ * composition-root hardening. Confirms the FINAL wiring shape (after Phases
+ * D/E/F/G each added their own dep/route) is complete and none of the 4 new
+ * write routes / 3 read routes got mounted twice or dropped during the phase
+ * sequence, and that the INTERNAL reply route's three independent guards
+ * (flag / RBAC permission / conservative port) remain provably untouched.
+ */
+describe('suricata-bot-autonomous-actions — Phase H.1 final wiring hardening', () => {
+  let appSrc: string;
+  let composeExternalSrc: string;
+  let composeInternalSrc: string;
+
+  beforeAll(() => {
+    appSrc = readFileSync(join(__dirname, '..', '..', 'infrastructure', 'http', 'app.ts'), 'utf8');
+    composeExternalSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'composeSuricataExternalModule.ts'),
+      'utf8',
+    );
+    composeInternalSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'composeSuricataModule.ts'),
+      'utf8',
+    );
+  });
+
+  it('el bloque EXTERNO de app.ts wirea TODOS los campos de ComposeSuricataExternalModuleDeps (12 campos: 5 de infraestructura/verdict + 3 de lectura Fase C + 4 de escritura autónoma D/E/F/G)', () => {
+    const startAnchor = "app.use('/api/external/v1/suricata',";
+    const endAnchor = '// [suricata-external-mount-end]';
+    const startIdx = appSrc.indexOf(startAnchor);
+    const endIdx = appSrc.indexOf(endAnchor, startIdx);
+
+    expect(startIdx).toBeGreaterThan(-1);
+    expect(endIdx).toBeGreaterThan(startIdx);
+
+    const externalBlock = appSrc.slice(startIdx, endIdx);
+    const expectedFields = [
+      'submitSuricataVerdict',
+      'ticketRepo',
+      'attachmentRepo',
+      'fileStorage',
+      'featureFlags',
+      'listSuricataTickets',
+      'getSuricataTicketDetail',
+      'computeSuricataKpis',
+      'addSuricataInternalNote',
+      'changeSuricataTicketStatus',
+      'closeSuricataTicket',
+      'sendAutonomousSuricataReply',
+    ];
+
+    for (const field of expectedFields) {
+      expect(externalBlock).toMatch(new RegExp(`\\b${field}\\b`));
+    }
+  });
+
+  it('las 4 rutas de escritura autónomas (notes/status/close/reply) + las 3 rutas de lectura (tickets, tickets/:externalId, kpis) quedan montadas EXACTAMENTE una vez en composeSuricataExternalModule.ts', () => {
+    const routeChecks: Array<[string, RegExp]> = [
+      ['POST /tickets/:externalId/notes', /router\.post\(\s*'\/tickets\/:externalId\/notes'/g],
+      ['POST /tickets/:externalId/status', /router\.post\(\s*'\/tickets\/:externalId\/status'/g],
+      ['POST /tickets/:externalId/close', /router\.post\(\s*'\/tickets\/:externalId\/close'/g],
+      ['POST /tickets/:externalId/reply', /router\.post\(\s*'\/tickets\/:externalId\/reply'/g],
+      ['GET /tickets', /router\.get\(\s*'\/tickets'/g],
+      ['GET /tickets/:externalId', /router\.get\(\s*'\/tickets\/:externalId'/g],
+      ['GET /kpis', /router\.get\(\s*'\/kpis'/g],
+    ];
+
+    for (const [label, regex] of routeChecks) {
+      const matches = composeExternalSrc.match(regex) ?? [];
+      expect({ route: label, occurrences: matches.length }).toEqual({ route: label, occurrences: 1 });
+    }
+  });
+
+  it('la ruta interna de reply conserva sus TRES guards intactos (flag `suricata-reply-enabled`, RBAC `requirePerm(\'suricata\', \'reply\')`, orden auth->requireReply) — composeSuricataModule.ts nunca fue tocado por esta fase', () => {
+    expect(composeInternalSrc).toContain("const REPLY_FEATURE_FLAG_KEY = 'suricata-reply-enabled';");
+    expect(composeInternalSrc).toContain("const requireReply = deps.requirePerm('suricata', 'reply');");
+    expect(composeInternalSrc).toMatch(
+      /router\.post\(\s*'\/tickets\/:id\/reply',\s*auth,\s*requireReply,/,
+    );
+    expect(composeInternalSrc).toContain('isReplyEnabled()');
+  });
+});
