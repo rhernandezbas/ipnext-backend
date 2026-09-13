@@ -125,4 +125,21 @@ export class PrismaSuricataTicketRepository implements SuricataTicketRepository 
       throw e;
     }
   }
+
+  /**
+   * suricata-bot-autonomous-actions (Phase A, task A.10/A.11, design D5.a) —
+   * plain local UPDATE of the RAW Suricata status string, molde `setAssignee`.
+   */
+  async setStatus(id: string, status: string): Promise<void> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (prisma as any).suricataTicket.update({
+        where: { id },
+        data: { status },
+      });
+    } catch (e) {
+      if ((e as { code?: string } | null)?.code === 'P2025') throw new SuricataTicketNotFoundError(id);
+      throw e;
+    }
+  }
 }

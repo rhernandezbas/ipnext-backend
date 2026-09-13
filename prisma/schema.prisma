@@ -4825,6 +4825,7 @@ model SuricataTicket {
   attachments   SuricataAttachment[]
   verdicts      SuricataTicketVerdict[]
   replies       SuricataReplyAudit[]
+  botActions    SuricataBotActionAudit[]
 
   @@index([status, lastMessageAt])
   @@index([areaId])
@@ -4909,6 +4910,36 @@ model SuricataReplyAudit {
   sentAt      DateTime?
 
   @@index([ticketId, attemptedAt])
+}
+
+/**
+ * suricata-bot-autonomous-actions (Phase A, task A.1, design D1) — ONE
+ * unified, append-only audit table covering all four autonomous write
+ * actions (reply/close/status/note), `actionType`-discriminated. Replaces
+ * the idea of four separate per-action tables — "see everything the bot
+ * did" is one query, not a four-way UNION (D1.a).
+ */
+model SuricataBotActionAudit {
+  id       String   @id @default(uuid())
+  ticketId String
+  ticket   SuricataTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  /// 'reply' | 'close' | 'status' | 'note' (D1.a).
+  actionType String
+  /// D1.a — the EXACT content that was attempted, discriminated union mapped
+  /// in `src/domain/entities/suricataBotAction.ts`. NOT NULL: the DB enforces
+  /// "content is always present", the per-type shape lives in the domain.
+  payload Json
+  /// `API_SURICATA_USER_LOGIN`, written as a LITERAL — never `req.user` (D1.c).
+  actorLogin String
+  /// 'applied' | 'failed' — ONE vocabulary across all four action types,
+  /// NEVER 'sent' (D1.b, unlike `SuricataReplyAudit.outcome`).
+  outcome     String    @default("failed")
+  error       String?
+  attemptedAt DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([ticketId, attemptedAt])
+  @@index([actionType, attemptedAt])
 }
 
 model SuricataSyncRun {

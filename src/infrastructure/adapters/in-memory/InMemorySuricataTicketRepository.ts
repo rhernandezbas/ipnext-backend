@@ -77,4 +77,15 @@ export class InMemorySuricataTicketRepository implements SuricataTicketRepositor
     row.assigneeId = assigneeId;
     return { ...row };
   }
+
+  /**
+   * suricata-bot-autonomous-actions (Phase A, task A.10/A.11, design D5.a) —
+   * plain local UPDATE of the RAW Suricata status string. Molde
+   * `setAssignee`: caller has already checked the ticket exists.
+   */
+  async setStatus(id: string, status: string): Promise<void> {
+    const row = this.rows.find((r) => r.id === id);
+    if (!row) throw new SuricataTicketNotFoundError(id);
+    row.status = status;
+  }
 }

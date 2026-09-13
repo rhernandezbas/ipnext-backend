@@ -94,3 +94,54 @@ describe('suricata-tickets-mirror composition root — assertions estáticas (D8
     expect(appSrc).toContain('machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN)');
   });
 });
+
+/**
+ * suricata-bot-autonomous-actions (Phase A, task A.15, design D7, this
+ * project's own real incident today) — import-hygiene invariant:
+ * `composeSuricataExternalModule.ts` must have ZERO runtime imports of
+ * `config`, `sharedSuricataSession`, or any `bootstrap*` module. Pulling any
+ * of those transitively runs `config.ts`'s fail-fast env validator at import
+ * time (a real `process.exit(1)` inside a Jest worker) — the exact incident
+ * that already broke two route test suites earlier today. The four
+ * Playwright drivers are built from `getSharedSuricataSession()`, which
+ * itself imports `config` — so the isolation boundary is
+ * `bootstrapSuricataActionPorts.ts` (the ONLY file allowed to import either),
+ * never the compose module. Re-run at H.2 against the FINAL file, after
+ * Phases D-G add real driver construction to the bootstrap file.
+ */
+describe('suricata-bot-autonomous-actions — import-hygiene invariant (task A.15/H.2, design D7)', () => {
+  let composeExternalSrc: string;
+
+  beforeAll(() => {
+    composeExternalSrc = readFileSync(
+      join(__dirname, '..', '..', 'infrastructure', 'http', 'composeSuricataExternalModule.ts'),
+      'utf8',
+    );
+  });
+
+  /** Solo lineas de import/export-from efectivas — comentarios fuera (regla "tests sobre texto filtran comentarios"). */
+  function effectiveImportSpecs(src: string): string[] {
+    const effective = src
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
+      .join('\n');
+    const importFrom = /(?:import|export)[^;]*?from\s+['"]([^'"]+)['"]/g;
+    const specs: string[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = importFrom.exec(effective)) !== null) {
+      specs.push(match[1] as string);
+    }
+    return specs;
+  }
+
+  it('composeSuricataExternalModule.ts tiene CERO imports de config/sharedSuricataSession/bootstrap*', () => {
+    const specs = effectiveImportSpecs(composeExternalSrc);
+    const offenders = specs.filter(
+      (spec) =>
+        /(?:^|\/)config$/.test(spec) ||
+        /sharedSuricataSession$/.test(spec) ||
+        /\/bootstrap[^/]*$/.test(spec),
+    );
+    expect(offenders).toEqual([]);
+  });
+});

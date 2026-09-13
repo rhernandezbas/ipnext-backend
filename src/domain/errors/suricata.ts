@@ -220,3 +220,40 @@ export class SuricataReplySendFailedError extends DomainError {
     this.name = 'SuricataReplySendFailedError';
   }
 }
+
+/**
+ * suricata-bot-autonomous-actions (Phase A, task A.6, design D3.c) — the
+ * driver completed its click-path but the post-condition marker never
+ * appeared in the DOM. Distinct from `SuricataSessionBusyError` (resource
+ * temporarily busy) and `SuricataAuthError` (login failed): this is neither
+ * — it is the single most likely symptom of a stale selector, and it must
+ * be a distinct, greppable fact in `SuricataBotActionAudit.error` rather
+ * than folded into a generic failure.
+ */
+export class SuricataActionNotAppliedError extends DomainError {
+  constructor(message = 'Suricata action completed its click-path but the post-condition marker never appeared') {
+    super(message, 'SURICATA_ACTION_NOT_APPLIED');
+    this.name = 'SuricataActionNotAppliedError';
+  }
+}
+
+/**
+ * suricata-bot-autonomous-actions (Phase A, task A.6, design D3.c) — wraps
+ * ANY failure raised while attempting one of the four autonomous actions
+ * (reply/close/status/note) so the HTTP layer can surface `auditId` in the
+ * response body, molde `SuricataReplySendFailedError` — NOT reused directly,
+ * because that class's name would lie on a close or a note (design D3.c).
+ * Reuses the wrapped error's `.code` so the existing status mapping
+ * (`SURICATA_SESSION_BUSY`/`SURICATA_UNAVAILABLE`/`SURICATA_ACTION_NOT_APPLIED`)
+ * still applies unchanged.
+ */
+export class SuricataBotActionFailedError extends DomainError {
+  constructor(
+    code: string,
+    message: string,
+    public readonly auditId: string,
+  ) {
+    super(message, code);
+    this.name = 'SuricataBotActionFailedError';
+  }
+}

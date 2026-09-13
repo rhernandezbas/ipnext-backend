@@ -365,6 +365,12 @@ const statusMap: Record<string, number> = {
   // REPLY-2 — the server-recomputed sha256 of `body` didn't match the
   // client-supplied `confirm`. Nothing was sent, nothing was audited.
   REPLY_CONFIRMATION_MISMATCH: 400,
+  // suricata-bot-autonomous-actions (Phase A, task A.7, design D3.c) — the
+  // driver completed its click-path but the post-condition marker never
+  // appeared. Distinct from SURICATA_SESSION_BUSY (503) and
+  // SURICATA_UNAVAILABLE (502 auth/no driver): this is a DOM-mismatch
+  // symptom, still 502 (upstream did something, we can't confirm what).
+  SURICATA_ACTION_NOT_APPLIED: 502,
 };
 
 /** Express global error-handling middleware. */

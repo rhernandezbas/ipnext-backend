@@ -41,4 +41,13 @@ export interface SuricataTicketRepository {
    * attachment repo).
    */
   setAssignee(id: string, assigneeId: string | null): Promise<SuricataTicketRecord>;
+  /**
+   * suricata-bot-autonomous-actions (Phase A, task A.10, design D5.a) — a
+   * plain local UPDATE of the RAW Suricata status string, mirroring the
+   * REMOTE change AFTER it already succeeded (best-effort, D5). Molde
+   * `setAssignee`: the caller has already checked the ticket exists. No
+   * separate `close()` method — close IS a status transition plus a reason
+   * (the reason lives in `SuricataBotActionAudit.payload`, never here).
+   */
+  setStatus(id: string, status: string): Promise<void>;
 }
