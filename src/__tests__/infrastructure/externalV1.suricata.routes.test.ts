@@ -20,6 +20,7 @@ import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuri
 import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
 import { CloseSuricataTicket } from '@application/use-cases/suricata/CloseSuricataTicket';
+import { SendAutonomousSuricataReply } from '@application/use-cases/suricata/SendAutonomousSuricataReply';
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
 import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAttachmentRepository';
@@ -71,6 +72,10 @@ function buildApp(opts: BuildAppOpts = {}) {
   const addSuricataInternalNote = new AddSuricataInternalNote(tickets, botActionAudits, { addNote: async () => {} });
   const changeSuricataTicketStatus = new ChangeSuricataTicketStatus(tickets, botActionAudits, { changeStatus: async () => {} });
   const closeSuricataTicket = new CloseSuricataTicket(tickets, botActionAudits, { close: async () => {} });
+  const sendAutonomousSuricataReply = new SendAutonomousSuricataReply(tickets, botActionAudits, {
+    getConversationId: async () => null,
+    sendReply: async () => ({}),
+  });
 
   const router = composeSuricataExternalModule({
     submitSuricataVerdict,
@@ -84,6 +89,7 @@ function buildApp(opts: BuildAppOpts = {}) {
     addSuricataInternalNote,
     changeSuricataTicketStatus,
     closeSuricataTicket,
+    sendAutonomousSuricataReply,
   });
 
   const app = express();

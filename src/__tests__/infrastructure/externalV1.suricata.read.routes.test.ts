@@ -36,6 +36,7 @@ import { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricata
 import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
 import { CloseSuricataTicket } from '@application/use-cases/suricata/CloseSuricataTicket';
+import { SendAutonomousSuricataReply } from '@application/use-cases/suricata/SendAutonomousSuricataReply';
 
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataMessageRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataMessageRepository';
@@ -171,6 +172,10 @@ async function buildApps() {
   const addSuricataInternalNote = new AddSuricataInternalNote(tickets, botActionAudits, { addNote: async () => {} });
   const changeSuricataTicketStatus = new ChangeSuricataTicketStatus(tickets, botActionAudits, { changeStatus: async () => {} });
   const closeSuricataTicket = new CloseSuricataTicket(tickets, botActionAudits, { close: async () => {} });
+  const sendAutonomousSuricataReply = new SendAutonomousSuricataReply(tickets, botActionAudits, {
+    getConversationId: async () => null,
+    sendReply: async () => ({}),
+  });
 
   const internalApp = express();
   internalApp.use(cookieParser());
@@ -214,6 +219,7 @@ async function buildApps() {
       addSuricataInternalNote,
       changeSuricataTicketStatus,
       closeSuricataTicket,
+      sendAutonomousSuricataReply,
     }),
   );
   externalApp.use(errorHandler);

@@ -825,6 +825,17 @@ import { bootstrapSuricataActionPorts } from '@infrastructure/adapters/suricata/
 import { UnavailableSuricataInternalNotePort } from '@infrastructure/adapters/suricata/UnavailableSuricataInternalNotePort';
 import { UnavailableSuricataTicketStatusPort } from '@infrastructure/adapters/suricata/UnavailableSuricataTicketStatusPort';
 import { UnavailableSuricataTicketClosePort } from '@infrastructure/adapters/suricata/UnavailableSuricataTicketClosePort';
+// suricata-bot-autonomous-actions (Phase G, task G.6, design D3.b CORRECTED
+// 2026-09-13) — reply is a plain HTTP adapter, NOT a Playwright driver: it
+// needs NO entry in `suricataActionPortsRegistry.ts`/
+// `bootstrapSuricataActionPorts.ts` (those exist for the config.ts import
+// hazard the PLAYWRIGHT-backed singletons carry, which a stateless HTTP
+// adapter does not have) — constructed directly here, like other simple
+// adapters already are in this file.
+import { SendAutonomousSuricataReply } from '@application/use-cases/suricata/SendAutonomousSuricataReply';
+import { BotpressReplyAdapter } from '@infrastructure/adapters/suricata/BotpressReplyAdapter';
+import { UnavailableBotpressReplyPort } from '@infrastructure/adapters/suricata/UnavailableBotpressReplyPort';
+import { getSharedSuricataBrowserSession } from '@infrastructure/adapters/suricata/sharedSuricataSession';
 // ── suricata-tickets-mirror (Fase E, D3/D10) — repo + use case + guarded port del reply interno ─
 import { PrismaSuricataReplyAuditRepository } from '@infrastructure/adapters/prisma/PrismaSuricataReplyAuditRepository';
 import { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
@@ -4117,6 +4128,21 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     suricataBotActionAuditRepo,
     suricataBotActionPorts.close ?? new UnavailableSuricataTicketClosePort(),
   );
+  // suricata-bot-autonomous-actions (Phase G, task G.6, design D3.b/D4.a
+  // CORRECTED 2026-09-13) — reply's REAL driver is a plain HTTP adapter over
+  // the shared Playwright sidecar's RAW `fetchJson` transport (no mutex, no
+  // `SuricataSession`, no `bootstrapSuricataActionPorts.ts` entry — see this
+  // block's imports). `getSharedSuricataBrowserSession()` returns `null`
+  // under the SAME opt-in gate (`SURICATA_BASE_URL`/`SURICATA_BROWSER_WS`
+  // unset) every other autonomous-action port already uses.
+  const suricataReplyBrowserSession = getSharedSuricataBrowserSession();
+  const sendAutonomousSuricataReply = new SendAutonomousSuricataReply(
+    suricataTicketRepo,
+    suricataBotActionAuditRepo,
+    suricataReplyBrowserSession
+      ? new BotpressReplyAdapter(suricataReplyBrowserSession)
+      : new UnavailableBotpressReplyPort(),
+  );
   app.use('/api/external/v1/suricata',
     createApiKeyMiddleware(config.suricata.externalApiKey),
     machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN),
@@ -4139,6 +4165,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       addSuricataInternalNote,
       changeSuricataTicketStatus,
       closeSuricataTicket,
+      sendAutonomousSuricataReply,
     }),
   );
   // [suricata-external-mount-end]

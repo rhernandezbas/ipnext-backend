@@ -58,6 +58,12 @@ describe('suricata-tickets-mirror composition root — assertions estáticas (D8
     expect(appSrc).not.toContain('new PlaywrightSuricataReply(');
   });
 
+  it('Fase G — el wiring INTERNO de `ReplyToSuricataTicket` queda BYTE-FOR-BYTE sin tocar (EXTREPLY-2: esta fase no toca ese path en absoluto)', () => {
+    expect(appSrc).toMatch(
+      /const replyToSuricataTicket = new ReplyToSuricataTicket\(\s*suricataInternalTicketRepo,\s*suricataReplyAuditRepo,\s*new UnavailableSuricataReplyPort\(\),\s*\);/,
+    );
+  });
+
   it('el mount interno queda montado DESPUÉS de /api/assistant (D8: "INMEDIATAMENTE DESPUÉS del mount de /api/assistant")', () => {
     const assistantIdx = appSrc.indexOf("app.use('/api/assistant',");
     const internalIdx = appSrc.indexOf("app.use('/api/suricata',");
@@ -92,6 +98,20 @@ describe('suricata-tickets-mirror composition root — assertions estáticas (D8
 
   it('el mount externo aplica machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN) (Fase D, D8, auditoría)', () => {
     expect(appSrc).toContain('machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN)');
+  });
+
+  it('Fase G — el mount EXTERNO construye `BotpressReplyAdapter`/`SendAutonomousSuricataReply` (plain HTTP, sin registry/bootstrap)', () => {
+    expect(appSrc).toMatch(
+      /import\s*\{\s*BotpressReplyAdapter\s*\}\s*from\s*['"]@infrastructure\/adapters\/suricata\/BotpressReplyAdapter['"]/,
+    );
+    expect(appSrc).toMatch(
+      /import\s*\{\s*SendAutonomousSuricataReply\s*\}\s*from\s*['"]@application\/use-cases\/suricata\/SendAutonomousSuricataReply['"]/,
+    );
+    expect(appSrc).toContain('new BotpressReplyAdapter(suricataReplyBrowserSession)');
+    expect(appSrc).toContain('new UnavailableBotpressReplyPort()');
+    expect(appSrc).toMatch(/const sendAutonomousSuricataReply = new SendAutonomousSuricataReply\(/);
+    // Feeds the EXTERNAL compose call, not the internal one.
+    expect(appSrc).toMatch(/closeSuricataTicket,\s*sendAutonomousSuricataReply,\s*\}\),\s*\);/);
   });
 });
 

@@ -63,6 +63,56 @@ interface BotpressMessagesResponse {
   messages?: BotpressMessage[];
 }
 
+/** `{tokenPa, botId}` resuelto desde `metadata-merchant` -- ver `fetchSuricataBotpressMerchantConfig`. */
+export interface SuricataBotpressMerchantConfig {
+  tokenPa: string;
+  botId: string;
+}
+
+/**
+ * suricata-bot-autonomous-actions (Phase G, task G.1, design D3.b) -- factoreado
+ * fuera de `fetchLastBotpressMessages` para que `BotpressReplyAdapter` (envio,
+ * infra) reuse EXACTAMENTE este mismo lookup en vez de duplicar el fetch a
+ * `metadata-merchant` una segunda vez. `null` cuando el merchant no tiene
+ * Botpress configurado -- nunca throwea, mismo criterio que el resto de este
+ * archivo.
+ */
+export async function fetchSuricataBotpressMerchantConfig(
+  session: SuricataBrowserSession,
+  merchant: string,
+): Promise<SuricataBotpressMerchantConfig | null> {
+  const merchantMeta = await session.fetchJson<SuricataMerchantMetadata>(
+    `${SURICATA_CHAT_BACKEND}/metadata-merchant`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { merchant } },
+  );
+  const botConfig = merchantMeta.settingsAll?.[0];
+  const tokenPa = botConfig?.token_pa;
+  const botId = botConfig?.bot_id;
+  if (!tokenPa || !botId) return null; // Botpress no configurado para este merchant
+  return { tokenPa, botId };
+}
+
+/**
+ * suricata-bot-autonomous-actions (Phase G, task G.3, design D4.a) -- factoreado
+ * fuera de `fetchLastBotpressMessages` para que `SendAutonomousSuricataReply`
+ * (via `BotpressReplyPort.getConversationId`) reuse EXACTAMENTE este mismo
+ * lookup en vez de duplicar el fetch a `metadata-ticket` una segunda vez.
+ * `null` cuando el ticket no tiene conversacion de Botpress asociada -- nunca
+ * throwea, mismo criterio que el resto de este archivo.
+ */
+export async function fetchSuricataTicketConversationId(
+  session: SuricataBrowserSession,
+  merchant: string,
+  ticketExternalId: string,
+): Promise<string | null> {
+  const ticketMeta = await session.fetchJson<SuricataTicketMetadata>(`${SURICATA_CHAT_BACKEND}/metadata-ticket`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: { merchant, ticketId: ticketExternalId },
+  });
+  return ticketMeta.conversation_id ?? null;
+}
+
 /**
  * Nunca throwea: un fallo en Botpress (config faltante, ticket sin
  * conversacion, API caida) degrada a `[]` -- el mirror de METADATA del
@@ -76,21 +126,11 @@ export async function fetchLastBotpressMessages(
   limit: number = LAST_MESSAGES_LIMIT,
 ): Promise<SuricataScrapedMessage[]> {
   try {
-    const merchantMeta = await session.fetchJson<SuricataMerchantMetadata>(
-      `${SURICATA_CHAT_BACKEND}/metadata-merchant`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { merchant } },
-    );
-    const botConfig = merchantMeta.settingsAll?.[0];
-    const tokenPa = botConfig?.token_pa;
-    const botId = botConfig?.bot_id;
-    if (!tokenPa || !botId) return []; // Botpress no configurado para este merchant
+    const merchantConfig = await fetchSuricataBotpressMerchantConfig(session, merchant);
+    if (!merchantConfig) return []; // Botpress no configurado para este merchant
+    const { tokenPa, botId } = merchantConfig;
 
-    const ticketMeta = await session.fetchJson<SuricataTicketMetadata>(`${SURICATA_CHAT_BACKEND}/metadata-ticket`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: { merchant, ticketId: ticketExternalId },
-    });
-    const conversationId = ticketMeta.conversation_id;
+    const conversationId = await fetchSuricataTicketConversationId(session, merchant, ticketExternalId);
     if (!conversationId) return []; // ticket sin conversacion de Botpress asociada
 
     const result = await session.fetchJson<BotpressMessagesResponse>(

@@ -36,8 +36,13 @@ import {
 } from './selectors';
 import { fetchLastBotpressMessages } from './botpressMessages';
 
-/** Slug del merchant en Suricata/Botpress -- fijo, no es un secreto (ya aparece en cada URL de la plataforma). */
-const SURICATA_MERCHANT = 'ipnext';
+/**
+ * Slug del merchant en Suricata/Botpress -- fijo, no es un secreto (ya
+ * aparece en cada URL de la plataforma). Exportado (suricata-bot-autonomous-
+ * actions, Phase G) para que `BotpressReplyAdapter` reuse el MISMO literal en
+ * vez de duplicarlo.
+ */
+export const SURICATA_MERCHANT = 'ipnext';
 
 /**
  * Narrow structural contract `PlaywrightSuricataScraper` needs on top of

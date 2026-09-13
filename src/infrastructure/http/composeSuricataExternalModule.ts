@@ -7,6 +7,7 @@ import type { ComputeSuricataKpis } from '@application/use-cases/suricata/Comput
 import type { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import type { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
 import type { CloseSuricataTicket } from '@application/use-cases/suricata/CloseSuricataTicket';
+import type { SendAutonomousSuricataReply } from '@application/use-cases/suricata/SendAutonomousSuricataReply';
 import type { SuricataTicketRepository } from '@domain/ports/SuricataTicketRepository';
 import type { SuricataAttachmentRepository } from '@domain/ports/SuricataAttachmentRepository';
 import type { FileStorage } from '@domain/ports/FileStorage';
@@ -39,6 +40,11 @@ const STATUS_FEATURE_FLAG_KEY = 'suricata-bot-status-enabled';
 // suricata-bot-autonomous-actions (Phase F, task F.4, design D2) — same
 // `-bot-` infix, independent of the note/status/reply flags (design D2).
 const CLOSE_FEATURE_FLAG_KEY = 'suricata-bot-close-enabled';
+// suricata-bot-autonomous-actions (Phase G, task G.5, design D2) — same
+// `-bot-` infix, independent of the note/status/close flags AND of the
+// INTERNAL `suricata-reply-enabled` flag (design D2/EXTREPLY-2) — flipping
+// this one never moves the internal panel's reply gate or RBAC permission.
+const REPLY_FEATURE_FLAG_KEY = 'suricata-bot-reply-enabled';
 
 function parseOr400<T>(schema: z.ZodType<T>, payload: unknown, res: Response): T | null {
   const parsed = schema.safeParse(payload);
@@ -101,6 +107,16 @@ const CloseTicketBodySchema = z.object({
   reason: z.string().min(1),
 });
 
+// suricata-bot-autonomous-actions (Phase G, task G.5, spec EXTREPLY-3) — shape
+// validation only (non-empty body). Deliberately NO `confirm` field — this
+// schema is the wire-level proof that a `confirm` value is never read,
+// required, or validated on this route (design D4.a: no human in the loop to
+// re-confirm against). `SendAutonomousSuricataReply` ALSO re-validates (must
+// be safe to call directly, not only via this route).
+const SendReplyBodySchema = z.object({
+  body: z.string().min(1),
+});
+
 export interface ComposeSuricataExternalModuleDeps {
   submitSuricataVerdict: SubmitSuricataVerdict;
   /** Used by the D7.c attachment route AND the read `/tickets/:externalId` route (both resolve `:externalId` -> local id first). */
@@ -118,6 +134,15 @@ export interface ComposeSuricataExternalModuleDeps {
   changeSuricataTicketStatus: ChangeSuricataTicketStatus;
   /** suricata-bot-autonomous-actions Phase F (CLOSE-1..7, design D4/D5.a corrected) — gated by its OWN `suricata-bot-close-enabled` flag, checked inline below. Does NOT write `ticketRepo`; see D5.a. */
   closeSuricataTicket: CloseSuricataTicket;
+  /**
+   * suricata-bot-autonomous-actions Phase G (EXTREPLY-1..5, design D3.b/D4.a
+   * CORRECTED 2026-09-13) — gated by its OWN `suricata-bot-reply-enabled`
+   * flag, checked inline below, structurally independent of the INTERNAL
+   * `suricata-reply-enabled` flag/`suricata.reply` RBAC permission: this
+   * route never touches `UnavailableSuricataReplyPort`/`ReplyToSuricataTicket`
+   * at all.
+   */
+  sendAutonomousSuricataReply: SendAutonomousSuricataReply;
 }
 
 export function composeSuricataExternalModule(deps: ComposeSuricataExternalModuleDeps): Router {
@@ -300,6 +325,33 @@ export function composeSuricataExternalModule(deps: ComposeSuricataExternalModul
       const result = await deps.closeSuricataTicket.execute({
         ticketExternalId: req.params['externalId'] as string,
         reason: body.reason,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── POST /tickets/:externalId/reply (EXTREPLY-1..5, design D3.b/D4.a corrected) ─
+  // OWN flag (`suricata-bot-reply-enabled`), independent of note/status/close
+  // (design D2) AND of the INTERNAL `suricata-reply-enabled` flag/RBAC
+  // permission (EXTREPLY-2) — this route never constructs or reaches
+  // `UnavailableSuricataReplyPort`/`ReplyToSuricataTicket`; there is nothing
+  // to wire here for those, they stay exactly as they are (Fase E). No
+  // `confirm` field is ever read/required/validated (EXTREPLY-3, design D4.a
+  // — no human in the loop to re-confirm against).
+  router.post('/tickets/:externalId/reply', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!(await isFeatureEnabled(REPLY_FEATURE_FLAG_KEY))) {
+        res.status(403).json({ error: 'Suricata autonomous reply capability is disabled', code: 'FEATURE_DISABLED' });
+        return;
+      }
+      const body = parseOr400(SendReplyBodySchema, req.body, res);
+      if (body === null) return;
+
+      const result = await deps.sendAutonomousSuricataReply.execute({
+        ticketExternalId: req.params['externalId'] as string,
+        body: body.body,
       });
       res.status(201).json(result);
     } catch (err) {

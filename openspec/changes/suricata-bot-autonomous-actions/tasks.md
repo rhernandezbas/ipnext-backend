@@ -346,7 +346,7 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
 > exclusively into the JSON POST body, which is injection-safe by construction (verify this with a
 > test, don't just assert it in a comment).
 
-- [ ] G.1 Create `BotpressReplyPort` (`src/domain/ports/`) — `sendReply(conversationId, body):
+- [x] G.1 Create `BotpressReplyPort` (`src/domain/ports/`) — `sendReply(conversationId, body):
       Promise<void>` (or `Promise<{whatsappId: string}>` if surfacing the returned `wamid` is useful
       for the audit payload — recommend yes, it is real proof of dispatch, molde
       `SuricataReplyAudit`'s existing "capture real evidence, not just an attempt flag" philosophy).
@@ -359,11 +359,11 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
       `Authorization: Bearer {tokenPa}` + `x-bot-id: {botId}`, body `{conversationId, userId:
       'user_01JY3XV69J36PGGZ01T47QK324', type: 'text', tags: {}, payload: {text: body}}`. A non-201
       response or a missing `message.id` in the body is a failure (`SuricataActionNotAppliedError`).
-- [ ] G.2 TDD G.1: the reply body reaches the JSON request body verbatim (no mutation, no
+- [x] G.2 TDD G.1: the reply body reaches the JSON request body verbatim (no mutation, no
       interpolation into any URL/header) — assert against a mocked `fetch`/axios call, molde the
       existing SSRF-adjacent tests' "assert the exact call args" style (`PlaywrightBrowserSession.test.ts`).
       A non-201/malformed response throws `SuricataActionNotAppliedError`, never resolves silently.
-- [ ] G.3 Create `SendAutonomousSuricataReply` use case (design D4.a — a NEW class, distinct from
+- [x] G.3 Create `SendAutonomousSuricataReply` use case (design D4.a — a NEW class, distinct from
       `ReplyToSuricataTicket`: no `confirm`, no `actorId`, addressed by `externalId`). It must itself
       resolve `externalId → conversationId` via the SAME `metadata-ticket` lookup `botpressMessages.ts`
       makes (reuse, do not duplicate) before calling `BotpressReplyPort`. Audit row before the port
@@ -373,11 +373,11 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
       (EXTREPLY-3); unknown `externalId` ⇒ 404 before any audit row; a ticket with no
       `conversation_id` (metadata-ticket returns none) ⇒ a distinct 502/`SuricataActionNotAppliedError`,
       not a generic crash.
-- [ ] G.4 TDD G.3 — `src/__tests__/application/suricata.SendAutonomousSuricataReply.test.ts`, same
+- [x] G.4 TDD G.3 — `src/__tests__/application/suricata.SendAutonomousSuricataReply.test.ts`, same
       shape as D.2/E.4/F.2's use-case tests, molde `ReplyToSuricataTicket.test.ts` for the
       audit-ordering assertions specifically (EXTREPLY-5). Use an in-memory/fake `BotpressReplyPort`,
       never a real network call in tests.
-- [ ] G.5 TDD external reply route: flag `suricata-bot-reply-enabled` OFF ⇒ 403, independent of the
+- [x] G.5 TDD external reply route: flag `suricata-bot-reply-enabled` OFF ⇒ 403, independent of the
       other 3 flags (EXTREPLY-2); missing/wrong key ⇒ 401 (EXTREPLY-1); no `confirm` field is ever
       read/required/validated (EXTREPLY-3); unknown ticket ⇒ 404; success ⇒ 2xx with `auditId` — new
       `src/__tests__/infrastructure/externalV1.suricata.reply.routes.test.ts`. Include one test
@@ -386,7 +386,7 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
       internal route is untouched — the internal route's `UnavailableSuricataReplyPort` in `app.ts`'s
       INTERNAL block is not touched by this phase at all, there is nothing to wire there since this
       path never uses that port).
-- [ ] G.6 Edit `composeSuricataExternalModule.ts` (`POST /tickets/:externalId/reply`, wired to
+- [x] G.6 Edit `composeSuricataExternalModule.ts` (`POST /tickets/:externalId/reply`, wired to
       `SendAutonomousSuricataReply` + the real `BotpressReplyAdapter`), `app.ts`'s EXTERNAL block only
       — same pattern as D.4/E.6/F.4, but note `BotpressReplyAdapter` needs NO entry in
       `suricataActionPortsRegistry.ts`/`bootstrapSuricataActionPorts.ts` (those exist specifically to
@@ -396,7 +396,7 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
       file). Add one composition test asserting the EXTERNAL module gets `BotpressReplyAdapter`/
       `SendAutonomousSuricataReply` while the INTERNAL module's `UnavailableSuricataReplyPort` wiring
       is byte-for-byte unchanged (molde the mirror's own precedent test of this shape).
-- [ ] G.7 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] G.7 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase H — Final composition hardening, full-suite verification, rollout doc (repo: ipnext-backend)
 

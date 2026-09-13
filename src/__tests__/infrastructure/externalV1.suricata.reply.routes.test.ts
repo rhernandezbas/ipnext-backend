@@ -1,9 +1,10 @@
 /**
- * suricata-bot-autonomous-actions (Phase F, task F.3, spec suricata-ticket-close
- * CLOSE-1..7, design D4/D7) — supertest over `composeSuricataExternalModule`
- * with REAL use cases + InMemory adapters (repo convention: never mock
- * Prisma, never mock the use case), molde
- * `externalV1.suricata.note.routes.test.ts`'s flag/key/validation shape.
+ * suricata-bot-autonomous-actions (Phase G, task G.5, spec EXTREPLY-1..5,
+ * design D3.b/D4.a/D7 CORRECTED 2026-09-13) — supertest over
+ * `composeSuricataExternalModule` with REAL use cases + InMemory adapters
+ * (repo convention: never mock Prisma, never mock the use case), molde
+ * `externalV1.suricata.close.routes.test.ts`'s flag/key/validation shape.
+ * Never a real network call -- the port is a fake/spy `BotpressReplyPort`.
  */
 import request from 'supertest';
 import express from 'express';
@@ -29,7 +30,7 @@ import { InMemorySuricataBotActionAuditRepository } from '@infrastructure/adapte
 import { InMemoryFileStorage } from '@infrastructure/adapters/in-memory/InMemoryFileStorage';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
-import type { SuricataTicketClosePort } from '@domain/ports/SuricataTicketClosePort';
+import type { BotpressReplyPort } from '@domain/ports/BotpressReplyPort';
 
 jest.mock('@infrastructure/config', () => ({
   config: {
@@ -39,26 +40,44 @@ jest.mock('@infrastructure/config', () => ({
 }));
 
 const VERDICT_FLAG_KEY = 'suricata-verdict-enabled';
-const CLOSE_FLAG_KEY = 'suricata-bot-close-enabled';
+const REPLY_FLAG_KEY = 'suricata-bot-reply-enabled';
+// EXTREPLY-2 — the INTERNAL panel's own reply flag. Seeding/toggling it here
+// must have ZERO effect on this external route (independence test below).
+const INTERNAL_REPLY_FLAG_KEY = 'suricata-reply-enabled';
 const DEDICATED_KEY = 'dedicated-suricata-key';
 const GLOBAL_KEY = 'some-other-global-key';
 
-type SpySuricataTicketClosePort = SuricataTicketClosePort & { calls: Array<[string, string]> };
+type SpyBotpressReplyPort = BotpressReplyPort & {
+  getConversationIdCalls: string[];
+  sendReplyCalls: Array<[string, string]>;
+};
 
-function spyClosePort(impl: (externalId: string, reason: string) => Promise<void>): SpySuricataTicketClosePort {
-  const calls: Array<[string, string]> = [];
+function spyReplyPort(opts: {
+  conversationId?: string | null;
+  send?: (conversationId: string, body: string) => Promise<{ whatsappId?: string }>;
+} = {}): SpyBotpressReplyPort {
+  const getConversationIdCalls: string[] = [];
+  const sendReplyCalls: Array<[string, string]> = [];
+  const conversationId = opts.conversationId === undefined ? 'conv_1' : opts.conversationId;
+  const send = opts.send ?? (async () => ({ whatsappId: 'wamid.default' }));
   return {
-    calls,
-    close: async (externalId: string, reason: string) => {
-      calls.push([externalId, reason]);
-      return impl(externalId, reason);
+    getConversationIdCalls,
+    sendReplyCalls,
+    getConversationId: async (ticketExternalId: string) => {
+      getConversationIdCalls.push(ticketExternalId);
+      return conversationId;
+    },
+    sendReply: async (convId: string, body: string) => {
+      sendReplyCalls.push([convId, body]);
+      return send(convId, body);
     },
   };
 }
 
 interface BuildAppOpts {
-  closeFlagEnabled?: boolean;
-  closePort?: SpySuricataTicketClosePort;
+  replyFlagEnabled?: boolean;
+  internalReplyFlagEnabled?: boolean;
+  replyPort?: SpyBotpressReplyPort;
 }
 
 function buildApp(opts: BuildAppOpts = {}) {
@@ -71,12 +90,15 @@ function buildApp(opts: BuildAppOpts = {}) {
   const fileStorage = new InMemoryFileStorage();
   const featureFlags = new InMemoryFeatureFlagRepository();
   featureFlags.seed(VERDICT_FLAG_KEY, true);
-  featureFlags.seed(CLOSE_FLAG_KEY, opts.closeFlagEnabled !== false);
+  featureFlags.seed(REPLY_FLAG_KEY, opts.replyFlagEnabled !== false);
+  // EXTREPLY-2 — seeded independently; this route never reads this key.
+  featureFlags.seed(INTERNAL_REPLY_FLAG_KEY, opts.internalReplyFlagEnabled ?? false);
   const rbacUserRepo = new InMemoryRbacUserRepository();
-  const closePort = opts.closePort ?? spyClosePort(async () => {});
-  // This suite doesn't exercise the note/status routes — no-op fake ports are enough.
+  const replyPort = opts.replyPort ?? spyReplyPort();
+  // This suite doesn't exercise the note/status/close routes — no-op fake ports are enough.
   const notePort = { addNote: async () => {} };
   const statusPort = { changeStatus: async () => {} };
+  const closePort = { close: async () => {} };
 
   const submitSuricataVerdict = new SubmitSuricataVerdict(tickets, verdicts);
   const listSuricataTickets = new ListSuricataTickets(tickets, verdicts, areaRepo, rbacUserRepo);
@@ -85,10 +107,7 @@ function buildApp(opts: BuildAppOpts = {}) {
   const addSuricataInternalNote = new AddSuricataInternalNote(tickets, audits, notePort);
   const changeSuricataTicketStatus = new ChangeSuricataTicketStatus(tickets, audits, statusPort);
   const closeSuricataTicket = new CloseSuricataTicket(tickets, audits, closePort);
-  const sendAutonomousSuricataReply = new SendAutonomousSuricataReply(tickets, audits, {
-    getConversationId: async () => null,
-    sendReply: async () => ({}),
-  });
+  const sendAutonomousSuricataReply = new SendAutonomousSuricataReply(tickets, audits, replyPort);
 
   const router = composeSuricataExternalModule({
     submitSuricataVerdict,
@@ -115,7 +134,7 @@ function buildApp(opts: BuildAppOpts = {}) {
   );
   app.use(errorHandler);
 
-  return { app, tickets, audits, featureFlags, closePort };
+  return { app, tickets, audits, featureFlags, replyPort };
 }
 
 async function seedTicket(tickets: InMemorySuricataTicketRepository, externalId = 'ext-1') {
@@ -137,103 +156,151 @@ async function seedTicket(tickets: InMemorySuricataTicketRepository, externalId 
   });
 }
 
-describe('POST /api/external/v1/suricata/tickets/:externalId/close', () => {
-  it('CLOSE-1 — missing token -> 401, before any driver call', async () => {
-    const { app, closePort } = buildApp();
+describe('POST /api/external/v1/suricata/tickets/:externalId/reply', () => {
+  it('EXTREPLY-1 — missing token -> 401, before any driver call', async () => {
+    const { app, replyPort } = buildApp();
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ext-1/close')
-      .send({ reason: 'Reclamo resuelto' });
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
+      .send({ body: 'Ya reactivamos tu servicio' });
     expect(res.status).toBe(401);
-    expect(closePort.calls).toHaveLength(0);
+    expect(replyPort.sendReplyCalls).toHaveLength(0);
   });
 
-  it('CLOSE-1 — the GLOBAL external-v1 key (dedicated != global) is rejected with 401', async () => {
+  it('EXTREPLY-1 — the GLOBAL external-v1 key (dedicated != global) is rejected with 401', async () => {
     const { app, tickets } = buildApp();
     await seedTicket(tickets);
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ext-1/close')
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
       .set('X-API-Key', GLOBAL_KEY)
-      .send({ reason: 'Reclamo resuelto' });
+      .send({ body: 'Ya reactivamos tu servicio' });
     expect(res.status).toBe(401);
   });
 
-  it('CLOSE-1 — flag OFF -> 403 FEATURE_DISABLED, before any driver call, independent of the verdict flag (which stays ON)', async () => {
-    const { app, tickets, closePort } = buildApp({ closeFlagEnabled: false });
+  it('EXTREPLY-2 — flag OFF -> 403 FEATURE_DISABLED, before any driver call, independent of the verdict flag (which stays ON)', async () => {
+    const { app, tickets, replyPort } = buildApp({ replyFlagEnabled: false });
     await seedTicket(tickets);
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ext-1/close')
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
       .set('X-API-Key', DEDICATED_KEY)
-      .send({ reason: 'Reclamo resuelto' });
+      .send({ body: 'Ya reactivamos tu servicio' });
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('FEATURE_DISABLED');
-    expect(closePort.calls).toHaveLength(0);
+    expect(replyPort.sendReplyCalls).toHaveLength(0);
   });
 
-  it('CLOSE-2 — empty reason -> 400, before any driver call and no audit row', async () => {
-    const { app, tickets, audits, closePort } = buildApp();
+  it('EXTREPLY-2 — structurally independent of the INTERNAL suricata-reply-enabled flag: reply flag ON + internal flag OFF still succeeds', async () => {
+    const { app, tickets } = buildApp({ replyFlagEnabled: true, internalReplyFlagEnabled: false });
+    await seedTicket(tickets);
+    const res = await request(app)
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
+      .set('X-API-Key', DEDICATED_KEY)
+      .send({ body: 'Ya reactivamos tu servicio' });
+    expect(res.status).toBe(201);
+  });
+
+  it('EXTREPLY-2 — structurally independent of the INTERNAL suricata-reply-enabled flag: reply flag OFF + internal flag ON still 403s here', async () => {
+    const { app, tickets } = buildApp({ replyFlagEnabled: false, internalReplyFlagEnabled: true });
+    await seedTicket(tickets);
+    const res = await request(app)
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
+      .set('X-API-Key', DEDICATED_KEY)
+      .send({ body: 'Ya reactivamos tu servicio' });
+    expect(res.status).toBe(403);
+  });
+
+  it('EXTREPLY-3 — empty body -> 400, before any driver call and no audit row', async () => {
+    const { app, tickets, audits, replyPort } = buildApp();
     const ticket = await seedTicket(tickets);
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ext-1/close')
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
       .set('X-API-Key', DEDICATED_KEY)
-      .send({ reason: '' });
+      .send({ body: '' });
     expect(res.status).toBe(400);
-    expect(closePort.calls).toHaveLength(0);
+    expect(replyPort.sendReplyCalls).toHaveLength(0);
     expect(await audits.listByTicket(ticket.id)).toHaveLength(0);
   });
 
-  it('CLOSE-2 — missing reason field -> 400, never 500', async () => {
+  it('EXTREPLY-3 — missing body field -> 400, never 500', async () => {
     const { app, tickets } = buildApp();
     await seedTicket(tickets);
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ext-1/close')
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
       .set('X-API-Key', DEDICATED_KEY)
       .send({});
     expect(res.status).toBe(400);
   });
 
-  it('CLOSE-3 — unknown ticket externalId -> 404, no audit row', async () => {
+  it('EXTREPLY-3 — a `confirm` field is never read/required/validated: present-but-wrong confirm still succeeds', async () => {
+    const { app, tickets } = buildApp();
+    await seedTicket(tickets);
+    const res = await request(app)
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
+      .set('X-API-Key', DEDICATED_KEY)
+      .send({ body: 'Ya reactivamos tu servicio', confirm: 'this-is-not-a-real-sha256' });
+    expect(res.status).toBe(201);
+  });
+
+  it('unknown ticket externalId -> 404, no audit row', async () => {
     const { app, audits } = buildApp();
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ghost/close')
+      .post('/api/external/v1/suricata/tickets/ghost/reply')
       .set('X-API-Key', DEDICATED_KEY)
-      .send({ reason: 'Reclamo resuelto' });
+      .send({ body: 'Ya reactivamos tu servicio' });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('SURICATA_TICKET_NOT_FOUND');
     expect(await audits.listByTicket('ghost')).toHaveLength(0);
   });
 
-  it('success -> 201 with auditId, driver invoked with the exact reason, no mirror status assertion (close writes nothing locally, F.2)', async () => {
-    const { app, tickets, closePort } = buildApp();
+  it('success -> 201 with auditId, driver invoked with the exact body via the resolved conversationId', async () => {
+    const replyPort = spyReplyPort({ conversationId: 'conv_99' });
+    const { app, tickets } = buildApp({ replyPort });
     await seedTicket(tickets);
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ext-1/close')
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
       .set('X-API-Key', DEDICATED_KEY)
-      .send({ reason: 'Reclamo resuelto' });
+      .send({ body: 'Ya reactivamos tu servicio' });
     expect(res.status).toBe(201);
     expect(res.body.auditId).toEqual(expect.any(String));
-    expect(closePort.calls).toEqual([['ext-1', 'Reclamo resuelto']]);
-    const after = await tickets.findByExternalId('ext-1');
-    expect(after?.status).toBe('abierto');
+    expect(replyPort.getConversationIdCalls).toEqual(['ext-1']);
+    expect(replyPort.sendReplyCalls).toEqual([['conv_99', 'Ya reactivamos tu servicio']]);
+  });
+
+  it('a ticket with no linked conversation -> 502, distinct failure, auditId present', async () => {
+    const replyPort = spyReplyPort({ conversationId: null });
+    const { app, tickets, audits } = buildApp({ replyPort });
+    const ticket = await seedTicket(tickets);
+    const res = await request(app)
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
+      .set('X-API-Key', DEDICATED_KEY)
+      .send({ body: 'Ya reactivamos tu servicio' });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('SURICATA_ACTION_NOT_APPLIED');
+    expect(res.body.auditId).toEqual(expect.any(String));
+    const rows = await audits.listByTicket(ticket.id);
+    expect(rows.some((r) => r.outcome === 'failed')).toBe(true);
   });
 
   it('driver failure -> 502 with auditId, audit row stays failed', async () => {
-    const failingPort = spyClosePort(async () => {
-      throw new Error('DOM changed, could not find the close modal');
+    const failingPort = spyReplyPort({
+      conversationId: 'conv_1',
+      send: async () => {
+        throw new Error('Botpress request failed with status 500');
+      },
     });
-    const { app, tickets, audits } = buildApp({ closePort: failingPort });
+    const { app, tickets, audits } = buildApp({ replyPort: failingPort });
     const ticket = await seedTicket(tickets);
     const res = await request(app)
-      .post('/api/external/v1/suricata/tickets/ext-1/close')
+      .post('/api/external/v1/suricata/tickets/ext-1/reply')
       .set('X-API-Key', DEDICATED_KEY)
-      .send({ reason: 'Reclamo resuelto' });
+      .send({ body: 'Ya reactivamos tu servicio' });
     expect(res.status).toBe(502);
     expect(res.body.auditId).toEqual(expect.any(String));
     const rows = await audits.listByTicket(ticket.id);
     expect(rows.some((r) => r.outcome === 'failed')).toBe(true);
   });
 
-  it('independence — close flag OFF while verdict flag stays ON does not block the pre-existing verdict route', async () => {
-    const { app, tickets } = buildApp({ closeFlagEnabled: false });
+  it('independence — reply flag OFF while verdict flag stays ON does not block the pre-existing verdict route', async () => {
+    const { app, tickets } = buildApp({ replyFlagEnabled: false });
     await seedTicket(tickets);
     const res = await request(app)
       .post('/api/external/v1/suricata/tickets/ext-1/verdict')
