@@ -230,7 +230,10 @@ export class SyncSuricataTickets {
       // D13.b's best-effort client match is Phase F/panel scope, not this sync.
       clientId: existing?.clientId ?? null,
       openedAt: detail.openedAt,
-      lastMessageAt: detail.lastMessageAt,
+      // The detail page has no reliable "last message" field (unlike the
+      // list); the list summary's `fechadeconv`-derived value is the best
+      // available signal.
+      lastMessageAt: detail.lastMessageAt ?? summary.lastMessageAt,
       contentHash,
       syncedAt: nowIso,
     });

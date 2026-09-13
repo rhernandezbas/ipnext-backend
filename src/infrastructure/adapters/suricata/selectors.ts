@@ -1,195 +1,185 @@
 /**
- * suricata-tickets-mirror (Phase C, task C.3, D6.d) — every CSS selector the
- * scraper touches lives HERE, as named constants, so a DOM change is a
- * one-file diff and a `selectorMisses` audit trail is possible. Pure parsers
- * (cheerio, no network — molde `parseSeamOSDetail.ts`) live alongside them:
- * `PlaywrightSuricataScraper` fetches HTML/binary via the shared session and
- * hands it here.
+ * suricata-tickets-mirror (Phase C, task C.3, D6.d; RE-VERIFIED against the
+ * live system 2026-09-13) — every CSS selector / route the scraper touches
+ * lives HERE. The ORIGINAL version of this file (apply session, no Suricata
+ * access) was entirely hand-authored and, once checked against the real
+ * `ipnext.suricata.cloud` instance, turned out to be wrong on every point:
+ * wrong login field names, a login-form marker that never matches ANYTHING
+ * (so `isAuthenticated()` always reported "authenticated" and login was never
+ * attempted), wrong list/detail routes (`/tickets` doesn't exist -- it 500s),
+ * and a list page whose ticket rows are injected by client-side JS (there is
+ * no server-rendered `<tr>` to scrape at all).
  *
- * D6.d's two hard invariants (page 1 must yield >=1 ticket; a missing required
- * field is a `selectorMisses` entry) are enforced by `SyncSuricataTickets`
- * (the use case), NOT here: a parser that throws on a broken/redesigned DOM
- * would turn "selector roto" into an unhandled exception instead of the
- * loud-but-controlled `SuricataSyncRun.outcome='failed'` the design specifies.
- * These functions degrade to empty/`null` fields and never throw.
+ * The values below were captured live, authenticated, via Playwright MCP
+ * against `https://ipnext.suricata.cloud` on 2026-09-13.
  */
 import * as cheerio from 'cheerio';
-import type { SuricataMessageAuthorKind } from '@domain/entities/suricata';
-import type {
-  SuricataAreaSummary,
-  SuricataTicketPage,
-  SuricataTicketSummary,
-  SuricataTicketDetail,
-  SuricataScrapedMessage,
-  SuricataScrapedAttachmentRef,
-} from '@domain/ports/SuricataScraperPort';
+import type { SuricataAreaSummary, SuricataTicketPage, SuricataTicketSummary, SuricataTicketDetail } from '@domain/ports/SuricataScraperPort';
 
-export const SURICATA_SELECTORS = {
-  areaRow: '.area-row',
-  ticketRow: '.ticket-row',
-  ticketSubject: '.ticket-subject',
-  ticketStatus: '.ticket-status',
-  ticketPriority: '.ticket-priority',
-  ticketArea: '.ticket-area',
-  ticketLastMessageAt: '.ticket-last-message',
-  ticketMessageCount: '.ticket-message-count',
-  paginationNext: 'a.pagination-next',
-  detailRoot: '.ticket-detail',
-  detailSubject: '.ticket-detail-subject',
-  detailStatus: '.ticket-detail-status',
-  detailPriority: '.ticket-detail-priority',
-  detailArea: '.ticket-detail-area',
-  detailCustomer: '.ticket-detail-customer',
-  detailOpenedAt: '.ticket-detail-opened-at',
-  detailLastMessageAt: '.ticket-detail-last-message-at',
-  messageRow: '.message-row',
-  messageBody: '.message-body',
-  attachmentLink: 'a.attachment-link',
-} as const;
-
-/**
- * ⚠️ RIESGO ALTO — SELECTORES DE LOGIN/AUTENTICACIÓN, TAMBIÉN SINTÉTICOS
- * =========================================================================
- * Mismo disclaimer que el resto de `SURICATA_SELECTORS` de arriba, pero para
- * el flujo de login que consume `PlaywrightBrowserSession` (Phase J, D5): estos
- * valores fueron escritos a mano por la sesión de apply que agregó el driver
- * real de Playwright, SIN acceso a Suricata Cx ni credenciales desde este
- * entorno. `ensureAuthenticated`/`SuricataSession` (Phase B) ya están
- * unit-testeados con fakes y NO dependen de este DOM real — lo único que se
- * apoya en estos selectores concretos es `PlaywrightBrowserSession`.
- * NO los toques a ciegas asumiendo que están mal, pero TAMPOCO asumas que
- * están bien: el ÚNICO lugar que lo confirma es el smoke manual de D14 (deploy
- * dark → sidecar arriba → flip de `suricata-sync-enabled` → mirar
- * `SuricataSyncRun.outcome`). Si ese smoke falla en el paso de login, el
- * primer sospechoso es ESTE bloque.
- */
 export const SURICATA_AUTH_PATHS = {
-  /** D4 — ruta barata para clasificar autenticación por marcador de DOM. */
+  /** The login FORM is served at `/` itself when there is no session; it POSTs to `/login`. */
   authenticatedProbe: '/',
-  loginPath: '/login',
+  loginPath: '/',
 } as const;
 
 export const SURICATA_AUTH_SELECTORS = {
-  loginForm: 'form#login-form',
-  usernameField: 'input[name="username"]',
+  usernameField: 'input[name="email"]',
   passwordField: 'input[name="password"]',
-  submitButton: 'button[type="submit"]',
+  /** The only `<button>` inside the login form; it has no `type="submit"` attribute (relies on the HTML default). */
+  submitButton: 'form button',
+  /**
+   * `isAuthenticated()`'s DOM marker: the password field is present ONLY on
+   * the login page, on ANY route, so its absence means we're logged in.
+   */
+  notAuthenticatedMarker: 'input[name="password"]',
 } as const;
 
-function toIntOrZero(raw: string): number {
-  const n = parseInt(raw, 10);
-  return Number.isNaN(n) ? 0 : n;
-}
+/** `/ticketsdinamicosv2` renders an EMPTY `<tbody>`; rows are injected by client JS from `/api/tickets-dinamicos`. */
+const TICKETS_LIST_PATH = '/ticketsdinamicosv2';
+const TICKET_DETAIL_PATH = '/ticketunico';
+const TICKETS_DATA_API_PATH = '/api/tickets-dinamicos';
 
-export function parseSuricataAreaList(html: string): SuricataAreaSummary[] {
+export const SURICATA_ROUTES = { TICKETS_LIST_PATH, TICKET_DETAIL_PATH, TICKETS_DATA_API_PATH } as const;
+
+/** The department `<select>` embedded in `TICKETS_LIST_PATH`'s HTML -- the only place real numeric area ids exist; the ticket rows/JSON only ever carry the area NAME. */
+export function parseSuricataAreaOptions(html: string): SuricataAreaSummary[] {
   const $ = cheerio.load(html);
   const areas: SuricataAreaSummary[] = [];
-  $(SURICATA_SELECTORS.areaRow).each((_i, el) => {
+  $('select#department option').each((_i, el) => {
     const $el = $(el);
-    const externalId = $el.attr('data-area-id');
+    const externalId = $el.attr('value');
     const name = $el.text().trim();
-    if (!externalId || !name) return; // malformed row -- skip, never throw
+    if (!externalId || externalId === '0' || !name) return; // "Seleccionar" placeholder -- skip
     areas.push({ externalId, name });
   });
   return areas;
 }
 
-export function parseSuricataTicketListPage(html: string): SuricataTicketPage {
-  const $ = cheerio.load(html);
-  const tickets: SuricataTicketSummary[] = [];
-  $(SURICATA_SELECTORS.ticketRow).each((_i, el) => {
-    const $el = $(el);
-    const externalId = $el.attr('data-ticket-id');
-    if (!externalId) return; // malformed row -- skip
-
-    const subject = $el.find(SURICATA_SELECTORS.ticketSubject).first().text().trim();
-    const status = $el.find(SURICATA_SELECTORS.ticketStatus).first().attr('data-status') ?? '';
-    const priority = $el.find(SURICATA_SELECTORS.ticketPriority).first().attr('data-priority') ?? null;
-    const areaExternalId = $el.find(SURICATA_SELECTORS.ticketArea).first().attr('data-area-id') ?? null;
-    const lastMessageAt =
-      $el.find(SURICATA_SELECTORS.ticketLastMessageAt).first().attr('data-last-message-at') ?? null;
-    const messageCountRaw = $el.find(SURICATA_SELECTORS.ticketMessageCount).first().text().trim();
-
-    tickets.push({
-      externalId,
-      subject,
-      status,
-      priority,
-      areaExternalId,
-      lastMessageAt,
-      messageCount: messageCountRaw ? toIntOrZero(messageCountRaw) : 0,
-    });
-  });
-
-  const hasNextPage = $(SURICATA_SELECTORS.paginationNext).length > 0;
-  return { tickets, hasNextPage };
+/** `TICKETS_LIST_PATH`'s inline bootstrap script sets `usuariologeado = '<id>'` -- the numeric id `TICKETS_DATA_API_PATH?usuario=<id>` needs. */
+export function extractLoggedInUserId(html: string): string | null {
+  const match = html.match(/usuariologeado\s*=\s*'(\d+)'/);
+  return match ? match[1] : null;
 }
 
-export function parseSuricataTicketDetail(html: string): SuricataTicketDetail {
-  const $ = cheerio.load(html);
-  const root = $(SURICATA_SELECTORS.detailRoot).first();
+interface SuricataTicketsDinamicosBadge {
+  texto?: string | null;
+}
 
-  const externalId = root.attr('data-ticket-id') ?? '';
-  const subject = root.find(SURICATA_SELECTORS.detailSubject).first().text().trim();
-  const status = root.find(SURICATA_SELECTORS.detailStatus).first().attr('data-status') ?? '';
-  const priority = root.find(SURICATA_SELECTORS.detailPriority).first().attr('data-priority') ?? null;
-  const areaExternalId = root.find(SURICATA_SELECTORS.detailArea).first().attr('data-area-id') ?? null;
+export interface SuricataTicketsDinamicosTicket {
+  id: number;
+  siennadepto?: SuricataTicketsDinamicosBadge | null;
+  siennatopic?: SuricataTicketsDinamicosBadge | null;
+  prioridad?: SuricataTicketsDinamicosBadge | null;
+  siennaestado?: SuricataTicketsDinamicosBadge | null;
+  /** Timestamp of the last conversation activity -- NOT `fn` (ticket creation). */
+  fechadeconv?: string | null;
+}
 
-  const customerEl = root.find(SURICATA_SELECTORS.detailCustomer).first();
-  const customerName = customerEl.attr('data-name') ?? null;
-  const customerEmail = customerEl.attr('data-email') ?? null;
-  const customerPhone = customerEl.attr('data-phone') ?? null;
-  const externalClientRef = customerEl.attr('data-external-ref') ?? null;
+export interface SuricataTicketsDinamicosResponse {
+  tickets: SuricataTicketsDinamicosTicket[];
+}
 
-  const openedAt = root.find(SURICATA_SELECTORS.detailOpenedAt).first().attr('data-opened-at') ?? null;
-  const lastMessageAt =
-    root.find(SURICATA_SELECTORS.detailLastMessageAt).first().attr('data-last-message-at') ?? null;
-
-  const messages: SuricataScrapedMessage[] = [];
-  root.find(SURICATA_SELECTORS.messageRow).each((_i, el) => {
-    const $el = $(el);
-    const msgExternalId = $el.attr('data-message-id');
-    if (!msgExternalId) return; // malformed message row -- skip
-
-    const author = $el.attr('data-author') ?? '';
-    const authorKindRaw = $el.attr('data-author-kind') ?? 'unknown';
-    const authorKind: SuricataMessageAuthorKind = (
-      ['customer', 'agent', 'system', 'unknown'] as const
-    ).includes(authorKindRaw as SuricataMessageAuthorKind)
-      ? (authorKindRaw as SuricataMessageAuthorKind)
-      : 'unknown';
-    const sentAt = $el.attr('data-sent-at') ?? '';
-    const body = $el.find(SURICATA_SELECTORS.messageBody).first().text().trim();
-
-    const attachments: SuricataScrapedAttachmentRef[] = [];
-    $el.find(SURICATA_SELECTORS.attachmentLink).each((_j, a) => {
-      const $a = $(a);
-      const href = $a.attr('href');
-      if (!href) return;
-      const sizeRaw = $a.attr('data-size-bytes');
-      attachments.push({
-        externalRef: href,
-        fileName: $a.attr('data-filename') ?? href.split('/').pop() ?? href,
-        mimeType: $a.attr('data-mime-type') ?? undefined,
-        sizeBytes: sizeRaw ? Number(sizeRaw) : null,
-      });
+/**
+ * `TICKETS_DATA_API_PATH` returns every ticket visible to the logged-in agent
+ * in ONE response -- no `page`/`limit` params, confirmed live (21 of 21 in a
+ * single call). It is NOT pre-sorted by activity: the UI's apparent order
+ * comes from DataTables' own client-side sort, not the API. `listTicketPage`
+ * (D6.a: "ordered by activity descending") sorts here, once.
+ *
+ * `messageCount` has no source in this API -- set to 0. D6.b's "skip if
+ * unchanged" optimization still works: `lastMessageAt` changes on every new
+ * message, which is already part of the hash.
+ */
+export function parseSuricataTicketsDinamicos(
+  json: SuricataTicketsDinamicosResponse,
+  areaNameToId: ReadonlyMap<string, string>,
+): SuricataTicketPage {
+  const tickets: SuricataTicketSummary[] = (json.tickets ?? [])
+    .slice()
+    .sort((a, b) => (b.fechadeconv ?? '').localeCompare(a.fechadeconv ?? ''))
+    .map((t) => {
+      const areaName = t.siennadepto?.texto ?? null;
+      return {
+        externalId: String(t.id),
+        // Suricata has no free-text "subject" -- the topic ("Tema de ayuda")
+        // is the closest real concept and is what the UI itself shows as the
+        // ticket's title.
+        subject: t.siennatopic?.texto ?? '',
+        status: t.siennaestado?.texto ?? '',
+        priority: t.prioridad?.texto ?? null,
+        areaExternalId: areaName ? (areaNameToId.get(areaName) ?? null) : null,
+        lastMessageAt: t.fechadeconv ?? null,
+        messageCount: 0,
+      };
     });
+  // Confirmed live 2026-09-13: one call returns the full active set, no
+  // offset/limit exists upstream to paginate further.
+  return { tickets, hasNextPage: false };
+}
 
-    messages.push({ externalId: msgExternalId, author, authorKind, body, sentAt, attachments });
+function textAfterLabelDiv($: cheerio.CheerioAPI, label: string): string | null {
+  let result: string | null = null;
+  $('div.d-flex').each((_i, el) => {
+    const $el = $(el);
+    if ($el.text().trim().startsWith(label)) {
+      const text = $el.find('span').first().text().trim();
+      if (text) result = text;
+    }
   });
+  return result;
+}
+
+function textAfterStrongLabel($: cheerio.CheerioAPI, label: string): string | null {
+  let result: string | null = null;
+  $('strong').each((_i, el) => {
+    const $el = $(el);
+    if ($el.text().trim() === label) {
+      const text = $el.parent().text().replace(label, '').trim();
+      if (text) result = text;
+    }
+  });
+  return result;
+}
+
+/**
+ * `TICKET_DETAIL_PATH` IS server-rendered (unlike the list): status/dept/
+ * priority/topic and the customer info panel are all present in the raw
+ * HTML, no JS required. `externalId` is passed in rather than scraped -- the
+ * caller already knows it (it built the request URL from it).
+ *
+ * `messages` is always `[]`: the actual conversation thread renders inside a
+ * cross-origin iframe (`https://conversation.suricata.chat/...`), a separate
+ * client-rendered app that needs a live websocket to populate -- there is
+ * NOTHING to scrape for it in this page's HTML. Mirroring message content is
+ * a separate, unsolved problem (see suricata-tickets-mirror follow-up notes),
+ * not a selector fix.
+ */
+export function parseSuricataTicketDetail(
+  html: string,
+  externalId: string,
+  areaNameToId: ReadonlyMap<string, string>,
+): SuricataTicketDetail {
+  const $ = cheerio.load(html);
+
+  const status = $('#ticketStatusName').first().text().trim();
+  const priority = $('#ticketPriorityName').first().text().trim() || null;
+  const areaName = $('#ticketDeptoName').first().text().trim() || null;
+  const subject = $('#ticketTopicName').first().text().trim();
 
   return {
     externalId,
     subject,
     status,
     priority,
-    areaExternalId,
-    customerName,
-    customerEmail,
-    customerPhone,
-    externalClientRef,
-    openedAt,
-    lastMessageAt,
-    messages,
+    areaExternalId: areaName ? (areaNameToId.get(areaName) ?? null) : null,
+    customerName: textAfterLabelDiv($, 'Nombre:'),
+    customerEmail: textAfterLabelDiv($, 'Email:'),
+    customerPhone: textAfterLabelDiv($, 'Teléfono:'),
+    externalClientRef: textAfterLabelDiv($, 'Número cliente:'),
+    openedAt: textAfterStrongLabel($, 'Creado:'),
+    // No reliable "last message" field found on this page -- the caller
+    // falls back to the list summary's `lastMessageAt` (SyncSuricataTickets).
+    lastMessageAt: null,
+    messages: [],
   };
 }

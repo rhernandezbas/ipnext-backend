@@ -26,7 +26,14 @@ import type {
 } from '@domain/ports/SuricataScraperPort';
 import { SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 import { SuricataSession, type SuricataAuthSession } from './SuricataSession';
-import { parseSuricataAreaList, parseSuricataTicketListPage, parseSuricataTicketDetail } from './selectors';
+import {
+  SURICATA_ROUTES,
+  parseSuricataAreaOptions,
+  extractLoggedInUserId,
+  parseSuricataTicketsDinamicos,
+  parseSuricataTicketDetail,
+  type SuricataTicketsDinamicosResponse,
+} from './selectors';
 
 /**
  * Narrow structural contract `PlaywrightSuricataScraper` needs on top of
@@ -37,6 +44,7 @@ import { parseSuricataAreaList, parseSuricataTicketListPage, parseSuricataTicket
  */
 export interface SuricataBrowserSession extends SuricataAuthSession {
   fetchHtml(url: string): Promise<string>;
+  fetchJson<T>(url: string): Promise<T>;
   fetchBinary(url: string): Promise<{ buffer: Buffer; mimeType: string }>;
 }
 
@@ -45,10 +53,6 @@ export interface PlaywrightSuricataScraperConfig {
   /** D4 — the sync lane always requests the session at 'low' priority. */
   sessionTimeoutMs: number;
 }
-
-const AREAS_PATH = '/areas';
-const TICKETS_LIST_PATH = '/tickets';
-const TICKET_DETAIL_PATH = '/tickets';
 
 function resolveUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
@@ -100,26 +104,54 @@ export class PlaywrightSuricataScraper implements SuricataScraperPort {
     private readonly cfg: PlaywrightSuricataScraperConfig,
   ) {}
 
+  /**
+   * `TICKETS_LIST_PATH`'s HTML is the ONLY place real numeric area ids exist
+   * (embedded `<select id="department">`); it also carries the logged-in
+   * agent's numeric id (`usuariologeado`), which `TICKETS_DATA_API_PATH`
+   * requires as `?usuario=`. Both `listAreas` and `listTicketPage` need this
+   * same fetch, so it is factored here rather than duplicated.
+   */
+  private async loadAreasAndSession(
+    s: SuricataBrowserSession,
+  ): Promise<{ areas: SuricataAreaSummary[]; areaNameToId: Map<string, string>; loggedInUserId: string | null }> {
+    const html = await s.fetchHtml(resolveUrl(this.cfg.baseUrl, SURICATA_ROUTES.TICKETS_LIST_PATH));
+    const areas = parseSuricataAreaOptions(html);
+    const areaNameToId = new Map(areas.map((a) => [a.name, a.externalId]));
+    const loggedInUserId = extractLoggedInUserId(html);
+    return { areas, areaNameToId, loggedInUserId };
+  }
+
   async listAreas(): Promise<SuricataAreaSummary[]> {
     return this.session.withSession({ priority: 'low', timeoutMs: this.cfg.sessionTimeoutMs }, async (s) => {
-      const html = await s.fetchHtml(resolveUrl(this.cfg.baseUrl, AREAS_PATH));
-      return parseSuricataAreaList(html);
+      const { areas } = await this.loadAreasAndSession(s);
+      return areas;
     });
   }
 
   async listTicketPage(page: number): Promise<SuricataTicketPage> {
     return this.session.withSession({ priority: 'low', timeoutMs: this.cfg.sessionTimeoutMs }, async (s) => {
-      const html = await s.fetchHtml(resolveUrl(this.cfg.baseUrl, `${TICKETS_LIST_PATH}?page=${page}`));
-      return parseSuricataTicketListPage(html);
+      // Confirmed live 2026-09-13: `TICKETS_DATA_API_PATH` returns the FULL
+      // active set in one response, no offset/limit exists upstream -- page 1
+      // is the whole answer, any later page is empty.
+      if (page > 1) return { tickets: [], hasNextPage: false };
+
+      const { areaNameToId, loggedInUserId } = await this.loadAreasAndSession(s);
+      const url = resolveUrl(
+        this.cfg.baseUrl,
+        `${SURICATA_ROUTES.TICKETS_DATA_API_PATH}?usuario=${encodeURIComponent(loggedInUserId ?? '')}`,
+      );
+      const json = await s.fetchJson<SuricataTicketsDinamicosResponse>(url);
+      return parseSuricataTicketsDinamicos(json, areaNameToId);
     });
   }
 
   async getTicket(externalId: string): Promise<SuricataTicketDetail> {
     return this.session.withSession({ priority: 'low', timeoutMs: this.cfg.sessionTimeoutMs }, async (s) => {
+      const { areaNameToId } = await this.loadAreasAndSession(s);
       const html = await s.fetchHtml(
-        resolveUrl(this.cfg.baseUrl, `${TICKET_DETAIL_PATH}/${encodeURIComponent(externalId)}`),
+        resolveUrl(this.cfg.baseUrl, `${SURICATA_ROUTES.TICKET_DETAIL_PATH}?tick=${encodeURIComponent(externalId)}`),
       );
-      return parseSuricataTicketDetail(html);
+      return parseSuricataTicketDetail(html, externalId, areaNameToId);
     });
   }
 

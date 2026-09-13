@@ -1,0 +1,26 @@
+<!-- Trimmed real fragment of https://ipnext.suricata.cloud/ticketsdinamicosv2 (captured 2026-09-13, authenticated). The real `<tbody id="tbody-tickets">` is server-rendered EMPTY -- rows come from a separate JS fetch to /api/tickets-dinamicos, not from this HTML. -->
+<html>
+<body>
+  <div class="modal fade" id="modalConfirmar">
+    <select id="valorSelect" class="form-select" style="display:none;"></select>
+  </div>
+
+  <select id="department" class="form-select">
+    <option value="0">Seleccionar</option>
+    <option value="1">Soporte</option>
+    <option value="2">Administración</option>
+    <option value="3">Ventas</option>
+    <option value="4">GR</option>
+  </select>
+
+  <table id="tabladinamica" class="table display nowrap">
+    <thead><tr id="thead-tickets"><th><input type="checkbox" id="checkAll"></th></tr></thead>
+    <tbody id="tbody-tickets"></tbody>
+  </table>
+
+  <script>
+    let dataTable = null;
+    let usuariologeado = '207';
+  </script>
+</body>
+</html>

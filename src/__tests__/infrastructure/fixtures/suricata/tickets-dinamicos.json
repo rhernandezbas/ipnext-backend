@@ -1,0 +1,28 @@
+{
+  "tickets": [
+    {
+      "id": 18879,
+      "nya": "JINSHENG ZHUANG",
+      "asignado": "matias martinez",
+      "siennadepto": { "texto": "Ventas", "color": "bg-success" },
+      "siennatopic": { "texto": "Venta Adicional", "color": null },
+      "prioridad": { "texto": "Normal", "color": " text-bg-secondary" },
+      "cel": "5492324555375",
+      "fn": "2026-09-11 10:35:26",
+      "siennaestado": { "texto": "Progreso", "color": null },
+      "fechadeconv": "2026-09-11 13:56:37"
+    },
+    {
+      "id": 18918,
+      "nya": "ENLEIF DIEGO FERNANDO",
+      "asignado": "Sin asignar",
+      "siennadepto": { "texto": "Soporte", "color": "bg-warning" },
+      "siennatopic": { "texto": "Sin Servicio", "color": null },
+      "prioridad": { "texto": "Normal", "color": " text-bg-secondary" },
+      "cel": "5491169739923",
+      "fn": "2026-09-12 20:38:52",
+      "siennaestado": { "texto": "Progreso", "color": null },
+      "fechadeconv": "2026-09-13 01:13:22"
+    }
+  ]
+}

@@ -33,15 +33,16 @@ function makeFakeLocator(overrides: Partial<FakeLocator> = {}): FakeLocator {
   };
 }
 
-function makeFakePage(opts: { loginFormCount?: number } = {}) {
+function makeFakePage(opts: { notAuthenticatedMarkerCount?: number; gotoStatus?: number | null } = {}) {
   const locator = jest.fn((selector: string) => {
-    if (selector === SURICATA_AUTH_SELECTORS.loginForm) {
-      return makeFakeLocator({ count: jest.fn().mockResolvedValue(opts.loginFormCount ?? 0) });
+    if (selector === SURICATA_AUTH_SELECTORS.notAuthenticatedMarker) {
+      return makeFakeLocator({ count: jest.fn().mockResolvedValue(opts.notAuthenticatedMarkerCount ?? 0) });
     }
     return makeFakeLocator();
   });
+  const status = opts.gotoStatus === undefined ? 200 : opts.gotoStatus;
   return {
-    goto: jest.fn().mockResolvedValue(undefined),
+    goto: jest.fn().mockResolvedValue(status === null ? null : { status: () => status }),
     content: jest.fn().mockResolvedValue('<html>ok</html>'),
     locator,
     close: jest.fn().mockResolvedValue(undefined),
@@ -49,12 +50,17 @@ function makeFakePage(opts: { loginFormCount?: number } = {}) {
   };
 }
 
-function makeFakeResponse(headers: Record<string, string> = { 'content-type': 'image/png' }, status = 200) {
+function makeFakeResponse(
+  headers: Record<string, string> = { 'content-type': 'image/png' },
+  status = 200,
+  json: unknown = undefined,
+) {
   return {
     body: jest.fn().mockResolvedValue(Buffer.from('IMG')),
     headers: jest.fn().mockReturnValue(headers),
     status: jest.fn().mockReturnValue(status),
     dispose: jest.fn().mockResolvedValue(undefined),
+    json: jest.fn().mockResolvedValue(json),
   };
 }
 
@@ -91,8 +97,8 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
     jest.clearAllMocks();
   });
 
-  it('isAuthenticated navigates the cheap authenticated probe and reports true when no login form is present', async () => {
-    const page = makeFakePage({ loginFormCount: 0 });
+  it('isAuthenticated navigates the cheap authenticated probe and reports true when the login field is NOT present', async () => {
+    const page = makeFakePage({ notAuthenticatedMarkerCount: 0 });
     const context = makeFakeContext(page);
     const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
@@ -109,8 +115,8 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
     expect(page.close).toHaveBeenCalled();
   });
 
-  it('isAuthenticated reports false when the login form marker IS present', async () => {
-    const page = makeFakePage({ loginFormCount: 1 });
+  it('isAuthenticated reports false when the login field marker IS present', async () => {
+    const page = makeFakePage({ notAuthenticatedMarkerCount: 1 });
     const context = makeFakeContext(page);
     const browser = makeFakeBrowser(context);
     (chromium.connect as jest.Mock).mockResolvedValue(browser);
@@ -178,6 +184,46 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       waitUntil: 'domcontentloaded',
     });
     expect(html).toBe('<html>ok</html>');
+  });
+
+  it('fetchHtml rejects a non-2xx response instead of silently returning the error page as "content"', async () => {
+    const page = makeFakePage({ gotoStatus: 500 });
+    const context = makeFakeContext(page);
+    const browser = makeFakeBrowser(context);
+    (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+    const session = new PlaywrightBrowserSession(cfg);
+
+    await expect(session.fetchHtml('https://suricata.example.com/tickets')).rejects.toThrow('status 500');
+    expect(page.content).not.toHaveBeenCalled();
+  });
+
+  it('fetchJson does an authenticated GET (no page rendering) and returns the parsed body', async () => {
+    const page = makeFakePage();
+    const response = makeFakeResponse({ 'content-type': 'application/json' }, 200, { tickets: [] });
+    const context = makeFakeContext(page, response);
+    const browser = makeFakeBrowser(context);
+    (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+    const session = new PlaywrightBrowserSession(cfg);
+    const result = await session.fetchJson('https://suricata.example.com/api/tickets-dinamicos?usuario=207');
+
+    expect(context.request.get).toHaveBeenCalledWith('https://suricata.example.com/api/tickets-dinamicos?usuario=207');
+    expect(result).toEqual({ tickets: [] });
+  });
+
+  it('fetchJson rejects a non-2xx response', async () => {
+    const page = makeFakePage();
+    const response = makeFakeResponse({}, 401, null);
+    const context = makeFakeContext(page, response);
+    const browser = makeFakeBrowser(context);
+    (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+    const session = new PlaywrightBrowserSession(cfg);
+
+    await expect(session.fetchJson('https://suricata.example.com/api/tickets-dinamicos?usuario=207')).rejects.toThrow(
+      'status 401',
+    );
   });
 
   it('fetchBinary uses context.request.get (inherits the session cookie, works against a remote browser) and returns the body + content-type', async () => {

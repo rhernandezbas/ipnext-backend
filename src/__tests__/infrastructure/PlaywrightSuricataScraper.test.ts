@@ -13,11 +13,21 @@ import { SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
  * run. HTML parsing itself is covered by `suricata-selectors.test.ts`; this
  * suite only asserts the adapter wires session+URLs+parsing correctly.
  */
+const LIST_PAGE_HTML = `
+  <select id="department">
+    <option value="0">Seleccionar</option>
+    <option value="1">Soporte</option>
+    <option value="2">Ventas</option>
+  </select>
+  <script>let usuariologeado = '207';</script>
+`;
+
 function makeFakeBrowserSession(overrides: Partial<SuricataBrowserSession> = {}): SuricataBrowserSession {
   return {
     isAuthenticated: jest.fn().mockResolvedValue(true),
     login: jest.fn().mockResolvedValue(undefined),
-    fetchHtml: jest.fn().mockResolvedValue('<html></html>'),
+    fetchHtml: jest.fn().mockResolvedValue(LIST_PAGE_HTML),
+    fetchJson: jest.fn().mockResolvedValue({ tickets: [] }),
     fetchBinary: jest.fn().mockResolvedValue({ buffer: Buffer.from('x'), mimeType: 'image/png' }),
     ...overrides,
   };
@@ -26,41 +36,86 @@ function makeFakeBrowserSession(overrides: Partial<SuricataBrowserSession> = {})
 describe('PlaywrightSuricataScraper', () => {
   const cfg = { baseUrl: 'https://suricata.example.com', sessionTimeoutMs: 5000 };
 
-  it('listAreas fetches the areas path through the shared session and parses it', async () => {
-    const browserSession = makeFakeBrowserSession({
-      fetchHtml: jest
-        .fn()
-        .mockResolvedValue(
-          '<ul><li class="area-row" data-area-id="a-1">Soporte</li></ul>',
-        ),
-    });
+  it('listAreas fetches the tickets list page through the shared session and parses its department select', async () => {
+    const browserSession = makeFakeBrowserSession();
     const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
     const scraper = new PlaywrightSuricataScraper(session, cfg);
 
     const areas = await scraper.listAreas();
 
-    expect(areas).toEqual([{ externalId: 'a-1', name: 'Soporte' }]);
-    expect(browserSession.fetchHtml).toHaveBeenCalledWith('https://suricata.example.com/areas');
+    expect(areas).toEqual([
+      { externalId: '1', name: 'Soporte' },
+      { externalId: '2', name: 'Ventas' },
+    ]);
+    expect(browserSession.fetchHtml).toHaveBeenCalledWith('https://suricata.example.com/ticketsdinamicosv2');
   });
 
-  it('listTicketPage requests the given page number', async () => {
+  it('listTicketPage(1) reads the logged-in user id off the list page and calls the JSON API with it', async () => {
+    const browserSession = makeFakeBrowserSession({
+      fetchJson: jest.fn().mockResolvedValue({
+        tickets: [
+          {
+            id: 18918,
+            siennadepto: { texto: 'Soporte' },
+            siennatopic: { texto: 'Sin Servicio' },
+            prioridad: { texto: 'Normal' },
+            siennaestado: { texto: 'Progreso' },
+            fechadeconv: '2026-09-13 01:13:22',
+          },
+        ],
+      }),
+    });
+    const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
+    const scraper = new PlaywrightSuricataScraper(session, cfg);
+
+    const result = await scraper.listTicketPage(1);
+
+    expect(browserSession.fetchJson).toHaveBeenCalledWith(
+      'https://suricata.example.com/api/tickets-dinamicos?usuario=207',
+    );
+    expect(result).toEqual({
+      hasNextPage: false,
+      tickets: [
+        {
+          externalId: '18918',
+          subject: 'Sin Servicio',
+          status: 'Progreso',
+          priority: 'Normal',
+          areaExternalId: '1',
+          lastMessageAt: '2026-09-13 01:13:22',
+          messageCount: 0,
+        },
+      ],
+    });
+  });
+
+  it('listTicketPage(2) never calls the JSON API again -- page 1 already returned everything', async () => {
     const browserSession = makeFakeBrowserSession();
     const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
     const scraper = new PlaywrightSuricataScraper(session, cfg);
 
-    await scraper.listTicketPage(3);
+    const result = await scraper.listTicketPage(2);
 
-    expect(browserSession.fetchHtml).toHaveBeenCalledWith('https://suricata.example.com/tickets?page=3');
+    expect(result).toEqual({ tickets: [], hasNextPage: false });
+    expect(browserSession.fetchJson).not.toHaveBeenCalled();
   });
 
-  it('getTicket requests the detail page for that externalId', async () => {
-    const browserSession = makeFakeBrowserSession();
+  it('getTicket requests the detail page (?tick=) for that externalId', async () => {
+    const browserSession = makeFakeBrowserSession({
+      fetchHtml: jest
+        .fn()
+        .mockImplementation((url: string) =>
+          Promise.resolve(url.includes('ticketunico') ? '<div id="ticketStatusName">Progreso</div>' : LIST_PAGE_HTML),
+        ),
+    });
     const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
     const scraper = new PlaywrightSuricataScraper(session, cfg);
 
-    await scraper.getTicket('1001');
+    const detail = await scraper.getTicket('1001');
 
-    expect(browserSession.fetchHtml).toHaveBeenCalledWith('https://suricata.example.com/tickets/1001');
+    expect(browserSession.fetchHtml).toHaveBeenCalledWith('https://suricata.example.com/ticketunico?tick=1001');
+    expect(detail.externalId).toBe('1001');
+    expect(detail.status).toBe('Progreso');
   });
 
   it('fetchAttachment resolves a relative ref against baseUrl and returns the fetched bytes', async () => {

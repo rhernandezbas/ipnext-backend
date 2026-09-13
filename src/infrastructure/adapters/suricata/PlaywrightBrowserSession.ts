@@ -115,8 +115,8 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
       await page.goto(resolveUrl(this.cfg.baseUrl, SURICATA_AUTH_PATHS.authenticatedProbe), {
         waitUntil: 'domcontentloaded',
       });
-      const loginFormCount = await page.locator(SURICATA_AUTH_SELECTORS.loginForm).count();
-      return loginFormCount === 0;
+      const notAuthenticatedCount = await page.locator(SURICATA_AUTH_SELECTORS.notAuthenticatedMarker).count();
+      return notAuthenticatedCount === 0;
     } finally {
       await page.close();
     }
@@ -158,11 +158,34 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
     const context = await this.ensureContext();
     const page = await context.newPage();
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
+      // `page.goto` never rejects on a non-2xx response (e.g. a 404/500 error
+      // page) -- without this check a broken route silently "succeeds" with
+      // the error page's HTML, which then parses as zero rows.
+      const status = response?.status();
+      if (status !== undefined && (status < 200 || status >= 300)) {
+        throw new Error(`Suricata request to ${url} failed with status ${status}`);
+      }
       return await page.content();
     } finally {
       await page.close();
     }
+  }
+
+  /**
+   * Plain authenticated JSON fetch, no browser rendering -- used for
+   * `TICKETS_DATA_API_PATH`, which is a real JSON API (not HTML to scrape).
+   * Reuses `context.request` exactly like `fetchBinary` (same cookie jar,
+   * works against the remote sidecar).
+   */
+  async fetchJson<T>(url: string): Promise<T> {
+    const context = await this.ensureContext();
+    const response = await context.request.get(url);
+    const status = response.status();
+    if (status < 200 || status >= 300) {
+      throw new Error(`Suricata request to ${url} failed with status ${status}`);
+    }
+    return (await response.json()) as T;
   }
 
   async fetchBinary(url: string): Promise<{ buffer: Buffer; mimeType: string }> {
