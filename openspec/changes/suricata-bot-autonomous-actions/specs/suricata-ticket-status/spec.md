@@ -12,11 +12,11 @@ A zero-checkpoint external action that changes a ticket's status on BOTH sides: 
 
 ### Requirement: STATUS-1 — token authentication, dark by default
 
-The route MUST require the same external API key as the other three write routes and MUST gate on its own `suricata-external-status-enabled` flag, independent of reply/close/note. Missing key or disabled flag MUST fail closed before any driver call.
+The route MUST require the same external API key as the other three write routes and MUST gate on its own `suricata-bot-status-enabled` flag, independent of reply/close/note. Missing key or disabled flag MUST fail closed before any driver call.
 
 #### Scenario: flag off blocks status change
 
-- GIVEN `suricata-external-status-enabled` is `false`
+- GIVEN `suricata-bot-status-enabled` is `false`
 - WHEN a validly authenticated status-change request arrives
 - THEN it responds 403 `FEATURE_DISABLED`, no mirror update and no Suricata call occur
 

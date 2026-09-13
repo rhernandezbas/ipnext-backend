@@ -56,7 +56,7 @@ All three routes MUST be reachable only through the existing external API key me
 
 ### Requirement: EXTREAD-5 — independently unaffected by write flags
 
-These read routes MUST NOT be gated by `suricata-external-reply-enabled`, `suricata-external-close-enabled`, `suricata-external-status-enabled`, or `suricata-external-note-enabled` — read access does not depend on any write action being enabled.
+These read routes MUST NOT be gated by `suricata-bot-reply-enabled`, `suricata-bot-close-enabled`, `suricata-bot-status-enabled`, or `suricata-bot-note-enabled` — read access does not depend on any write action being enabled.
 
 #### Scenario: reads work while all write flags are false
 

@@ -12,11 +12,11 @@ A zero-checkpoint external action that posts an INTERNAL note on a Suricata tick
 
 ### Requirement: NOTE-1 — token authentication, dark by default
 
-The route MUST require the same external API key as the other three write routes and MUST gate on its own `suricata-external-note-enabled` flag, independent of reply/close/status. Missing key or disabled flag MUST fail closed before any driver call.
+The route MUST require the same external API key as the other three write routes and MUST gate on its own `suricata-bot-note-enabled` flag, independent of reply/close/status. Missing key or disabled flag MUST fail closed before any driver call.
 
 #### Scenario: flag off blocks note posting
 
-- GIVEN `suricata-external-note-enabled` is `false`
+- GIVEN `suricata-bot-note-enabled` is `false`
 - WHEN a validly authenticated note request arrives
 - THEN it responds 403 `FEATURE_DISABLED`, no Suricata call occurs
 

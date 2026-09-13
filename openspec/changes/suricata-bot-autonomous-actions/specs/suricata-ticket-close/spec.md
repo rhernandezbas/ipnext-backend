@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A zero-checkpoint external action that closes a ticket on BOTH sides: the Prominense mirror's `status` field and real Suricata, via the bulk-actions "Cerrar seleccionados" modal (including its close-reason field). It is token-authenticated, flag-gated, and audited exactly like `suricata-external-reply`.
+A zero-checkpoint external action that closes a ticket in real Suricata via the bulk-actions "Cerrar seleccionados" modal (including its close-reason field). It writes no field on the Prominense mirror — see CLOSE-5's 2026-09-13 correction; the mirror reconciles on its own sync tick. It is token-authenticated, flag-gated, and audited exactly like `suricata-external-reply`.
 
 **Known gap — blocking prerequisite**: the exact DOM selectors for the "Cerrar seleccionados" modal and its close-reason field are UNVERIFIED as of this spec. `selectors.ts` was live-verified 2026-09-13 only for login, ticket list and ticket detail — never for the bulk-actions modal. This spec defines the REQUIRED BEHAVIOR and the port/interface contract; it deliberately does NOT invent selector strings. A live authenticated Playwright verification pass against the real Suricata site is a prerequisite task before this capability can be implemented for real, the same caveat the original ticket-mirror scraper selectors carried before their 2026-09-13 verification.
 
@@ -12,11 +12,11 @@ A zero-checkpoint external action that closes a ticket on BOTH sides: the Promin
 
 ### Requirement: CLOSE-1 — token authentication, dark by default
 
-The route MUST require the same external API key as the reply/verdict routes and MUST gate on its own `suricata-external-close-enabled` flag, independent of the other three action flags. Missing key or disabled flag MUST fail closed before any driver call.
+The route MUST require the same external API key as the reply/verdict routes and MUST gate on its own `suricata-bot-close-enabled` flag, independent of the other three action flags. Missing key or disabled flag MUST fail closed before any driver call.
 
 #### Scenario: flag off blocks close
 
-- GIVEN `suricata-external-close-enabled` is `false`
+- GIVEN `suricata-bot-close-enabled` is `false`
 - WHEN a validly authenticated close request arrives
 - THEN it responds 403 `FEATURE_DISABLED`, no mirror update and no Suricata call occur
 
@@ -51,15 +51,23 @@ A validated, enabled close MUST invoke a new domain port (e.g. `SuricataTicketCl
 - THEN the ticket is closed in real Suricata with that reason
 - AND the session was acquired with `high` priority through the shared `SuricataSession`, never a second browser context
 
-### Requirement: CLOSE-5 — Suricata write first, mirror after
+### Requirement: CLOSE-5 — audit-only locally; close never writes the mirror
 
-The Prominense mirror's `status` field MUST be updated to closed only after the real Suricata close succeeds. If the Suricata-side close fails, the mirror's `status` MUST NOT be changed, so the two sides never diverge in a way that hides a failed close as a success.
+CORRECTED 2026-09-13 (design D5.a, after the live capture pass). This requirement was originally written on the assumption that closing is a status transition and that the mirror's `status` is set to a closed value. That assumption is wrong: Suricata's close is its OWN action, independent of the "Cambiar Estado" catalog, and that catalog contains no closed value at all.
+
+`CloseSuricataTicket` MUST therefore write NO field on the local `SuricataTicket` mirror — not on success and not on failure. The only local write a close produces is its `suricata-bot-action-audit` row (CLOSE-6). The mirror's own close-adjacent fields reconcile on the next read-side sync tick, per the established ordering rule that the mirror write is a latency optimization and never a source of truth (design D5). A failed remote close MUST still surface to the caller as a non-success response, so a failure is never hidden as a success.
+
+#### Scenario: successful close leaves the mirror ticket untouched
+
+- GIVEN a validated, enabled close that succeeds against real Suricata
+- WHEN the use case completes
+- THEN no field of the mirror ticket is modified, and the only local trace of the action is its audit row
 
 #### Scenario: Suricata close fails, mirror stays unchanged
 
 - GIVEN a close attempt where the real Suricata write fails
 - WHEN the use case completes
-- THEN the mirror ticket's `status` is unchanged and the caller receives a non-success response
+- THEN the mirror ticket is unchanged and the caller receives a non-success response
 
 ### Requirement: CLOSE-6 — audited via the unified bot-action audit
 

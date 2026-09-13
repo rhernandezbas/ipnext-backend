@@ -20,17 +20,17 @@ The route MUST be reachable only through the existing external API key mechanism
 
 ### Requirement: EXTREPLY-2 — dark by default, independently switchable
 
-The route MUST check the `suricata-external-reply-enabled` feature flag on every request and MUST fail closed (403, code `FEATURE_DISABLED`) when the flag is missing, unreadable, or `false`. This flag is independent of `suricata-external-close-enabled`, `suricata-external-status-enabled`, and `suricata-external-note-enabled`.
+The route MUST check the `suricata-bot-reply-enabled` feature flag on every request and MUST fail closed (403, code `FEATURE_DISABLED`) when the flag is missing, unreadable, or `false`. This flag is independent of `suricata-bot-close-enabled`, `suricata-bot-status-enabled`, and `suricata-bot-note-enabled`. The `-bot-` infix is load-bearing (design D2): this route MUST NOT read the pre-existing `suricata-reply-enabled` flag, which governs the INTERNAL human-facing reply route only.
 
 #### Scenario: flag off
 
-- GIVEN `suricata-external-reply-enabled` is `false`
+- GIVEN `suricata-bot-reply-enabled` is `false`
 - WHEN a validly authenticated request arrives
 - THEN it responds 403 with `FEATURE_DISABLED`, no driver call and no audit row are produced
 
 #### Scenario: reply flag on, close flag off does not affect reply
 
-- GIVEN `suricata-external-reply-enabled` is `true` and `suricata-external-close-enabled` is `false`
+- GIVEN `suricata-bot-reply-enabled` is `true` and `suricata-bot-close-enabled` is `false`
 - WHEN a reply request arrives
 - THEN it proceeds to validation/execution — the close flag has no bearing on this route
 
@@ -50,16 +50,31 @@ The request body MUST require only a ticket identifier and a non-empty message t
 - WHEN it is validated
 - THEN it responds 400 before any driver call or audit row
 
-### Requirement: EXTREPLY-4 — real delivery via the wired external driver
+### Requirement: EXTREPLY-4 — real delivery via the Botpress HTTP actuator
 
-A validated, enabled reply MUST invoke `PlaywrightSuricataReply` (wired for the external composition only) through `SuricataSession.withSession` with `priority: 'high'`. On success, the exact submitted text MUST appear in the ticket's real Suricata conversation.
+**Corrected 2026-09-13** (live end-to-end verification superseded the original assumption below, kept struck through for the record):
+
+> ~~A validated, enabled reply MUST invoke `PlaywrightSuricataReply` (wired for the external
+> composition only) through `SuricataSession.withSession` with `priority: 'high'`.~~
+
+The real conversation thread renders inside a cross-origin, websocket-driven iframe
+(`conversation.suricata.chat`) that a Playwright `fill`/`type` cannot reliably reach —
+`PlaywrightSuricataReply`/`SuricataReplySession` remain unimplemented for reply and are NOT used. A
+validated, enabled reply MUST instead invoke `BotpressReplyPort.sendReply` (`BotpressReplyAdapter`, a
+plain HTTP client — no `SuricataSession`, no browser, no priority queue slot). It resolves the
+ticket's `conversationId` via the same `metadata-ticket` lookup `botpressMessages.ts` already uses for
+reading, then `POST https://api.botpress.cloud/v1/chat/messages` with the Botpress PAT/`bot_id`
+resolved from `metadata-merchant`. On success, the exact submitted text MUST appear in the ticket's
+real Suricata/WhatsApp conversation — verified live 2026-09-13 against a real test ticket, received on
+a real WhatsApp number.
 
 #### Scenario: successful autonomous reply
 
 - GIVEN a validated, enabled reply request with text "Ya revisamos tu reclamo"
 - WHEN the use case executes successfully
-- THEN that exact text appears in the ticket's conversation in real Suricata
-- AND the call acquired the session with `high` priority, never a second browser context
+- THEN that exact text appears in the ticket's conversation in real Suricata/WhatsApp
+- AND the call went through `BotpressReplyPort` only — no `SuricataSession`, no Playwright browser
+  context, no priority queue slot was acquired
 
 ### Requirement: EXTREPLY-5 — audited via the unified bot-action audit
 
