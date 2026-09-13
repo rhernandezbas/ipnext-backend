@@ -226,25 +226,25 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
 > Sequenced here because it has zero dependencies and de-risks the shared file edits in
 > `composeSuricataExternalModule.ts`/`app.ts` before the four write phases pile onto the same files.
 
-- [ ] C.1 Verify (already done in design D8, re-confirm at apply time) that `ListSuricataTickets`,
+- [x] C.1 Verify (already done in design D8, re-confirm at apply time) that `ListSuricataTickets`,
       `GetSuricataTicketDetail`, `ComputeSuricataKpis` constructors depend on domain ports only — zero
       changes to those three files (EXTREAD-2/3/4).
-- [ ] C.2 Edit `composeSuricataExternalModule.ts`: add `GET /tickets`, `GET /tickets/:externalId`,
+- [x] C.2 Edit `composeSuricataExternalModule.ts`: add `GET /tickets`, `GET /tickets/:externalId`,
       `GET /kpis`, reusing the three use cases above; detail route resolves `ticketRepo.findByExternalId`
       → `execute(ticket.id)` → 404 on a miss (D8 — same two-step the D7.c attachment proxy already
       performs at lines 101-109). None of the three routes checks any of the 4 write flags (EXTREAD-5).
       Extend `ComposeSuricataExternalModuleDeps` with the 3 read use cases + message/attachment/area/
       verdict repos already constructed in `app.ts`'s external block (reuse the SAME Prisma instances
       `app.ts` already builds for the internal panel — no new repo instances).
-- [ ] C.3 TDD EXTREAD-1..5: missing/wrong key ⇒ 401 before any read logic (×3 routes); list/detail/
+- [x] C.3 TDD EXTREAD-1..5: missing/wrong key ⇒ 401 before any read logic (×3 routes); list/detail/
       kpis parity — same filters/pagination/result shape and same computed KPI values as the internal
       routes, called against the SAME seeded InMemory/Prisma state; unknown externalId ⇒ 404 on
       detail; all 3 succeed while all 4 write flags are `false` — new
       `src/__tests__/infrastructure/externalV1.suricata.read.routes.test.ts`.
-- [ ] C.4 Edit `app.ts`'s existing external Suricata mount block (~4084-4101): add the 3 new use-case
+- [x] C.4 Edit `app.ts`'s existing external Suricata mount block (~4084-4101): add the 3 new use-case
       constructions + deps to the `composeSuricataExternalModule({...})` call. No new mount, no new
       middleware — same key, same `machineActorMiddleware`.
-- [ ] C.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] C.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase D — Note capability (lowest risk, first in rollout order) (repo: ipnext-backend)
 

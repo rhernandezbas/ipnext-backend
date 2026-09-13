@@ -4096,6 +4096,14 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       // (`suricata/<sha256>`), MISMA instancia ya construida arriba.
       fileStorage: taskPhotoStorage,
       featureFlags: suricataFeatureFlagRepo,
+      // suricata-bot-autonomous-actions (Phase C, task C.4, design D8) —
+      // REUSE the exact same use-case instances already built for the
+      // INTERNAL panel (`listSuricataTickets`/`getSuricataTicketDetail`/
+      // `computeSuricataKpis`, declared above at the internal mount) — no
+      // new repo instances, zero changes to those use cases (D8).
+      listSuricataTickets,
+      getSuricataTicketDetail,
+      computeSuricataKpis,
     }),
   );
   // [suricata-external-mount-end]

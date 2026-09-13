@@ -1,6 +1,9 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import type { SubmitSuricataVerdict } from '@application/use-cases/suricata/SubmitSuricataVerdict';
+import type { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
+import type { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
+import type { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import type { SuricataTicketRepository } from '@domain/ports/SuricataTicketRepository';
 import type { SuricataAttachmentRepository } from '@domain/ports/SuricataAttachmentRepository';
 import type { FileStorage } from '@domain/ports/FileStorage';
@@ -43,13 +46,32 @@ const SubmitVerdictBodySchema = z.object({
   respuestaSugerida: z.string().min(1).optional(),
 });
 
+// suricata-bot-autonomous-actions (Phase C, spec EXTREAD-2, design D8) — SAME
+// filter/pagination shape as `composeSuricataModule.ts`'s internal
+// `ListQuerySchema` (kept as a separate literal, not an import, because the
+// internal module doesn't export it — molde `SubmitVerdictBodySchema`'s own
+// local duplication in this same file).
+const ExternalListTicketsQuerySchema = z.object({
+  status: z.string().min(1).optional(),
+  priority: z.string().min(1).optional(),
+  areaId: z.string().min(1).optional(),
+  assigneeId: z.string().min(1).optional(),
+  botState: z.enum(['sin_analizar', 'resuelto_bot', 'requiere_humano', 'stale']).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+
 export interface ComposeSuricataExternalModuleDeps {
   submitSuricataVerdict: SubmitSuricataVerdict;
-  /** Only used by the D7.c attachment route (existence check of the path's `:externalId`). */
+  /** Used by the D7.c attachment route AND the read `/tickets/:externalId` route (both resolve `:externalId` -> local id first). */
   ticketRepo: SuricataTicketRepository;
   attachmentRepo: SuricataAttachmentRepository;
   fileStorage: FileStorage;
   featureFlags: FeatureFlagRepository;
+  /** suricata-bot-autonomous-actions Phase C (EXTREAD-2..4, design D8) — reused AS-IS, zero changes to these 3 use cases. */
+  listSuricataTickets: ListSuricataTickets;
+  getSuricataTicketDetail: GetSuricataTicketDetail;
+  computeSuricataKpis: ComputeSuricataKpis;
 }
 
 export function composeSuricataExternalModule(deps: ComposeSuricataExternalModuleDeps): Router {
@@ -119,6 +141,49 @@ export function composeSuricataExternalModule(deps: ComposeSuricataExternalModul
       }
     },
   );
+
+  // ─── GET /tickets (EXTREAD-1/2/5, design D0/D8) ─────────────────────────
+  // No flag check at all — read access never depends on any of the 4 bot
+  // write flags (EXTREAD-5), and reuses `ListSuricataTickets` AS-IS (D8: the
+  // use case is domain-ports-only, unaware of how the caller authenticated).
+  router.get('/tickets', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const query = parseOr400(ExternalListTicketsQuerySchema, req.query, res);
+      if (query === null) return;
+      const { page, limit, ...filters } = query;
+      const result = await deps.listSuricataTickets.execute({ filters, page, limit });
+      res.status(200).json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── GET /tickets/:externalId (EXTREAD-1/3/5, design D4.b/D8) ───────────
+  // The external surface addresses tickets by `externalId`; resolve to the
+  // LOCAL id first (same two-step the D7.c attachment route already
+  // performs above), 404 on a miss — BEFORE calling the use case.
+  router.get('/tickets/:externalId', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const externalId = req.params['externalId'] as string;
+      const ticket = await deps.ticketRepo.findByExternalId(externalId);
+      if (!ticket) throw new SuricataTicketNotFoundError(externalId);
+
+      const detail = await deps.getSuricataTicketDetail.execute(ticket.id);
+      res.status(200).json(detail);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── GET /kpis (EXTREAD-1/4/5, design D0/D8) ────────────────────────────
+  router.get('/kpis', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const kpis = await deps.computeSuricataKpis.execute();
+      res.status(200).json(kpis);
+    } catch (err) {
+      next(err);
+    }
+  });
 
   // ─── catch-all: SELLA el router (molde external-messaging.routes.ts F3/S2) ──
   router.use((_req: Request, res: Response): void => {

@@ -14,9 +14,14 @@ import { errorHandler } from '@infrastructure/http/middleware/errorHandler';
 import { API_SURICATA_USER_LOGIN } from '@domain/constants/machineUsers';
 import { bootstrapApiSuricataUser } from '@infrastructure/bootstrap/bootstrapApiSuricataUser';
 import { SubmitSuricataVerdict } from '@application/use-cases/suricata/SubmitSuricataVerdict';
+import { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
+import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
+import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
 import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAttachmentRepository';
+import { InMemorySuricataMessageRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataMessageRepository';
+import { InMemorySuricataAreaRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAreaRepository';
 import { InMemoryFileStorage } from '@infrastructure/adapters/in-memory/InMemoryFileStorage';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
@@ -44,12 +49,17 @@ function buildApp(opts: BuildAppOpts = {}) {
   const tickets = new InMemorySuricataTicketRepository();
   const verdicts = new InMemorySuricataVerdictRepository();
   const attachments = new InMemorySuricataAttachmentRepository();
+  const messages = new InMemorySuricataMessageRepository();
+  const areaRepo = new InMemorySuricataAreaRepository();
   const fileStorage = new InMemoryFileStorage();
   const featureFlags = new InMemoryFeatureFlagRepository();
   if (opts.flagEnabled !== false) featureFlags.seed(FLAG_KEY, true);
   const rbacUserRepo = new InMemoryRbacUserRepository();
 
   const submitSuricataVerdict = new SubmitSuricataVerdict(tickets, verdicts);
+  const listSuricataTickets = new ListSuricataTickets(tickets, verdicts, areaRepo, rbacUserRepo);
+  const getSuricataTicketDetail = new GetSuricataTicketDetail(tickets, messages, attachments, verdicts, areaRepo, rbacUserRepo);
+  const computeSuricataKpis = new ComputeSuricataKpis(tickets, verdicts);
 
   const router = composeSuricataExternalModule({
     submitSuricataVerdict,
@@ -57,6 +67,9 @@ function buildApp(opts: BuildAppOpts = {}) {
     attachmentRepo: attachments,
     fileStorage,
     featureFlags,
+    listSuricataTickets,
+    getSuricataTicketDetail,
+    computeSuricataKpis,
   });
 
   const app = express();
