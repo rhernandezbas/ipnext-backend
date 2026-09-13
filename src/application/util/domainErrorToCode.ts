@@ -7,7 +7,7 @@ import {
   IClassNodeNotAssignableError,
 } from '@domain/errors/iclass';
 import { MissingTemplateVariablesError, TemplateInUseByCampaignError, ManualRecipientsNotFoundError, BulkRecipientsNotPermittedError } from '@domain/errors/messaging-bulk';
-import { InvalidSuricataVerdictError, SuricataReplySendFailedError } from '@domain/errors/suricata';
+import { InvalidSuricataVerdictError, SuricataReplySendFailedError, SuricataBotActionFailedError } from '@domain/errors/suricata';
 
 /** Shape of a domain error mapped to a transport-agnostic result. */
 export interface DomainErrorCode {
@@ -48,6 +48,13 @@ export interface DomainErrorCode {
    * this attempt, so the operator can look up exactly what was attempted.
    */
   replyAuditId?: string;
+  /**
+   * suricata-bot-autonomous-actions (Phase D, design D3.c) — surfaced from
+   * `SuricataBotActionFailedError`: the id of the unified
+   * `SuricataBotActionAudit` row for this attempt (reply/close/status/note),
+   * generalized twin of `replyAuditId` above.
+   */
+  auditId?: string;
 }
 
 /**
@@ -100,6 +107,12 @@ export function domainErrorToCode(err: unknown): DomainErrorCode | null {
   // look up exactly what was attempted, design D10.
   if (err instanceof SuricataReplySendFailedError) {
     result.replyAuditId = err.replyAuditId;
+  }
+  // suricata-bot-autonomous-actions (Phase D, design D3.c) — same reasoning
+  // as `SuricataReplySendFailedError` above, generalized to the 4 autonomous
+  // write actions (reply/close/status/note) via the unified audit table.
+  if (err instanceof SuricataBotActionFailedError) {
+    result.auditId = err.auditId;
   }
   return result;
 }

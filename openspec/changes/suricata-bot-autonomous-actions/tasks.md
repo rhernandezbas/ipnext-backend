@@ -250,30 +250,30 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
 
 > BLOCKED on Phase B (B.5 selectors) per the non-negotiable sequencing constraint.
 
-- [ ] D.1 Implement `PlaywrightSuricataInternalNote` (implements `SuricataInternalNotePort`, D3.b
+- [x] D.1 Implement `PlaywrightSuricataInternalNote` (implements `SuricataInternalNotePort`, D3.b
       molde: narrow `SuricataAuthSession`-extending session interface, `sessionTimeoutMs` config,
       single `this.session.withSession({ priority: 'high', timeoutMs }, ...)` call) using
       `actionSelectors.ts`'s B.5 capture. Handle B.6's auto-sync behavior per NOTE-7. Implement a
       test double (`FakeSuricataInternalNote` or an in-memory spy) alongside it.
-- [ ] D.2 TDD `AddSuricataInternalNote` use case (design D4/D5): audit row written BEFORE the port
+- [x] D.2 TDD `AddSuricataInternalNote` use case (design D4/D5): audit row written BEFORE the port
       call with `outcome:'failed'`; success ⇒ `markOutcome('applied')` outside the send try; port
       throws ⇒ row stays `'failed'` with `.error`, wrapped in `SuricataBotActionFailedError` carrying
       `auditId`; unknown `externalId` ⇒ `SuricataTicketNotFoundError` 404 BEFORE any audit row exists
       (NOTE-3); empty/missing text ⇒ rejected before any side effect (NOTE-2); a note action never
       touches status/priority/area/assignment/conversation (NOTE-5, asserted via spy — no other repo
       method called) — `src/__tests__/application/suricata.AddSuricataInternalNote.test.ts`.
-- [ ] D.3 TDD external note route (NOTE-1..7 route-level): flag `suricata-bot-note-enabled` OFF ⇒ 403
+- [x] D.3 TDD external note route (NOTE-1..7 route-level): flag `suricata-bot-note-enabled` OFF ⇒ 403
       `FEATURE_DISABLED` before any driver call; missing/wrong key ⇒ 401; empty text ⇒ 400; unknown
       ticket ⇒ 404; success ⇒ 2xx with `auditId` — new
       `src/__tests__/infrastructure/externalV1.suricata.note.routes.test.ts`, molde
       `externalV1.suricata.routes.test.ts`'s flag/key/validation test shape.
-- [ ] D.4 Edit `composeSuricataExternalModule.ts`: add `POST /tickets/:externalId/notes` (own flag
+- [x] D.4 Edit `composeSuricataExternalModule.ts`: add `POST /tickets/:externalId/notes` (own flag
       check inline, `parseOr400` for the body, `AddSuricataInternalNote` from deps). Edit
       `bootstrapSuricataActionPorts.ts` to construct the real `PlaywrightSuricataInternalNote` when
       envs are set, registered via `suricataActionPortsRegistry.ts`. Edit `app.ts`'s external block to
       wire the use case + its port + `suricataInternalFeatureFlagRepo`-style flag repo (reuse the
       existing `PrismaFeatureFlagRepository` instance already constructed for the verdict flag).
-- [ ] D.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] D.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase E — Status capability (repo: ipnext-backend)
 

@@ -444,6 +444,11 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     if (mapped?.replyAuditId !== undefined) {
       body['replyAuditId'] = mapped.replyAuditId;
     }
+    // suricata-bot-autonomous-actions (Phase D, design D3.c) — same reasoning
+    // as `replyAuditId` above, generalized to the 4 autonomous write actions.
+    if (mapped?.auditId !== undefined) {
+      body['auditId'] = mapped.auditId;
+    }
     // Cazado en vivo (2026-08-03, "Dispositivos conectados" falló en el
     // teléfono del cliente con los logs de prod MUDOS): este branch respondía
     // el status y retornaba sin loguear JAMÁS — el console.error de abajo solo

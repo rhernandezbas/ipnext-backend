@@ -816,6 +816,11 @@ import { PrismaSuricataTicketRepository } from '@infrastructure/adapters/prisma/
 import { PrismaSuricataAttachmentRepository } from '@infrastructure/adapters/prisma/PrismaSuricataAttachmentRepository';
 import { PrismaSuricataVerdictRepository } from '@infrastructure/adapters/prisma/PrismaSuricataVerdictRepository';
 import { SubmitSuricataVerdict } from '@application/use-cases/suricata/SubmitSuricataVerdict';
+// ── suricata-bot-autonomous-actions (Fase D, D3/D4/D7) — audit repo + use case + ports del endpoint externo (notas) ─
+import { PrismaSuricataBotActionAuditRepository } from '@infrastructure/adapters/prisma/PrismaSuricataBotActionAuditRepository';
+import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
+import { bootstrapSuricataActionPorts } from '@infrastructure/adapters/suricata/bootstrapSuricataActionPorts';
+import { UnavailableSuricataInternalNotePort } from '@infrastructure/adapters/suricata/UnavailableSuricataInternalNotePort';
 // ── suricata-tickets-mirror (Fase E, D3/D10) — repo + use case + guarded port del reply interno ─
 import { PrismaSuricataReplyAuditRepository } from '@infrastructure/adapters/prisma/PrismaSuricataReplyAuditRepository';
 import { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
@@ -4085,6 +4090,18 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const suricataAttachmentRepo = new PrismaSuricataAttachmentRepository();
   const suricataVerdictRepo = new PrismaSuricataVerdictRepository();
   const suricataFeatureFlagRepo = new PrismaFeatureFlagRepository();
+  // suricata-bot-autonomous-actions (Phase D, task D.4, design D3/D7) — the
+  // unified bot-action audit repo + the 4 write ports (`reply`/`close`/
+  // `status` stay null until Phases E/F/G land their own drivers/adapter;
+  // `note` is REAL when the sidecar envs are set, `UnavailableSuricataInternalNotePort`
+  // otherwise, molde `UnavailableSuricataReplyPort`'s conservative-guard pattern).
+  const suricataBotActionAuditRepo = new PrismaSuricataBotActionAuditRepository();
+  const suricataBotActionPorts = bootstrapSuricataActionPorts();
+  const addSuricataInternalNote = new AddSuricataInternalNote(
+    suricataTicketRepo,
+    suricataBotActionAuditRepo,
+    suricataBotActionPorts.note ?? new UnavailableSuricataInternalNotePort(),
+  );
   app.use('/api/external/v1/suricata',
     createApiKeyMiddleware(config.suricata.externalApiKey),
     machineActorMiddleware(rbacUserRepo, API_SURICATA_USER_LOGIN),
@@ -4104,6 +4121,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       listSuricataTickets,
       getSuricataTicketDetail,
       computeSuricataKpis,
+      addSuricataInternalNote,
     }),
   );
   // [suricata-external-mount-end]

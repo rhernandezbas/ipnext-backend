@@ -4,6 +4,7 @@ import type { SubmitSuricataVerdict } from '@application/use-cases/suricata/Subm
 import type { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricataTickets';
 import type { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
 import type { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
+import type { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import type { SuricataTicketRepository } from '@domain/ports/SuricataTicketRepository';
 import type { SuricataAttachmentRepository } from '@domain/ports/SuricataAttachmentRepository';
 import type { FileStorage } from '@domain/ports/FileStorage';
@@ -26,6 +27,10 @@ import { SuricataAttachmentNotFoundError, SuricataTicketNotFoundError } from '@d
  * en `errorHandler` → 500 en vez de 400.
  */
 const FEATURE_FLAG_KEY = 'suricata-verdict-enabled';
+// suricata-bot-autonomous-actions (Phase D, task D.4, design D2) — the
+// `-bot-` infix is load-bearing (D2): flipping this flag never moves
+// `suricata-verdict-enabled` or the internal panel's `suricata-reply-enabled`.
+const NOTE_FEATURE_FLAG_KEY = 'suricata-bot-note-enabled';
 
 function parseOr400<T>(schema: z.ZodType<T>, payload: unknown, res: Response): T | null {
   const parsed = schema.safeParse(payload);
@@ -61,6 +66,16 @@ const ExternalListTicketsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
+// suricata-bot-autonomous-actions (Phase D, task D.3, spec NOTE-2) — shape
+// validation only (non-empty text). No conditional business rule here, unlike
+// `SubmitVerdictBodySchema` — NOTE-2 is a plain required-nonempty check, so
+// zod alone covers the route-level 400; the use case ALSO re-validates
+// (design molde `SubmitSuricataVerdict`'s own in-use-case validation), since
+// `AddSuricataInternalNote` must be safe to call directly, not only via this route.
+const AddNoteBodySchema = z.object({
+  text: z.string().min(1),
+});
+
 export interface ComposeSuricataExternalModuleDeps {
   submitSuricataVerdict: SubmitSuricataVerdict;
   /** Used by the D7.c attachment route AND the read `/tickets/:externalId` route (both resolve `:externalId` -> local id first). */
@@ -72,15 +87,23 @@ export interface ComposeSuricataExternalModuleDeps {
   listSuricataTickets: ListSuricataTickets;
   getSuricataTicketDetail: GetSuricataTicketDetail;
   computeSuricataKpis: ComputeSuricataKpis;
+  /** suricata-bot-autonomous-actions Phase D (NOTE-1..7, design D4) — gated by its OWN `suricata-bot-note-enabled` flag, checked inline below. */
+  addSuricataInternalNote: AddSuricataInternalNote;
 }
 
 export function composeSuricataExternalModule(deps: ComposeSuricataExternalModuleDeps): Router {
   const router = Router();
 
-  /** Fail-safe a OFF, mismo criterio que el kill-switch de external-bulk-messaging. */
-  async function isFeatureEnabled(): Promise<boolean> {
+  /**
+   * Fail-safe a OFF, mismo criterio que el kill-switch de
+   * external-bulk-messaging. Generalized to accept a `key` (Phase D, task
+   * D.4) — each of the four autonomous-write flags is checked independently
+   * (design D2: flipping one MUST NOT affect another), this helper is just
+   * shared plumbing, not shared state.
+   */
+  async function isFeatureEnabled(key: string): Promise<boolean> {
     try {
-      return (await deps.featureFlags.get(FEATURE_FLAG_KEY))?.enabled === true;
+      return (await deps.featureFlags.get(key))?.enabled === true;
     } catch {
       return false;
     }
@@ -89,7 +112,7 @@ export function composeSuricataExternalModule(deps: ComposeSuricataExternalModul
   // ─── POST /tickets/:externalId/verdict (VERDICT-1..5) ──────────────────────
   router.post('/tickets/:externalId/verdict', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (!(await isFeatureEnabled())) {
+      if (!(await isFeatureEnabled(FEATURE_FLAG_KEY))) {
         res.status(403).json({ error: 'Suricata verdict submission is disabled', code: 'FEATURE_DISABLED' });
         return;
       }
@@ -113,7 +136,7 @@ export function composeSuricataExternalModule(deps: ComposeSuricataExternalModul
     '/tickets/:externalId/attachments/:attachmentId/content',
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
-        if (!(await isFeatureEnabled())) {
+        if (!(await isFeatureEnabled(FEATURE_FLAG_KEY))) {
           res.status(403).json({ error: 'Suricata verdict submission is disabled', code: 'FEATURE_DISABLED' });
           return;
         }
@@ -180,6 +203,29 @@ export function composeSuricataExternalModule(deps: ComposeSuricataExternalModul
     try {
       const kpis = await deps.computeSuricataKpis.execute();
       res.status(200).json(kpis);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── POST /tickets/:externalId/notes (NOTE-1..7, design D4) ────────────
+  // OWN flag (`suricata-bot-note-enabled`), independent of the verdict flag
+  // AND of the other 3 autonomous-write flags (design D2) — no RBAC gate,
+  // same dedicated-key-only pattern as the verdict route (D0).
+  router.post('/tickets/:externalId/notes', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!(await isFeatureEnabled(NOTE_FEATURE_FLAG_KEY))) {
+        res.status(403).json({ error: 'Suricata internal-note capability is disabled', code: 'FEATURE_DISABLED' });
+        return;
+      }
+      const body = parseOr400(AddNoteBodySchema, req.body, res);
+      if (body === null) return;
+
+      const result = await deps.addSuricataInternalNote.execute({
+        ticketExternalId: req.params['externalId'] as string,
+        note: body.text,
+      });
+      res.status(201).json(result);
     } catch (err) {
       next(err);
     }

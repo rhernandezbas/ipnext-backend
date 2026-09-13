@@ -33,6 +33,7 @@ import { ListSuricataTickets } from '@application/use-cases/suricata/ListSuricat
 import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
 import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
+import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataMessageRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataMessageRepository';
@@ -40,6 +41,7 @@ import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/i
 import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
 import { InMemorySuricataAreaRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAreaRepository';
 import { InMemorySuricataReplyAuditRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataReplyAuditRepository';
+import { InMemorySuricataBotActionAuditRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataBotActionAuditRepository';
 import { InMemoryFileStorage } from '@infrastructure/adapters/in-memory/InMemoryFileStorage';
 import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 import { InMemoryRbacUserRepository } from '@infrastructure/adapters/in-memory/InMemoryRbacUserRepository';
@@ -161,6 +163,10 @@ async function buildApps() {
   const submitSuricataVerdict = new SubmitSuricataVerdict(tickets, verdicts);
   const replyToSuricataTicket = new ReplyToSuricataTicket(tickets, replyAudits, new FakeSuricataReply());
   const setSuricataAssignee = new SetSuricataAssignee(tickets, userRepo);
+  // suricata-bot-autonomous-actions (Phase D) — this suite exercises the 3
+  // READ routes only; a no-op fake port is enough for the required dep.
+  const botActionAudits = new InMemorySuricataBotActionAuditRepository();
+  const addSuricataInternalNote = new AddSuricataInternalNote(tickets, botActionAudits, { addNote: async () => {} });
 
   const internalApp = express();
   internalApp.use(cookieParser());
@@ -201,6 +207,7 @@ async function buildApps() {
       listSuricataTickets,
       getSuricataTicketDetail,
       computeSuricataKpis,
+      addSuricataInternalNote,
     }),
   );
   externalApp.use(errorHandler);

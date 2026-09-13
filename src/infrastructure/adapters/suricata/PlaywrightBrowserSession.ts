@@ -32,9 +32,11 @@
  * recovers on the next tick instead of requiring a BE restart.
  */
 import { chromium, type Browser, type BrowserContext } from 'playwright-core';
-import { SuricataAttachmentTooLargeError, SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
+import { SuricataAttachmentTooLargeError, SuricataAttachmentInvalidOriginError, SuricataActionNotAppliedError } from '@domain/errors/suricata';
 import type { SuricataBrowserSession } from './PlaywrightSuricataScraper';
+import type { SuricataInternalNoteSession } from './PlaywrightSuricataInternalNote';
 import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from './selectors';
+import { SURICATA_TICKET_DETAIL_PATH, SURICATA_INTERNAL_NOTE_SELECTORS } from './actionSelectors';
 
 export interface PlaywrightBrowserSessionConfig {
   /** ws:// endpoint of the Playwright `run-server` sidecar (D5). */
@@ -54,7 +56,7 @@ function resolveUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
 }
 
-export class PlaywrightBrowserSession implements SuricataBrowserSession {
+export class PlaywrightBrowserSession implements SuricataBrowserSession, SuricataInternalNoteSession {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private connecting: Promise<BrowserContext> | null = null;
@@ -244,5 +246,55 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
     const buffer = await response.body();
     const mimeType = headers['content-type'] ?? 'application/octet-stream';
     return { buffer, mimeType };
+  }
+
+  /**
+   * suricata-bot-autonomous-actions (Phase D, task D.1, design D3.b, spec
+   * NOTE-4/NOTE-7) — navigates to the ticket's OWN detail page (addressed
+   * directly by `externalId`, B.5), re-confirms `ticketIdHiddenField` matches
+   * `externalId` BEFORE ever touching the textarea (NOTE-7 — fails closed on
+   * a stale/wrong page rather than posting on the wrong ticket), fills the
+   * comment via `fill` (never `page.evaluate` with interpolation, Threat
+   * Matrix), clicks the submit button, and detects success via the textarea
+   * going back to empty — `#btnCreateNote` has no inline `onclick` to inspect
+   * (B.5), so the textarea's own value is the one cheap, stable post-condition
+   * marker available.
+   */
+  async postNote(externalId: string, text: string): Promise<void> {
+    const context = await this.ensureContext();
+    const page = await context.newPage();
+    try {
+      const url = new URL(SURICATA_TICKET_DETAIL_PATH, this.cfg.baseUrl);
+      url.searchParams.set('tick', externalId);
+      await page.goto(url.toString(), { waitUntil: 'domcontentloaded' });
+
+      // NOTE-7 — re-confirm the loaded page is really this ticket's detail
+      // page before submitting anything.
+      const loadedTicketId = await page.locator(SURICATA_INTERNAL_NOTE_SELECTORS.ticketIdHiddenField).inputValue();
+      if (loadedTicketId !== externalId) {
+        throw new SuricataActionNotAppliedError(
+          `Suricata internal-note detail page loaded ticket id "${loadedTicketId}", expected "${externalId}"`,
+        );
+      }
+
+      const textarea = page.locator(SURICATA_INTERNAL_NOTE_SELECTORS.commentTextarea);
+      await textarea.fill(text);
+      await page.locator(SURICATA_INTERNAL_NOTE_SELECTORS.submitButton).click();
+
+      try {
+        await page.waitForFunction(
+          (selector: string) => {
+            const el = document.querySelector(selector) as HTMLTextAreaElement | null;
+            return el !== null && el.value === '';
+          },
+          SURICATA_INTERNAL_NOTE_SELECTORS.commentTextarea,
+          { timeout: 5_000 },
+        );
+      } catch {
+        throw new SuricataActionNotAppliedError();
+      }
+    } finally {
+      await page.close();
+    }
   }
 }
