@@ -312,11 +312,11 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
 > own bulk-modal path (`#motivoCierreSelect`/`#descripcionCierre`, B.3) and does not touch
 > `SuricataTicket.status`.
 
-- [ ] F.1 Implement `PlaywrightSuricataClose` (implements `SuricataTicketClosePort`, same D3.b molde)
+- [x] F.1 Implement `PlaywrightSuricataClose` (implements `SuricataTicketClosePort`, same D3.b molde)
       using B.3's captured bulk-modal control (Detener → select the one row via `data-ticket-id` →
       click "Cerrar seleccionados" → fill `#motivoCierreSelect`/`#descripcionCierre` → click
       `button[onclick="confirmarAccion()"]` → Iniciar). Test double alongside it.
-- [ ] F.2 TDD `CloseSuricataTicket` use case (design D4/D5, corrected D5.a): audit row before port
+- [x] F.2 TDD `CloseSuricataTicket` use case (design D4/D5, corrected D5.a): audit row before port
       call with the close reason as payload; ordering spy — audit → `port.close(reason)`, a port
       failure leaves the audit row `'failed'`; **no local `ticketRepo` write on success** — there is
       no closed-status value to set locally (design D5.a's correction), the mirror's own `status`/
@@ -324,15 +324,15 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
       latency optimization" philosophy; missing/empty reason ⇒ 400 before any side effect (CLOSE-2);
       unknown `externalId` ⇒ 404 before any audit row (CLOSE-3) —
       `src/__tests__/application/suricata.CloseSuricataTicket.test.ts`.
-- [ ] F.3 TDD external close route: flag `suricata-bot-close-enabled` OFF ⇒ 403 before driver call,
+- [x] F.3 TDD external close route: flag `suricata-bot-close-enabled` OFF ⇒ 403 before driver call,
       independent of the other 3 flags (CLOSE-1); missing/wrong key ⇒ 401; missing reason ⇒ 400;
       unknown ticket ⇒ 404; success ⇒ 2xx with `auditId` (no mirror `status` assertion — close does
       not write one, see F.2) — new
       `src/__tests__/infrastructure/externalV1.suricata.close.routes.test.ts`.
-- [ ] F.4 Edit `composeSuricataExternalModule.ts` (`POST /tickets/:externalId/close`),
+- [x] F.4 Edit `composeSuricataExternalModule.ts` (`POST /tickets/:externalId/close`),
       `bootstrapSuricataActionPorts.ts`, `suricataActionPortsRegistry.ts`, `app.ts`'s external block —
       same pattern as D.4/E.6.
-- [ ] F.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] F.5 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase G — Reply capability (external, zero-checkpoint, last/highest risk) (repo: ipnext-backend)
 

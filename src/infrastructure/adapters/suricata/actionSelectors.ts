@@ -95,4 +95,21 @@ export const SURICATA_BULK_ACTION_SELECTORS = {
    */
   autoSyncStopButton: 'button:has-text("Detener")',
   autoSyncStartButton: 'button:has-text("Iniciar")',
+  /**
+   * suricata-bot-autonomous-actions (Phase F, task F.1, design D6/D5.a,
+   * tasks.md B.3) — close-only fields inside `#bloqueCierre`, visible only
+   * when `closeButton` opened the modal (`changeStatusButton` hides this
+   * block instead, B.4). `<select>` with captured options
+   * `value=""→"-- Sin motivo --"`, `value="1"→"SinMotivo"` — the driver
+   * leaves this at its default (no motivo classification), because the
+   * external caller supplies a single free-text `reason`, which maps to
+   * `closeDescriptionInput` below, not to this fixed two-value catalog.
+   */
+  closeReasonSelect: '#motivoCierreSelect',
+  /**
+   * `<input type="text" maxlength="255">`, free text, optional (B.3) — the
+   * caller's `reason` string is filled here verbatim via `fill`, never via
+   * `page.evaluate` with interpolation (Threat Matrix).
+   */
+  closeDescriptionInput: '#descripcionCierre',
 } as const;

@@ -18,6 +18,7 @@ import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuri
 import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
+import { CloseSuricataTicket } from '@application/use-cases/suricata/CloseSuricataTicket';
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
 import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAttachmentRepository';
@@ -73,8 +74,9 @@ function buildApp(opts: BuildAppOpts = {}) {
   featureFlags.seed(STATUS_FLAG_KEY, opts.statusFlagEnabled !== false);
   const rbacUserRepo = new InMemoryRbacUserRepository();
   const statusPort = opts.statusPort ?? spyStatusPort(async () => {});
-  // This suite doesn't exercise the note route — a no-op fake port is enough.
+  // This suite doesn't exercise the note/close routes — no-op fake ports are enough.
   const notePort = { addNote: async () => {} };
+  const closePort = { close: async () => {} };
 
   const submitSuricataVerdict = new SubmitSuricataVerdict(tickets, verdicts);
   const listSuricataTickets = new ListSuricataTickets(tickets, verdicts, areaRepo, rbacUserRepo);
@@ -82,6 +84,7 @@ function buildApp(opts: BuildAppOpts = {}) {
   const computeSuricataKpis = new ComputeSuricataKpis(tickets, verdicts);
   const addSuricataInternalNote = new AddSuricataInternalNote(tickets, audits, notePort);
   const changeSuricataTicketStatus = new ChangeSuricataTicketStatus(tickets, audits, statusPort);
+  const closeSuricataTicket = new CloseSuricataTicket(tickets, audits, closePort);
 
   const router = composeSuricataExternalModule({
     submitSuricataVerdict,
@@ -94,6 +97,7 @@ function buildApp(opts: BuildAppOpts = {}) {
     computeSuricataKpis,
     addSuricataInternalNote,
     changeSuricataTicketStatus,
+    closeSuricataTicket,
   });
 
   const app = express();

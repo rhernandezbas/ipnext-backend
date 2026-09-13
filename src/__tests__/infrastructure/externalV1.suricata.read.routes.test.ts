@@ -35,6 +35,7 @@ import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuri
 import { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
 import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
+import { CloseSuricataTicket } from '@application/use-cases/suricata/CloseSuricataTicket';
 
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataMessageRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataMessageRepository';
@@ -164,11 +165,12 @@ async function buildApps() {
   const submitSuricataVerdict = new SubmitSuricataVerdict(tickets, verdicts);
   const replyToSuricataTicket = new ReplyToSuricataTicket(tickets, replyAudits, new FakeSuricataReply());
   const setSuricataAssignee = new SetSuricataAssignee(tickets, userRepo);
-  // suricata-bot-autonomous-actions (Phase D/E) — this suite exercises the 3
-  // READ routes only; no-op fake ports are enough for the required deps.
+  // suricata-bot-autonomous-actions (Phase D/E/F) — this suite exercises the
+  // 3 READ routes only; no-op fake ports are enough for the required deps.
   const botActionAudits = new InMemorySuricataBotActionAuditRepository();
   const addSuricataInternalNote = new AddSuricataInternalNote(tickets, botActionAudits, { addNote: async () => {} });
   const changeSuricataTicketStatus = new ChangeSuricataTicketStatus(tickets, botActionAudits, { changeStatus: async () => {} });
+  const closeSuricataTicket = new CloseSuricataTicket(tickets, botActionAudits, { close: async () => {} });
 
   const internalApp = express();
   internalApp.use(cookieParser());
@@ -211,6 +213,7 @@ async function buildApps() {
       computeSuricataKpis,
       addSuricataInternalNote,
       changeSuricataTicketStatus,
+      closeSuricataTicket,
     }),
   );
   externalApp.use(errorHandler);

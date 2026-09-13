@@ -19,6 +19,7 @@ import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuri
 import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
+import { CloseSuricataTicket } from '@application/use-cases/suricata/CloseSuricataTicket';
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataVerdictRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataVerdictRepository';
 import { InMemorySuricataAttachmentRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataAttachmentRepository';
@@ -63,12 +64,13 @@ function buildApp(opts: BuildAppOpts = {}) {
   const listSuricataTickets = new ListSuricataTickets(tickets, verdicts, areaRepo, rbacUserRepo);
   const getSuricataTicketDetail = new GetSuricataTicketDetail(tickets, messages, attachments, verdicts, areaRepo, rbacUserRepo);
   const computeSuricataKpis = new ComputeSuricataKpis(tickets, verdicts);
-  // suricata-bot-autonomous-actions (Phase D/E) — this suite doesn't exercise
-  // the note/status routes, no-op fake ports are enough (molde other
-  // fixture-only deps here).
+  // suricata-bot-autonomous-actions (Phase D/E/F) — this suite doesn't
+  // exercise the note/status/close routes, no-op fake ports are enough
+  // (molde other fixture-only deps here).
   const botActionAudits = new InMemorySuricataBotActionAuditRepository();
   const addSuricataInternalNote = new AddSuricataInternalNote(tickets, botActionAudits, { addNote: async () => {} });
   const changeSuricataTicketStatus = new ChangeSuricataTicketStatus(tickets, botActionAudits, { changeStatus: async () => {} });
+  const closeSuricataTicket = new CloseSuricataTicket(tickets, botActionAudits, { close: async () => {} });
 
   const router = composeSuricataExternalModule({
     submitSuricataVerdict,
@@ -81,6 +83,7 @@ function buildApp(opts: BuildAppOpts = {}) {
     computeSuricataKpis,
     addSuricataInternalNote,
     changeSuricataTicketStatus,
+    closeSuricataTicket,
   });
 
   const app = express();

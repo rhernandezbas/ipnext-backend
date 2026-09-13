@@ -820,9 +820,11 @@ import { SubmitSuricataVerdict } from '@application/use-cases/suricata/SubmitSur
 import { PrismaSuricataBotActionAuditRepository } from '@infrastructure/adapters/prisma/PrismaSuricataBotActionAuditRepository';
 import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
 import { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
+import { CloseSuricataTicket } from '@application/use-cases/suricata/CloseSuricataTicket';
 import { bootstrapSuricataActionPorts } from '@infrastructure/adapters/suricata/bootstrapSuricataActionPorts';
 import { UnavailableSuricataInternalNotePort } from '@infrastructure/adapters/suricata/UnavailableSuricataInternalNotePort';
 import { UnavailableSuricataTicketStatusPort } from '@infrastructure/adapters/suricata/UnavailableSuricataTicketStatusPort';
+import { UnavailableSuricataTicketClosePort } from '@infrastructure/adapters/suricata/UnavailableSuricataTicketClosePort';
 // ── suricata-tickets-mirror (Fase E, D3/D10) — repo + use case + guarded port del reply interno ─
 import { PrismaSuricataReplyAuditRepository } from '@infrastructure/adapters/prisma/PrismaSuricataReplyAuditRepository';
 import { ReplyToSuricataTicket } from '@application/use-cases/suricata/ReplyToSuricataTicket';
@@ -4092,12 +4094,12 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const suricataAttachmentRepo = new PrismaSuricataAttachmentRepository();
   const suricataVerdictRepo = new PrismaSuricataVerdictRepository();
   const suricataFeatureFlagRepo = new PrismaFeatureFlagRepository();
-  // suricata-bot-autonomous-actions (Phase D task D.4 / Phase E task E.6,
-  // design D3/D7) — the unified bot-action audit repo + the 4 write ports
-  // (`reply` is wired separately as a plain HTTP adapter, Phase G; `close`
-  // stays null until Phase F lands its own driver; `note`/`status` are REAL
-  // when the sidecar envs are set, `Unavailable*Port` fallbacks otherwise,
-  // molde `UnavailableSuricataReplyPort`'s conservative-guard pattern).
+  // suricata-bot-autonomous-actions (Phase D task D.4 / Phase E task E.6 /
+  // Phase F task F.4, design D3/D7) — the unified bot-action audit repo +
+  // the 4 write ports (`reply` is wired separately as a plain HTTP adapter,
+  // Phase G; `note`/`status`/`close` are REAL when the sidecar envs are
+  // set, `Unavailable*Port` fallbacks otherwise, molde
+  // `UnavailableSuricataReplyPort`'s conservative-guard pattern).
   const suricataBotActionAuditRepo = new PrismaSuricataBotActionAuditRepository();
   const suricataBotActionPorts = bootstrapSuricataActionPorts();
   const addSuricataInternalNote = new AddSuricataInternalNote(
@@ -4109,6 +4111,11 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     suricataTicketRepo,
     suricataBotActionAuditRepo,
     suricataBotActionPorts.status ?? new UnavailableSuricataTicketStatusPort(),
+  );
+  const closeSuricataTicket = new CloseSuricataTicket(
+    suricataTicketRepo,
+    suricataBotActionAuditRepo,
+    suricataBotActionPorts.close ?? new UnavailableSuricataTicketClosePort(),
   );
   app.use('/api/external/v1/suricata',
     createApiKeyMiddleware(config.suricata.externalApiKey),
@@ -4131,6 +4138,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       computeSuricataKpis,
       addSuricataInternalNote,
       changeSuricataTicketStatus,
+      closeSuricataTicket,
     }),
   );
   // [suricata-external-mount-end]

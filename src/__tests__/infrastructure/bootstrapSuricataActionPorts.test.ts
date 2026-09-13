@@ -1,11 +1,11 @@
 /**
- * suricata-bot-autonomous-actions (Phase D task D.4, Phase E task E.6) —
- * Phase A left `bootstrapSuricataActionPorts` returning all four ports `null`
- * UNCONDITIONALLY (no driver existed yet). Phase D completed the `note`
- * branch; this phase (E) completes `status` the same way: both sidecar envs
- * set ⇒ a real `PlaywrightSuricataStatus` is constructed and registered.
- * `reply` stays `null` (a plain HTTP adapter wired directly in `app.ts`);
- * `close` stays `null` until Phase F's own driver task lands.
+ * suricata-bot-autonomous-actions (Phase D task D.4, Phase E task E.6, Phase
+ * F task F.4) — Phase A left `bootstrapSuricataActionPorts` returning all
+ * four ports `null` UNCONDITIONALLY (no driver existed yet). Phase D
+ * completed the `note` branch, Phase E completed `status`, and this phase
+ * (F) completes `close` the same way: both sidecar envs set ⇒ a real
+ * `PlaywrightSuricataClose` is constructed and registered. `reply` stays
+ * permanently `null` here (a plain HTTP adapter wired directly in `app.ts`).
  *
  * Molde `bootstrapSuricataSync.test.ts`: boots the REAL object graph via
  * `jest.resetModules()` + fresh dynamic imports so `toBeInstanceOf` compares
@@ -18,7 +18,7 @@ jest.mock('playwright-core', () => ({
   chromium: { connect: jest.fn() },
 }));
 
-describe('bootstrapSuricataActionPorts (Phase D — real note driver)', () => {
+describe('bootstrapSuricataActionPorts (Phase D/E/F — real note/status/close drivers)', () => {
   const ORIGINAL_ENV = { ...process.env };
 
   afterEach(() => {
@@ -41,8 +41,9 @@ describe('bootstrapSuricataActionPorts (Phase D — real note driver)', () => {
     const registry = await import('@infrastructure/adapters/suricata/suricataActionPortsRegistry');
     const { PlaywrightSuricataInternalNote } = await import('@infrastructure/adapters/suricata/PlaywrightSuricataInternalNote');
     const { PlaywrightSuricataStatus } = await import('@infrastructure/adapters/suricata/PlaywrightSuricataStatus');
+    const { PlaywrightSuricataClose } = await import('@infrastructure/adapters/suricata/PlaywrightSuricataClose');
     const ports = mod.bootstrapSuricataActionPorts();
-    return { ports, registry, PlaywrightSuricataInternalNote, PlaywrightSuricataStatus };
+    return { ports, registry, PlaywrightSuricataInternalNote, PlaywrightSuricataStatus, PlaywrightSuricataClose };
   }
 
   it('returns all four ports null when SURICATA_BASE_URL is unset', async () => {
@@ -61,9 +62,9 @@ describe('bootstrapSuricataActionPorts (Phase D — real note driver)', () => {
     expect(ports).toEqual({ reply: null, close: null, status: null, note: null });
   });
 
-  it('constructs REAL PlaywrightSuricataInternalNote AND PlaywrightSuricataStatus when both envs are set — reply/close stay null, no network call during construction', async () => {
+  it('constructs REAL PlaywrightSuricataInternalNote, PlaywrightSuricataStatus AND PlaywrightSuricataClose when both envs are set — reply stays null, no network call during construction', async () => {
     const { chromium } = await import('playwright-core');
-    const { ports, PlaywrightSuricataInternalNote, PlaywrightSuricataStatus } = await bootstrapWith({
+    const { ports, PlaywrightSuricataInternalNote, PlaywrightSuricataStatus, PlaywrightSuricataClose } = await bootstrapWith({
       ...REQUIRED_ENV,
       SURICATA_BASE_URL: 'https://suricata.example.com',
       SURICATA_BROWSER_WS: 'ws://playwright:3000/',
@@ -73,12 +74,12 @@ describe('bootstrapSuricataActionPorts (Phase D — real note driver)', () => {
 
     expect(ports.note).toBeInstanceOf(PlaywrightSuricataInternalNote);
     expect(ports.status).toBeInstanceOf(PlaywrightSuricataStatus);
+    expect(ports.close).toBeInstanceOf(PlaywrightSuricataClose);
     expect(ports.reply).toBeNull();
-    expect(ports.close).toBeNull();
     expect((chromium.connect as jest.Mock)).not.toHaveBeenCalled();
   });
 
-  it('registers the SAME note and status instances in suricataActionPortsRegistry.ts', async () => {
+  it('registers the SAME note, status and close instances in suricataActionPortsRegistry.ts', async () => {
     const { ports, registry } = await bootstrapWith({
       ...REQUIRED_ENV,
       SURICATA_BASE_URL: 'https://suricata.example.com',
@@ -89,5 +90,6 @@ describe('bootstrapSuricataActionPorts (Phase D — real note driver)', () => {
 
     expect(registry.getSuricataBotNotePort()).toBe(ports.note);
     expect(registry.getSuricataBotStatusPort()).toBe(ports.status);
+    expect(registry.getSuricataBotClosePort()).toBe(ports.close);
   });
 });

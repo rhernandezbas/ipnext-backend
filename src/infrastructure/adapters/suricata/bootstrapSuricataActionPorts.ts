@@ -18,12 +18,12 @@
  * `SuricataSession`/browser dependency at all (B.7/D3.b's corrected finding),
  * so it is constructed directly in `app.ts`, never through this file.
  *
- * Phase E — `status` is now REAL too: `PlaywrightSuricataStatus`, same
- * `high`-priority/`replyQueueTimeoutMs` shape as `note`. `close` stays `null`
- * until Phase F lands its own driver (blocked on its own close-specific
- * selectors, `#motivoCierreSelect`/`#descripcionCierre` — B.3's capture is
- * already recorded in tasks.md, but Phase F's implementation task hasn't run
- * yet in THIS batch).
+ * Phase E — `status` is REAL too: `PlaywrightSuricataStatus`, same
+ * `high`-priority/`replyQueueTimeoutMs` shape as `note`.
+ *
+ * Phase F — `close` is now REAL as well: `PlaywrightSuricataClose`, same
+ * shape again. `reply` remains the only permanently-`null` slot here (plain
+ * HTTP adapter, no `SuricataSession` dependency, wired directly in `app.ts`).
  *
  * Molde `bootstrapSuricataSync.ts` — this function calls the registry's
  * setters itself (`suricataActionPortsRegistry.ts`) so any future non-app
@@ -34,6 +34,7 @@ import { config } from '../../config';
 import { getSharedSuricataSession } from './sharedSuricataSession';
 import { PlaywrightSuricataInternalNote } from './PlaywrightSuricataInternalNote';
 import { PlaywrightSuricataStatus } from './PlaywrightSuricataStatus';
+import { PlaywrightSuricataClose } from './PlaywrightSuricataClose';
 import {
   setSuricataBotReplyPort,
   setSuricataBotClosePort,
@@ -66,12 +67,14 @@ export function bootstrapSuricataActionPorts(): SuricataBotActionPorts {
     return empty;
   }
 
-  // Phase D/E — the real note and status drivers. close stays null until
-  // Phase F lands its own driver (see this file's header comment).
+  // Phase D/E/F — the real note, status and close drivers (see this file's
+  // header comment). `reply` stays permanently null here (plain HTTP
+  // adapter, wired directly in `app.ts`).
   const note = new PlaywrightSuricataInternalNote(session, { sessionTimeoutMs: replyQueueTimeoutMs });
   const status = new PlaywrightSuricataStatus(session, { sessionTimeoutMs: replyQueueTimeoutMs });
+  const close = new PlaywrightSuricataClose(session, { sessionTimeoutMs: replyQueueTimeoutMs });
 
-  const ports: SuricataBotActionPorts = { reply: null, close: null, status, note };
+  const ports: SuricataBotActionPorts = { reply: null, close, status, note };
   setSuricataBotReplyPort(ports.reply);
   setSuricataBotClosePort(ports.close);
   setSuricataBotStatusPort(ports.status);
