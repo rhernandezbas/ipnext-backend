@@ -279,30 +279,30 @@ should confirm this reading and, ideally, the spec files get a follow-up edit to
 
 > BLOCKED on Phase B (B.4 selectors + allowed-status catalog + closed-status literal).
 
-- [ ] E.1 Implement `PlaywrightSuricataStatus` (implements `SuricataTicketStatusPort`, same D3.b
+- [x] E.1 Implement `PlaywrightSuricataStatus` (implements `SuricataTicketStatusPort`, same D3.b
       molde) using `actionSelectors.ts`'s B.4 capture; implements B.6's auto-sync handling per
       STATUS-7. Test double alongside it.
-- [ ] E.2 Create a status-value allowlist validator against B.4's captured catalog (Threat Matrix:
+- [x] E.2 Create a status-value allowlist validator against B.4's captured catalog (Threat Matrix:
       selector injection — a caller-supplied status string MUST be matched against the captured
       allowlist and rejected 400 BEFORE reaching the driver; it is never concatenated into a
       selector/locator string).
-- [ ] E.3 TDD E.2: a status string containing selector syntax (e.g. `"] ; DROP"`-shaped or any
+- [x] E.3 TDD E.2: a status string containing selector syntax (e.g. `"] ; DROP"`-shaped or any
       value outside the captured allowlist) ⇒ 400, driver never invoked (spy assertion) — colocated
       with D5's use-case test or its own `src/__tests__/domain/suricataStatusAllowlist.test.ts`.
-- [ ] E.4 TDD `ChangeSuricataTicketStatus` use case (design D4/D5): audit row before port call;
+- [x] E.4 TDD `ChangeSuricataTicketStatus` use case (design D4/D5): audit row before port call;
       ordering spy — audit → port → `ticketRepo.setStatus`, a port failure ⇒ `setStatus` NEVER called
       (STATUS-5); success ⇒ mirror `status` updated only AFTER the real Suricata call succeeds;
       Suricata failure ⇒ mirror unchanged, non-success response; invalid/empty status ⇒ 400 before
       any side effect (STATUS-2, ties into E.3); unknown `externalId` ⇒ 404 before any audit row
       (STATUS-3) — `src/__tests__/application/suricata.ChangeSuricataTicketStatus.test.ts`.
-- [ ] E.5 TDD external status route: flag `suricata-bot-status-enabled` OFF ⇒ 403 before driver call;
+- [x] E.5 TDD external status route: flag `suricata-bot-status-enabled` OFF ⇒ 403 before driver call;
       independent of note/close/reply flags' state (STATUS-1); missing/wrong key ⇒ 401; invalid
       status ⇒ 400; unknown ticket ⇒ 404; success ⇒ 2xx with `auditId` and updated mirror status —
       new `src/__tests__/infrastructure/externalV1.suricata.status.routes.test.ts`.
-- [ ] E.6 Edit `composeSuricataExternalModule.ts` (`POST /tickets/:externalId/status`),
+- [x] E.6 Edit `composeSuricataExternalModule.ts` (`POST /tickets/:externalId/status`),
       `bootstrapSuricataActionPorts.ts`, `suricataActionPortsRegistry.ts` usage, and `app.ts`'s
       external block — same pattern as D.4.
-- [ ] E.7 REFACTOR pass; `npm test` + `tsc --noEmit` green.
+- [x] E.7 REFACTOR pass; `npm test` + `tsc --noEmit` green.
 
 ## Phase F — Close capability (repo: ipnext-backend)
 

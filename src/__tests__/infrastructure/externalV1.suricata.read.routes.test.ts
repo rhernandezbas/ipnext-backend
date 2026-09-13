@@ -34,6 +34,7 @@ import { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuri
 import { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
 import { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
+import { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
 
 import { InMemorySuricataTicketRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataTicketRepository';
 import { InMemorySuricataMessageRepository } from '@infrastructure/adapters/in-memory/InMemorySuricataMessageRepository';
@@ -163,10 +164,11 @@ async function buildApps() {
   const submitSuricataVerdict = new SubmitSuricataVerdict(tickets, verdicts);
   const replyToSuricataTicket = new ReplyToSuricataTicket(tickets, replyAudits, new FakeSuricataReply());
   const setSuricataAssignee = new SetSuricataAssignee(tickets, userRepo);
-  // suricata-bot-autonomous-actions (Phase D) — this suite exercises the 3
-  // READ routes only; a no-op fake port is enough for the required dep.
+  // suricata-bot-autonomous-actions (Phase D/E) — this suite exercises the 3
+  // READ routes only; no-op fake ports are enough for the required deps.
   const botActionAudits = new InMemorySuricataBotActionAuditRepository();
   const addSuricataInternalNote = new AddSuricataInternalNote(tickets, botActionAudits, { addNote: async () => {} });
+  const changeSuricataTicketStatus = new ChangeSuricataTicketStatus(tickets, botActionAudits, { changeStatus: async () => {} });
 
   const internalApp = express();
   internalApp.use(cookieParser());
@@ -208,6 +210,7 @@ async function buildApps() {
       getSuricataTicketDetail,
       computeSuricataKpis,
       addSuricataInternalNote,
+      changeSuricataTicketStatus,
     }),
   );
   externalApp.use(errorHandler);

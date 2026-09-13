@@ -35,8 +35,9 @@ import { chromium, type Browser, type BrowserContext } from 'playwright-core';
 import { SuricataAttachmentTooLargeError, SuricataAttachmentInvalidOriginError, SuricataActionNotAppliedError } from '@domain/errors/suricata';
 import type { SuricataBrowserSession } from './PlaywrightSuricataScraper';
 import type { SuricataInternalNoteSession } from './PlaywrightSuricataInternalNote';
-import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from './selectors';
-import { SURICATA_TICKET_DETAIL_PATH, SURICATA_INTERNAL_NOTE_SELECTORS } from './actionSelectors';
+import type { SuricataStatusSession } from './PlaywrightSuricataStatus';
+import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS, SURICATA_ROUTES } from './selectors';
+import { SURICATA_TICKET_DETAIL_PATH, SURICATA_INTERNAL_NOTE_SELECTORS, SURICATA_BULK_ACTION_SELECTORS } from './actionSelectors';
 
 export interface PlaywrightBrowserSessionConfig {
   /** ws:// endpoint of the Playwright `run-server` sidecar (D5). */
@@ -56,7 +57,7 @@ function resolveUrl(baseUrl: string, path: string): string {
   return new URL(path, baseUrl).toString();
 }
 
-export class PlaywrightBrowserSession implements SuricataBrowserSession, SuricataInternalNoteSession {
+export class PlaywrightBrowserSession implements SuricataBrowserSession, SuricataInternalNoteSession, SuricataStatusSession {
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private connecting: Promise<BrowserContext> | null = null;
@@ -294,6 +295,64 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession, Suricat
         throw new SuricataActionNotAppliedError();
       }
     } finally {
+      await page.close();
+    }
+  }
+
+  /**
+   * suricata-bot-autonomous-actions (Phase E, task E.1, design D3.b, spec
+   * STATUS-4/STATUS-7) — drives Suricata's list-page bulk "Cambiar Estado"
+   * modal for the ONE ticket matching `externalId` (B.2/B.3 — no per-ticket
+   * control exists, the bulk modal is the only path). B.6's auto-sync
+   * toggle is clicked BEFORE selecting the row and AFTER acting (in
+   * `finally`, best-effort) so a mid-flow 60s redraw never silently clears
+   * the selection. `status` is matched by its visible LABEL text in
+   * `#valorSelect` — the SAME literal `ChangeSuricataTicketStatus` already
+   * validated against `SURICATA_STATUS_VALUES`, never re-derived here.
+   */
+  async changeTicketStatus(externalId: string, status: string): Promise<void> {
+    const context = await this.ensureContext();
+    const page = await context.newPage();
+    try {
+      await page.goto(resolveUrl(this.cfg.baseUrl, SURICATA_ROUTES.TICKETS_LIST_PATH), { waitUntil: 'domcontentloaded' });
+
+      // B.6 — stop the 60s auto-redraw BEFORE selecting a row; a mid-flow
+      // redraw silently clears the checkbox otherwise (STATUS-7).
+      await page.locator(SURICATA_BULK_ACTION_SELECTORS.autoSyncStopButton).click();
+
+      const checkbox = page.locator(SURICATA_BULK_ACTION_SELECTORS.rowCheckbox(externalId));
+      await checkbox.waitFor({ state: 'visible', timeout: 5_000 });
+      await checkbox.check();
+
+      // STATUS-7 — re-confirm the checkbox actually stayed checked before
+      // opening the modal: a raced redraw that dropped the row would leave
+      // it unchecked, and confirming on nothing/the wrong ticket is worse
+      // than failing closed here.
+      if (!(await checkbox.isChecked())) {
+        throw new SuricataActionNotAppliedError(
+          `Suricata status-change: row checkbox for ticket "${externalId}" did not stay checked`,
+        );
+      }
+
+      await page.locator(SURICATA_BULK_ACTION_SELECTORS.changeStatusButton).click();
+      const modal = page.locator(SURICATA_BULK_ACTION_SELECTORS.modal);
+      await modal.waitFor({ state: 'visible', timeout: 5_000 });
+
+      await page.locator(SURICATA_BULK_ACTION_SELECTORS.statusSelect).selectOption({ label: status });
+      await page.locator(SURICATA_BULK_ACTION_SELECTORS.confirmButton).click();
+
+      try {
+        await modal.waitFor({ state: 'hidden', timeout: 5_000 });
+      } catch {
+        throw new SuricataActionNotAppliedError();
+      }
+    } finally {
+      // B.6 — restore the auto-sync regardless of outcome; best-effort, a
+      // failure here must never mask the real result of the action above.
+      await page
+        .locator(SURICATA_BULK_ACTION_SELECTORS.autoSyncStartButton)
+        .click()
+        .catch(() => {});
       await page.close();
     }
   }

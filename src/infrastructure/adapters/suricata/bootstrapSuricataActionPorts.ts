@@ -11,15 +11,19 @@
  * even with every flag ON, no port is ever constructed unless the sidecar
  * envs are actually present.
  *
- * Phase D — `note` is now REAL: `PlaywrightSuricataInternalNote` is
- * constructed when the envs ARE set (D3.b, `high` priority, the shared
+ * Phase D — `note` is REAL: `PlaywrightSuricataInternalNote` is constructed
+ * when the envs ARE set (D3.b, `high` priority, the shared
  * `replyQueueTimeoutMs` budget — no dedicated env var, D9/H.4). `reply` stays
  * permanently `null` here: it is a plain Botpress HTTP adapter with no
  * `SuricataSession`/browser dependency at all (B.7/D3.b's corrected finding),
- * so it is constructed directly in `app.ts`, never through this file. `close`/
- * `status` stay `null` until Phases E/F land their own drivers (blocked on
- * their own D6 selector capture — already done per tasks.md B.3/B.4, but
- * their driver implementation tasks haven't run yet in THIS batch).
+ * so it is constructed directly in `app.ts`, never through this file.
+ *
+ * Phase E — `status` is now REAL too: `PlaywrightSuricataStatus`, same
+ * `high`-priority/`replyQueueTimeoutMs` shape as `note`. `close` stays `null`
+ * until Phase F lands its own driver (blocked on its own close-specific
+ * selectors, `#motivoCierreSelect`/`#descripcionCierre` — B.3's capture is
+ * already recorded in tasks.md, but Phase F's implementation task hasn't run
+ * yet in THIS batch).
  *
  * Molde `bootstrapSuricataSync.ts` — this function calls the registry's
  * setters itself (`suricataActionPortsRegistry.ts`) so any future non-app
@@ -29,6 +33,7 @@
 import { config } from '../../config';
 import { getSharedSuricataSession } from './sharedSuricataSession';
 import { PlaywrightSuricataInternalNote } from './PlaywrightSuricataInternalNote';
+import { PlaywrightSuricataStatus } from './PlaywrightSuricataStatus';
 import {
   setSuricataBotReplyPort,
   setSuricataBotClosePort,
@@ -61,11 +66,12 @@ export function bootstrapSuricataActionPorts(): SuricataBotActionPorts {
     return empty;
   }
 
-  // Phase D — the real note driver. close/status stay null until Phases E/F
-  // land their own drivers (see this file's header comment).
+  // Phase D/E — the real note and status drivers. close stays null until
+  // Phase F lands its own driver (see this file's header comment).
   const note = new PlaywrightSuricataInternalNote(session, { sessionTimeoutMs: replyQueueTimeoutMs });
+  const status = new PlaywrightSuricataStatus(session, { sessionTimeoutMs: replyQueueTimeoutMs });
 
-  const ports: SuricataBotActionPorts = { reply: null, close: null, status: null, note };
+  const ports: SuricataBotActionPorts = { reply: null, close: null, status, note };
   setSuricataBotReplyPort(ports.reply);
   setSuricataBotClosePort(ports.close);
   setSuricataBotStatusPort(ports.status);

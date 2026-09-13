@@ -55,3 +55,44 @@ export const SURICATA_INTERNAL_NOTE_SELECTORS = {
    */
   submitButton: '#btnCreateNote',
 } as const;
+
+/**
+ * suricata-bot-autonomous-actions (Phase E extension, task E.1, design D6/
+ * D3.b, tasks.md B.3/B.4/B.6) — the shared bulk-selection modal on
+ * `/ticketsdinamicosv2` that both "Cambiar Estado" (status, THIS phase) and
+ * "Cerrar seleccionados" (close, Phase F) open. Close-only fields
+ * (`#motivoCierreSelect`/`#descripcionCierre`) are deliberately NOT added
+ * here yet — Phase F's own implementation task adds them, same incremental-
+ * capture discipline B.8 already established for this file (avoids one
+ * agent creating a half-empty file another then has to merge into).
+ */
+export const SURICATA_BULK_ACTION_SELECTORS = {
+  /**
+   * Each `<tr>` inside `#tabladinamica` carries the ticket's externalId as a
+   * `data-ticket-id` attribute (B.3 — reuses the read-side scraper's own
+   * `#tabladinamica` addressing from `selectors.ts` rather than inventing a
+   * second row-identification scheme). Returns the exact locator string for
+   * ONE row's checkbox — interpolated only into a Playwright `page.locator()`
+   * call, never into a `page.evaluate` body (Threat Matrix).
+   */
+  rowCheckbox: (externalId: string): string => `#tabladinamica tr[data-ticket-id="${externalId}"] input[type="checkbox"]`,
+  /** Opens `#modalConfirmar` with `#bloqueCierre` hidden and `#valorSelect` visible (B.4). */
+  changeStatusButton: 'button:has-text("Cambiar Estado")',
+  /** Opens the SAME `#modalConfirmar` with `#bloqueCierre` visible instead (B.3) — Phase F's own trigger. */
+  closeButton: 'button:has-text("Cerrar seleccionados")',
+  /** Shared confirmation modal for BOTH actions, differentiated by `#mensajeAccion`'s text (B.3). */
+  modal: '#modalConfirmar',
+  /** `<select size="8">` — the captured status catalog lives in `suricataStatus.ts` (B.4), matched by visible LABEL text. */
+  statusSelect: '#valorSelect',
+  /** Optional type-to-filter input above `statusSelect` (B.4) — not required, selecting by value/label directly works too. */
+  statusFilterInput: '#filtroValor',
+  confirmButton: 'button[onclick="confirmarAccion()"]',
+  cancelButton: 'button[data-bs-dismiss="modal"]',
+  /**
+   * B.6 — freezes/unfreezes the list's 60s auto-redraw so a mid-flow row
+   * selection survives. Every close/status driver MUST click `autoSyncStopButton`
+   * BEFORE selecting a row and `autoSyncStartButton` AFTER acting (STATUS-7).
+   */
+  autoSyncStopButton: 'button:has-text("Detener")',
+  autoSyncStartButton: 'button:has-text("Iniciar")',
+} as const;

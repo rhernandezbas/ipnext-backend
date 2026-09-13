@@ -5,6 +5,7 @@ import type { ListSuricataTickets } from '@application/use-cases/suricata/ListSu
 import type { GetSuricataTicketDetail } from '@application/use-cases/suricata/GetSuricataTicketDetail';
 import type { ComputeSuricataKpis } from '@application/use-cases/suricata/ComputeSuricataKpis';
 import type { AddSuricataInternalNote } from '@application/use-cases/suricata/AddSuricataInternalNote';
+import type { ChangeSuricataTicketStatus } from '@application/use-cases/suricata/ChangeSuricataTicketStatus';
 import type { SuricataTicketRepository } from '@domain/ports/SuricataTicketRepository';
 import type { SuricataAttachmentRepository } from '@domain/ports/SuricataAttachmentRepository';
 import type { FileStorage } from '@domain/ports/FileStorage';
@@ -31,6 +32,9 @@ const FEATURE_FLAG_KEY = 'suricata-verdict-enabled';
 // `-bot-` infix is load-bearing (D2): flipping this flag never moves
 // `suricata-verdict-enabled` or the internal panel's `suricata-reply-enabled`.
 const NOTE_FEATURE_FLAG_KEY = 'suricata-bot-note-enabled';
+// suricata-bot-autonomous-actions (Phase E, task E.6, design D2) — same
+// `-bot-` infix, independent of the note/close/reply flags (design D2).
+const STATUS_FEATURE_FLAG_KEY = 'suricata-bot-status-enabled';
 
 function parseOr400<T>(schema: z.ZodType<T>, payload: unknown, res: Response): T | null {
   const parsed = schema.safeParse(payload);
@@ -76,6 +80,15 @@ const AddNoteBodySchema = z.object({
   text: z.string().min(1),
 });
 
+// suricata-bot-autonomous-actions (Phase E, task E.6, spec STATUS-2) — shape
+// validation only (non-empty string). The CONDITIONAL business rule (the
+// value must be one of the D6-captured allowlist, Threat Matrix "Selector
+// injection") lives in `ChangeSuricataTicketStatus`/`isSuricataStatusValue`,
+// NOT here — same split as `SubmitVerdictBodySchema`/`AddNoteBodySchema`.
+const ChangeStatusBodySchema = z.object({
+  status: z.string().min(1),
+});
+
 export interface ComposeSuricataExternalModuleDeps {
   submitSuricataVerdict: SubmitSuricataVerdict;
   /** Used by the D7.c attachment route AND the read `/tickets/:externalId` route (both resolve `:externalId` -> local id first). */
@@ -89,6 +102,8 @@ export interface ComposeSuricataExternalModuleDeps {
   computeSuricataKpis: ComputeSuricataKpis;
   /** suricata-bot-autonomous-actions Phase D (NOTE-1..7, design D4) — gated by its OWN `suricata-bot-note-enabled` flag, checked inline below. */
   addSuricataInternalNote: AddSuricataInternalNote;
+  /** suricata-bot-autonomous-actions Phase E (STATUS-1..7, design D4) — gated by its OWN `suricata-bot-status-enabled` flag, checked inline below. */
+  changeSuricataTicketStatus: ChangeSuricataTicketStatus;
 }
 
 export function composeSuricataExternalModule(deps: ComposeSuricataExternalModuleDeps): Router {
@@ -224,6 +239,29 @@ export function composeSuricataExternalModule(deps: ComposeSuricataExternalModul
       const result = await deps.addSuricataInternalNote.execute({
         ticketExternalId: req.params['externalId'] as string,
         note: body.text,
+      });
+      res.status(201).json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── POST /tickets/:externalId/status (STATUS-1..7, design D4) ─────────
+  // OWN flag (`suricata-bot-status-enabled`), independent of note/close/reply
+  // (design D2) — no RBAC gate, same dedicated-key-only pattern as the other
+  // three autonomous-write routes (D0).
+  router.post('/tickets/:externalId/status', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      if (!(await isFeatureEnabled(STATUS_FEATURE_FLAG_KEY))) {
+        res.status(403).json({ error: 'Suricata status-change capability is disabled', code: 'FEATURE_DISABLED' });
+        return;
+      }
+      const body = parseOr400(ChangeStatusBodySchema, req.body, res);
+      if (body === null) return;
+
+      const result = await deps.changeSuricataTicketStatus.execute({
+        ticketExternalId: req.params['externalId'] as string,
+        status: body.status,
       });
       res.status(201).json(result);
     } catch (err) {
