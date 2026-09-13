@@ -15,12 +15,9 @@
  * never used by the reply path, on purpose, per this apply session's explicit
  * scope boundary.
  *
- * ⚠️ RISK — see `selectors.ts`'s `SURICATA_AUTH_SELECTORS`/`SURICATA_AUTH_PATHS`
- * doc comment: the login-form/authenticated-marker selectors are SYNTHETIC
- * placeholders, never contrasted against the real Suricata Cx login page (no
- * credentials/network access from this apply environment). Do not flip
- * `SURICATA_BROWSER_WS` in prod before the manual smoke test (D14 steps 2-4)
- * confirms these selectors against the real DOM.
+ * Auth/route selectors were RE-VERIFIED live against the real Suricata Cx
+ * DOM on 2026-09-13 (see `selectors.ts`'s top comment) after the original
+ * hand-authored ones turned out to be wrong on every point.
  *
  * Connects LAZILY: the WebSocket connection to the sidecar (and the browser
  * context) only opens on the FIRST call that needs it — never during
@@ -173,14 +170,22 @@ export class PlaywrightBrowserSession implements SuricataBrowserSession {
   }
 
   /**
-   * Plain authenticated JSON fetch, no browser rendering -- used for
-   * `TICKETS_DATA_API_PATH`, which is a real JSON API (not HTML to scrape).
-   * Reuses `context.request` exactly like `fetchBinary` (same cookie jar,
-   * works against the remote sidecar).
+   * Plain JSON fetch, no browser rendering -- used for `TICKETS_DATA_API_PATH`
+   * (Suricata's own JSON API, authenticated via the shared cookie jar) AND
+   * for the Botpress message lookup (`backend.suricata.chat`/
+   * `api.botpress.cloud`, unrelated hosts reached with their OWN
+   * Authorization header, no Suricata cookie needed). Reuses
+   * `context.request` exactly like `fetchBinary` -- the sidecar's outbound
+   * network is not restricted to `baseUrl`.
    */
-  async fetchJson<T>(url: string): Promise<T> {
+  async fetchJson<T>(
+    url: string,
+    opts?: { method?: 'GET' | 'POST'; headers?: Record<string, string>; body?: unknown },
+  ): Promise<T> {
     const context = await this.ensureContext();
-    const response = await context.request.get(url);
+    const requestOpts = { headers: opts?.headers, data: opts?.body };
+    const response =
+      opts?.method === 'POST' ? await context.request.post(url, requestOpts) : await context.request.get(url, requestOpts);
     const status = response.status();
     if (status < 200 || status >= 300) {
       throw new Error(`Suricata request to ${url} failed with status ${status}`);

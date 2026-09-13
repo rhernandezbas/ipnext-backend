@@ -37,9 +37,11 @@ describe('bootstrapSuricataSync (Phase J — real Playwright wiring)', () => {
     jest.resetModules();
     process.env = { ...ORIGINAL_ENV, ...env };
     const mod = await import('@infrastructure/scheduling/bootstrapSuricataSync');
+    const registry = await import('@infrastructure/scheduling/suricataSyncSchedulerRegistry');
     const { SuricataSyncScheduler } = await import('@infrastructure/scheduling/SuricataSyncScheduler');
     const { PlaywrightBrowserSession } = await import('@infrastructure/adapters/suricata/PlaywrightBrowserSession');
-    return { scheduler: await mod.bootstrapSuricataSync(), SuricataSyncScheduler, PlaywrightBrowserSession };
+    const scheduler = await mod.bootstrapSuricataSync();
+    return { scheduler, getScheduler: registry.getSuricataSyncScheduler, SuricataSyncScheduler, PlaywrightBrowserSession };
   }
 
   it('still returns null when SURICATA_BASE_URL is unset (Phase C behavior preserved)', async () => {
@@ -72,5 +74,17 @@ describe('bootstrapSuricataSync (Phase J — real Playwright wiring)', () => {
     // D5 — construction is fully offline; `chromium.connect` only happens
     // lazily inside a scraper call during an actual sync tick.
     expect((chromium.connect as jest.Mock)).not.toHaveBeenCalled();
+  });
+
+  it('getSuricataSyncScheduler() caches the SAME instance bootstrapSuricataSync returned -- the manual "sincronizar ahora" route reuses it, never a second session', async () => {
+    const { scheduler, getScheduler } = await bootstrapWith({
+      ...REQUIRED_ENV,
+      SURICATA_BASE_URL: 'https://suricata.example.com',
+      SURICATA_BROWSER_WS: 'ws://playwright:3000/',
+      SURICATA_USER: 'bot',
+      SURICATA_PASSWORD: 'secret',
+    });
+
+    expect(getScheduler()).toBe(scheduler);
   });
 });

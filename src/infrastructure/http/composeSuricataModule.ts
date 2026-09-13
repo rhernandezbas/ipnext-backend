@@ -14,6 +14,7 @@ import type { ComputeSuricataKpis } from '@application/use-cases/suricata/Comput
 import type { SetSuricataAssignee } from '@application/use-cases/suricata/SetSuricataAssignee';
 import { SuricataAttachmentNotFoundError } from '@domain/errors/suricata';
 import { createAuthMiddleware } from './middleware/authMiddleware';
+import { getSuricataSyncScheduler } from '../scheduling/suricataSyncSchedulerRegistry';
 
 export interface ComposeSuricataModuleDeps {
   authAdapter: AuthProvider;
@@ -165,6 +166,26 @@ export function composeSuricataModule(deps: ComposeSuricataModuleDeps): Router {
     try {
       const areas = await deps.areaRepo.list();
       res.status(200).json(areas.map((a) => ({ id: a.id, name: a.name, active: a.active })));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ─── POST /sync — "sincronizar ahora" manual, fix wave 2026-09-13 ──────
+  // Reusa el MISMO scheduler que `main.ts` arranca (getSuricataSyncScheduler,
+  // molde sharedSuricataSession): nunca construye una sesión Playwright
+  // segunda, y `runOnce()` respeta el mismo gate de flag/lock que el tick
+  // automático (un click con `suricata-sync-enabled` en false devuelve
+  // `skipped`, no un 500).
+  router.post('/sync', auth, requireManage, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const scheduler = getSuricataSyncScheduler();
+      if (!scheduler) {
+        res.status(503).json({ error: 'Suricata sync is not configured', code: 'SURICATA_UNAVAILABLE' });
+        return;
+      }
+      const summary = await scheduler.runOnce();
+      res.status(200).json(summary);
     } catch (err) {
       next(err);
     }

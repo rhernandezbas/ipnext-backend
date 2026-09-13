@@ -35,6 +35,7 @@ import { PrismaFeatureFlagRepository } from '../adapters/prisma/PrismaFeatureFla
 import { MinioFileStorage } from '../adapters/minio/MinioFileStorage';
 import { SyncSuricataTickets } from '@application/use-cases/suricata/SyncSuricataTickets';
 import { SuricataSyncScheduler } from './SuricataSyncScheduler';
+import { setSuricataSyncScheduler } from './suricataSyncSchedulerRegistry';
 
 /** D4 — the sync lane always requests the shared session at 'low' priority, 5s budget (hardcoded, not env-configurable — only the reply lane's timeout is, per D11). */
 const SURICATA_SYNC_SESSION_TIMEOUT_MS = 5_000;
@@ -88,5 +89,7 @@ export async function bootstrapSuricataSync(
   const flags = new PrismaFeatureFlagRepository();
   const lock = new PgAdvisoryLock();
 
-  return new SuricataSyncScheduler(syncUseCase, { intervalMs }, lock, flags);
+  const scheduler = new SuricataSyncScheduler(syncUseCase, { intervalMs }, lock, flags);
+  setSuricataSyncScheduler(scheduler);
+  return scheduler;
 }

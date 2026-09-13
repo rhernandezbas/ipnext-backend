@@ -208,7 +208,10 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
     const session = new PlaywrightBrowserSession(cfg);
     const result = await session.fetchJson('https://suricata.example.com/api/tickets-dinamicos?usuario=207');
 
-    expect(context.request.get).toHaveBeenCalledWith('https://suricata.example.com/api/tickets-dinamicos?usuario=207');
+    expect(context.request.get).toHaveBeenCalledWith(
+      'https://suricata.example.com/api/tickets-dinamicos?usuario=207',
+      { headers: undefined, data: undefined },
+    );
     expect(result).toEqual({ tickets: [] });
   });
 

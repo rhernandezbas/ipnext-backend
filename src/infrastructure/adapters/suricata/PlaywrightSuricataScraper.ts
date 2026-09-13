@@ -34,6 +34,10 @@ import {
   parseSuricataTicketDetail,
   type SuricataTicketsDinamicosResponse,
 } from './selectors';
+import { fetchLastBotpressMessages } from './botpressMessages';
+
+/** Slug del merchant en Suricata/Botpress -- fijo, no es un secreto (ya aparece en cada URL de la plataforma). */
+const SURICATA_MERCHANT = 'ipnext';
 
 /**
  * Narrow structural contract `PlaywrightSuricataScraper` needs on top of
@@ -44,7 +48,10 @@ import {
  */
 export interface SuricataBrowserSession extends SuricataAuthSession {
   fetchHtml(url: string): Promise<string>;
-  fetchJson<T>(url: string): Promise<T>;
+  fetchJson<T>(
+    url: string,
+    opts?: { method?: 'GET' | 'POST'; headers?: Record<string, string>; body?: unknown },
+  ): Promise<T>;
   fetchBinary(url: string): Promise<{ buffer: Buffer; mimeType: string }>;
 }
 
@@ -151,7 +158,11 @@ export class PlaywrightSuricataScraper implements SuricataScraperPort {
       const html = await s.fetchHtml(
         resolveUrl(this.cfg.baseUrl, `${SURICATA_ROUTES.TICKET_DETAIL_PATH}?tick=${encodeURIComponent(externalId)}`),
       );
-      return parseSuricataTicketDetail(html, externalId, areaNameToId);
+      const detail = parseSuricataTicketDetail(html, externalId, areaNameToId);
+      // El hilo real vive en Botpress, no en este HTML (ver botpressMessages.ts)
+      // -- degrada a [] sola, nunca bloquea el mirror de metadata del ticket.
+      const messages = await fetchLastBotpressMessages(s, SURICATA_MERCHANT, externalId);
+      return { ...detail, messages };
     });
   }
 

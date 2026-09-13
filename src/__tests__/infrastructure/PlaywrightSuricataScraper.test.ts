@@ -116,6 +116,40 @@ describe('PlaywrightSuricataScraper', () => {
     expect(browserSession.fetchHtml).toHaveBeenCalledWith('https://suricata.example.com/ticketunico?tick=1001');
     expect(detail.externalId).toBe('1001');
     expect(detail.status).toBe('Progreso');
+    // sin config de Botpress en el fetchJson por defecto -> degrada a []
+    expect(detail.messages).toEqual([]);
+  });
+
+  it('getTicket merges the last Botpress messages into the returned detail', async () => {
+    const browserSession = makeFakeBrowserSession({
+      fetchHtml: jest.fn().mockResolvedValue('<div id="ticketStatusName">Progreso</div>'),
+      fetchJson: jest
+        .fn()
+        .mockImplementation((url: string) => {
+          if (url.includes('metadata-merchant')) {
+            return Promise.resolve({ settingsAll: [{ token_pa: 'bp_pat_x', bot_id: 'bot-1' }] });
+          }
+          if (url.includes('metadata-ticket')) {
+            return Promise.resolve({ conversation_id: 'conv_1' });
+          }
+          if (url.includes('api.botpress.cloud')) {
+            return Promise.resolve({
+              messages: [
+                { id: 'm1', createdAt: '2026-09-13T02:24:00.000Z', direction: 'incoming', payload: { text: 'hola' } },
+              ],
+            });
+          }
+          return Promise.resolve({ tickets: [] });
+        }),
+    });
+    const session = new SuricataSession(browserSession, new InMemoryDistributedLock());
+    const scraper = new PlaywrightSuricataScraper(session, cfg);
+
+    const detail = await scraper.getTicket('1001');
+
+    expect(detail.messages).toEqual([
+      { externalId: 'm1', author: 'Cliente', authorKind: 'customer', body: 'hola', sentAt: '2026-09-13T02:24:00.000Z', attachments: [] },
+    ]);
   });
 
   it('fetchAttachment resolves a relative ref against baseUrl and returns the fetched bytes', async () => {
