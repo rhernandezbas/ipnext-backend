@@ -82,7 +82,7 @@ describe('PlaywrightSuricataScraper', () => {
           status: 'Progreso',
           priority: 'Normal',
           areaExternalId: '1',
-          lastMessageAt: '2026-09-13 01:13:22',
+          lastMessageAt: '2026-09-13T01:13:22-03:00',
           messageCount: 0,
         },
       ],

@@ -80,6 +80,22 @@ export interface SuricataTicketsDinamicosResponse {
 }
 
 /**
+ * Suricata renders every timestamp as `YYYY-MM-DD HH:mm:ss`, Argentina LOCAL
+ * time (UTC-3, no DST) -- confirmed live 2026-09-13 (a ticket's `fechadeconv`
+ * matched the wall-clock time of the action, not UTC). Prisma's `DateTime`
+ * columns need real ISO 8601 with an offset/zone; handing it the raw string
+ * made every single ticket fail with "Invalid `prisma...upsert()` invocation"
+ * (caught, logged, and the run marked `degraded` -- `ticketsSeen` was
+ * correct, `ticketsUpserted` stayed 0 for every ticket).
+ */
+function toIsoArgentina(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/);
+  if (!match) return raw; // already ISO or unrecognized -- pass through rather than mangle
+  return `${match[1]}T${match[2]}-03:00`;
+}
+
+/**
  * `TICKETS_DATA_API_PATH` returns every ticket visible to the logged-in agent
  * in ONE response -- no `page`/`limit` params, confirmed live (21 of 21 in a
  * single call). It is NOT pre-sorted by activity: the UI's apparent order
@@ -108,7 +124,7 @@ export function parseSuricataTicketsDinamicos(
         status: t.siennaestado?.texto ?? '',
         priority: t.prioridad?.texto ?? null,
         areaExternalId: areaName ? (areaNameToId.get(areaName) ?? null) : null,
-        lastMessageAt: t.fechadeconv ?? null,
+        lastMessageAt: toIsoArgentina(t.fechadeconv),
         messageCount: 0,
       };
     });
@@ -176,7 +192,7 @@ export function parseSuricataTicketDetail(
     customerEmail: textAfterLabelDiv($, 'Email:'),
     customerPhone: textAfterLabelDiv($, 'Teléfono:'),
     externalClientRef: textAfterLabelDiv($, 'Número cliente:'),
-    openedAt: textAfterStrongLabel($, 'Creado:'),
+    openedAt: toIsoArgentina(textAfterStrongLabel($, 'Creado:')),
     // No reliable "last message" field found on this page -- the caller
     // falls back to the list summary's `lastMessageAt` (SyncSuricataTickets).
     lastMessageAt: null,

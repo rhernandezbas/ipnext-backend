@@ -57,7 +57,9 @@ describe('parseSuricataTicketsDinamicos', () => {
       status: 'Progreso',
       priority: 'Normal',
       areaExternalId: '1',
-      lastMessageAt: '2026-09-13 01:13:22',
+      // Suricata's raw "YYYY-MM-DD HH:mm:ss" is Argentina local time (UTC-3,
+      // no DST) -- converted to real ISO 8601 for Prisma's DateTime columns.
+      lastMessageAt: '2026-09-13T01:13:22-03:00',
       messageCount: 0,
     });
   });
@@ -92,7 +94,7 @@ describe('parseSuricataTicketDetail', () => {
     expect(detail.customerEmail).toBe('diegoenle@gmail.com');
     expect(detail.customerPhone).toBe('5491169739923');
     expect(detail.externalClientRef).toBe('108399');
-    expect(detail.openedAt).toBe('2026-09-12 20:38:52');
+    expect(detail.openedAt).toBe('2026-09-12T20:38:52-03:00');
     // Not scrapeable from this page -- the caller falls back to the list
     // summary's lastMessageAt (SyncSuricataTickets).
     expect(detail.lastMessageAt).toBeNull();
