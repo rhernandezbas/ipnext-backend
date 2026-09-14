@@ -82,14 +82,19 @@ export const SURICATA_INTERNAL_NOTE_SELECTORS = {
  */
 export const SURICATA_BULK_ACTION_SELECTORS = {
   /**
-   * Each `<tr>` inside `#tabladinamica` carries the ticket's externalId as a
-   * `data-ticket-id` attribute (B.3 — reuses the read-side scraper's own
-   * `#tabladinamica` addressing from `selectors.ts` rather than inventing a
-   * second row-identification scheme). Returns the exact locator string for
-   * ONE row's checkbox — interpolated only into a Playwright `page.locator()`
+   * FIX 2026-09-14 (live rollout smoke test against a real, confirmed-open,
+   * 45-row table — ruled out both the "closed ticket" and "slow render"
+   * theories first) — B.3's original capture was WRONG: the `<tr>` itself
+   * carries NO `data-ticket-id` at all. That attribute lives on the inner
+   * `<a data-ticket-id="...">` link, not the row. The checkbox has its own
+   * distinct identification: `<input type="checkbox" class="checkTicket"
+   * value="{externalId}">` — matched by `value`, not by a data attribute.
+   * Confirmed live via a peer session's DOM read of the real
+   * `/ticketsdinamicosv2` table. Returns the exact locator string for ONE
+   * row's checkbox — interpolated only into a Playwright `page.locator()`
    * call, never into a `page.evaluate` body (Threat Matrix).
    */
-  rowCheckbox: (externalId: string): string => `#tabladinamica tr[data-ticket-id="${externalId}"] input[type="checkbox"]`,
+  rowCheckbox: (externalId: string): string => `#tabladinamica tbody#tbody-tickets input.checkTicket[value="${externalId}"]`,
   /** Opens `#modalConfirmar` with `#bloqueCierre` hidden and `#valorSelect` visible (B.4). */
   changeStatusButton: 'button:has-text("Cambiar Estado")',
   /** Opens the SAME `#modalConfirmar` with `#bloqueCierre` visible instead (B.3) — Phase F's own trigger. */
