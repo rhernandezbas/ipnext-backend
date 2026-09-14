@@ -12,7 +12,8 @@
 import { chromium } from 'playwright-core';
 import { PlaywrightBrowserSession } from '@infrastructure/adapters/suricata/PlaywrightBrowserSession';
 import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from '@infrastructure/adapters/suricata/selectors';
-import { SURICATA_INTERNAL_NOTE_SELECTORS } from '@infrastructure/adapters/suricata/actionSelectors';
+import { SURICATA_INTERNAL_NOTE_SELECTORS, SURICATA_BULK_ACTION_SELECTORS } from '@infrastructure/adapters/suricata/actionSelectors';
+import { SURICATA_ROUTES } from '@infrastructure/adapters/suricata/selectors';
 import { SuricataAttachmentTooLargeError, SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 
 jest.mock('playwright-core', () => ({
@@ -24,6 +25,10 @@ interface FakeLocator {
   fill: jest.Mock;
   click: jest.Mock;
   inputValue: jest.Mock;
+  waitFor: jest.Mock;
+  check: jest.Mock;
+  isChecked: jest.Mock;
+  selectOption: jest.Mock;
 }
 
 function makeFakeLocator(overrides: Partial<FakeLocator> = {}): FakeLocator {
@@ -32,6 +37,10 @@ function makeFakeLocator(overrides: Partial<FakeLocator> = {}): FakeLocator {
     fill: jest.fn().mockResolvedValue(undefined),
     click: jest.fn().mockResolvedValue(undefined),
     inputValue: jest.fn().mockResolvedValue(''),
+    waitFor: jest.fn().mockResolvedValue(undefined),
+    check: jest.fn().mockResolvedValue(undefined),
+    isChecked: jest.fn().mockResolvedValue(true),
+    selectOption: jest.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -50,6 +59,7 @@ function makeFakePage(opts: { notAuthenticatedMarkerCount?: number; gotoStatus?:
     locator,
     close: jest.fn().mockResolvedValue(undefined),
     waitForLoadState: jest.fn().mockResolvedValue(undefined),
+    waitForResponse: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -512,6 +522,63 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
       await session.postNote('1001', 'Escalado a NOC');
 
       expect(callOrder).toEqual(['click:notesTabLink', 'fill:commentTextarea', 'click:submitButton']);
+    });
+  });
+
+  describe('changeTicketStatus', () => {
+    /**
+     * FIX 2026-09-14 — regression test for a real rollout smoke-test failure:
+     * the FIRST live call to the status driver (`suricata-bot-status-enabled`
+     * flipped on) failed twice, against TWO different tickets (one closed,
+     * one freshly-open), with the SAME `locator.waitFor` timeout on the row
+     * checkbox. `selectors.ts` already documents that `/ticketsdinamicosv2`
+     * renders an EMPTY `<tbody>` — rows are injected by client JS AFTER a
+     * fetch to `TICKETS_DATA_API_PATH` resolves. `page.goto(..., {waitUntil:
+     * 'domcontentloaded'})` returns before that fetch even starts, so the
+     * driver was racing the table's own population every single time. This
+     * test asserts the driver waits for that response BEFORE it ever looks
+     * for the row, molde the `postNote` call-order regression above.
+     */
+    function makeStatusLocators() {
+      const autoSyncStop = makeFakeLocator();
+      const autoSyncStart = makeFakeLocator();
+      const checkbox = makeFakeLocator();
+      const modal = makeFakeLocator();
+      const statusSelect = makeFakeLocator();
+      const confirmButton = makeFakeLocator();
+      return { autoSyncStop, autoSyncStart, checkbox, modal, statusSelect, confirmButton };
+    }
+
+    it('waits for the tickets-dinamicos data response BEFORE looking for the row checkbox', async () => {
+      const locators = makeStatusLocators();
+      const callOrder: string[] = [];
+
+      const page = makeFakePage();
+      (page as unknown as { waitForResponse: jest.Mock }).waitForResponse = jest.fn(async () => {
+        callOrder.push('waitForResponse:tickets-dinamicos');
+        return { url: () => `https://suricata.example.com${SURICATA_ROUTES.TICKETS_DATA_API_PATH}` };
+      });
+      locators.checkbox.waitFor.mockImplementation(async () => {
+        callOrder.push('waitFor:checkbox');
+      });
+      page.locator = jest.fn((selector: string) => {
+        if (selector === SURICATA_BULK_ACTION_SELECTORS.autoSyncStopButton) return locators.autoSyncStop;
+        if (selector === SURICATA_BULK_ACTION_SELECTORS.autoSyncStartButton) return locators.autoSyncStart;
+        if (selector === SURICATA_BULK_ACTION_SELECTORS.rowCheckbox('18943')) return locators.checkbox;
+        if (selector === SURICATA_BULK_ACTION_SELECTORS.modal) return locators.modal;
+        if (selector === SURICATA_BULK_ACTION_SELECTORS.statusSelect) return locators.statusSelect;
+        if (selector === SURICATA_BULK_ACTION_SELECTORS.changeStatusButton) return makeFakeLocator();
+        if (selector === SURICATA_BULK_ACTION_SELECTORS.confirmButton) return locators.confirmButton;
+        return makeFakeLocator();
+      });
+      const context = makeFakeContext(page);
+      const browser = makeFakeBrowser(context);
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+      await session.changeTicketStatus('18943', 'Progreso');
+
+      expect(callOrder).toEqual(['waitForResponse:tickets-dinamicos', 'waitFor:checkbox']);
     });
   });
 });

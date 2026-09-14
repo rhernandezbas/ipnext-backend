@@ -323,7 +323,20 @@ export class PlaywrightBrowserSession
     const context = await this.ensureContext();
     const page = await context.newPage();
     try {
-      await page.goto(resolveUrl(this.cfg.baseUrl, SURICATA_ROUTES.TICKETS_LIST_PATH), { waitUntil: 'domcontentloaded' });
+      // FIX 2026-09-14 (real rollout smoke test) — `TICKETS_LIST_PATH` renders
+      // an EMPTY `<tbody>`; rows are injected by client JS only AFTER a fetch
+      // to `TICKETS_DATA_API_PATH` resolves (documented in selectors.ts).
+      // `waitUntil: 'domcontentloaded'` alone returns before that fetch even
+      // starts, so hunting for a specific row right after `goto` races the
+      // table's own population — confirmed live against two different
+      // tickets. The listener MUST be registered before/alongside `goto`
+      // (Promise.all), never after it resolves, or the request may already
+      // be in flight/done and the listener would wait for a request that
+      // never comes again.
+      await Promise.all([
+        page.goto(resolveUrl(this.cfg.baseUrl, SURICATA_ROUTES.TICKETS_LIST_PATH), { waitUntil: 'domcontentloaded' }),
+        page.waitForResponse((resp) => resp.url().includes(SURICATA_ROUTES.TICKETS_DATA_API_PATH), { timeout: 15_000 }),
+      ]);
 
       // B.6 — stop the 60s auto-redraw BEFORE selecting a row; a mid-flow
       // redraw silently clears the checkbox otherwise (STATUS-7).
@@ -385,7 +398,14 @@ export class PlaywrightBrowserSession
     const context = await this.ensureContext();
     const page = await context.newPage();
     try {
-      await page.goto(resolveUrl(this.cfg.baseUrl, SURICATA_ROUTES.TICKETS_LIST_PATH), { waitUntil: 'domcontentloaded' });
+      // FIX 2026-09-14 — same race as `changeTicketStatus` above: the row
+      // does not exist until the client JS's fetch to `TICKETS_DATA_API_PATH`
+      // resolves and renders it, so the listener must be armed alongside
+      // `goto`, not after.
+      await Promise.all([
+        page.goto(resolveUrl(this.cfg.baseUrl, SURICATA_ROUTES.TICKETS_LIST_PATH), { waitUntil: 'domcontentloaded' }),
+        page.waitForResponse((resp) => resp.url().includes(SURICATA_ROUTES.TICKETS_DATA_API_PATH), { timeout: 15_000 }),
+      ]);
 
       // B.6 — stop the 60s auto-redraw BEFORE selecting a row; a mid-flow
       // redraw silently clears the checkbox otherwise (CLOSE-7).
