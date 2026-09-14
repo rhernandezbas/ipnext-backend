@@ -281,6 +281,12 @@ export class PlaywrightBrowserSession
         );
       }
 
+      // FIX 2026-09-14 (real rollout smoke test) — `commentTextarea` is in the
+      // DOM on load but renders 0x0 until this tab is opened; `fill()` alone
+      // times out waiting for visibility. Click it every time, never assume
+      // the tab is already open.
+      await page.locator(SURICATA_INTERNAL_NOTE_SELECTORS.notesTabLink).click();
+
       const textarea = page.locator(SURICATA_INTERNAL_NOTE_SELECTORS.commentTextarea);
       await textarea.fill(text);
       await page.locator(SURICATA_INTERNAL_NOTE_SELECTORS.submitButton).click();

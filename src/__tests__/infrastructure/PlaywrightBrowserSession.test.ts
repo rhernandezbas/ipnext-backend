@@ -12,6 +12,7 @@
 import { chromium } from 'playwright-core';
 import { PlaywrightBrowserSession } from '@infrastructure/adapters/suricata/PlaywrightBrowserSession';
 import { SURICATA_AUTH_SELECTORS, SURICATA_AUTH_PATHS } from '@infrastructure/adapters/suricata/selectors';
+import { SURICATA_INTERNAL_NOTE_SELECTORS } from '@infrastructure/adapters/suricata/actionSelectors';
 import { SuricataAttachmentTooLargeError, SuricataAttachmentInvalidOriginError } from '@domain/errors/suricata';
 
 jest.mock('playwright-core', () => ({
@@ -22,6 +23,7 @@ interface FakeLocator {
   count: jest.Mock;
   fill: jest.Mock;
   click: jest.Mock;
+  inputValue: jest.Mock;
 }
 
 function makeFakeLocator(overrides: Partial<FakeLocator> = {}): FakeLocator {
@@ -29,6 +31,7 @@ function makeFakeLocator(overrides: Partial<FakeLocator> = {}): FakeLocator {
     count: jest.fn().mockResolvedValue(0),
     fill: jest.fn().mockResolvedValue(undefined),
     click: jest.fn().mockResolvedValue(undefined),
+    inputValue: jest.fn().mockResolvedValue(''),
     ...overrides,
   };
 }
@@ -458,5 +461,57 @@ describe('PlaywrightBrowserSession (Phase J, D5)', () => {
     await session.fetchHtml('https://suricata.example.com/tickets');
 
     expect(chromium.connect).toHaveBeenCalledTimes(1);
+  });
+
+  describe('postNote', () => {
+    /**
+     * FIX 2026-09-14 — regression test for a real rollout smoke-test failure:
+     * the FIRST live call to the note driver (`suricata-bot-note-enabled`
+     * flipped on) failed with a 30s `fill()` timeout because
+     * `commentTextarea` renders at 0x0 until `notesTabLink` is clicked.
+     * `postNote`'s own tests before this fix mocked every locator as
+     * generically clickable/fillable, so they never caught a missing click
+     * in the sequence — this test asserts the ORDER, not just that both
+     * calls eventually happen.
+     */
+    function makeNoteLocators() {
+      const notesTabLink = makeFakeLocator();
+      const commentTextarea = makeFakeLocator();
+      const ticketIdHiddenField = makeFakeLocator({ inputValue: jest.fn().mockResolvedValue('1001') });
+      const submitButton = makeFakeLocator();
+      return { notesTabLink, commentTextarea, ticketIdHiddenField, submitButton };
+    }
+
+    it('clicks the Notas tab link BEFORE filling the (initially hidden) comment textarea', async () => {
+      const locators = makeNoteLocators();
+      const callOrder: string[] = [];
+      locators.notesTabLink.click.mockImplementation(async () => {
+        callOrder.push('click:notesTabLink');
+      });
+      locators.commentTextarea.fill.mockImplementation(async () => {
+        callOrder.push('fill:commentTextarea');
+      });
+      locators.submitButton.click.mockImplementation(async () => {
+        callOrder.push('click:submitButton');
+      });
+
+      const page = makeFakePage();
+      page.locator = jest.fn((selector: string) => {
+        if (selector === SURICATA_INTERNAL_NOTE_SELECTORS.notesTabLink) return locators.notesTabLink;
+        if (selector === SURICATA_INTERNAL_NOTE_SELECTORS.commentTextarea) return locators.commentTextarea;
+        if (selector === SURICATA_INTERNAL_NOTE_SELECTORS.ticketIdHiddenField) return locators.ticketIdHiddenField;
+        if (selector === SURICATA_INTERNAL_NOTE_SELECTORS.submitButton) return locators.submitButton;
+        return makeFakeLocator();
+      });
+      (page as unknown as { waitForFunction: jest.Mock }).waitForFunction = jest.fn().mockResolvedValue(undefined);
+      const context = makeFakeContext(page);
+      const browser = makeFakeBrowser(context);
+      (chromium.connect as jest.Mock).mockResolvedValue(browser);
+
+      const session = new PlaywrightBrowserSession(cfg);
+      await session.postNote('1001', 'Escalado a NOC');
+
+      expect(callOrder).toEqual(['click:notesTabLink', 'fill:commentTextarea', 'click:submitButton']);
+    });
   });
 });

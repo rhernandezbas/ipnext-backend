@@ -47,6 +47,20 @@ export const SURICATA_INTERNAL_NOTE_SELECTORS = {
    */
   ticketIdHiddenField: '#internalNoteTicketId',
   /**
+   * FIX 2026-09-14 (first real rollout smoke test on `suricata-bot-note-enabled`
+   * failed 502/`SuricataActionNotAppliedError`: `commentTextarea` is present in
+   * the DOM on page load but renders at `0x0` — zero width/height — until this
+   * tab link is clicked. Confirmed live: `a[href="#ni"]`'s `.click()` is what
+   * actually reveals the "Notas" panel (Bootstrap-style anchor tab, not a
+   * `.collapse` class toggle — computed `display`/`visibility` on every
+   * ancestor already read `block`/`visible` even while hidden, so a
+   * visibility/display check alone would NOT have caught this; only measuring
+   * `getBoundingClientRect()` did). The driver must click this BEFORE filling
+   * `commentTextarea`, every time — do not assume a prior action already
+   * opened the tab.
+   */
+  notesTabLink: 'a[href="#ni"]',
+  /**
    * `class="btn btn-primary rounded-pill me-1"`, NO inline `onclick` — its
    * handler is bound externally in a bundle (B.5). The driver clicks it and
    * detects success via `commentTextarea` going back to empty (the one
