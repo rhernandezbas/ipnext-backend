@@ -85,6 +85,8 @@ import { CreateBackup } from '@application/use-cases/CreateBackup';
 import { GetClientPortalSettings } from '@application/use-cases/GetClientPortalSettings';
 import { UpdateClientPortalSettings } from '@application/use-cases/UpdateClientPortalSettings';
 import { createSchedulingRouter } from './routes/scheduling.routes';
+import { createInternalTaskRouter } from './routes/internal-tasks.routes';
+import { createInternalCatalogsRouter } from './routes/internal-catalogs.routes';
 // task-photos — adjuntos (fotos) de tarea
 import { createTaskAttachmentsRouter } from './routes/taskAttachments.routes';
 import { AttachPhotosToTask } from '@application/use-cases/AttachPhotosToTask';
@@ -2427,6 +2429,20 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     assignIClassTeam,
     requirePerm,
   }, broadcastTaskToNoc));
+
+  // internal-tasks-bridge — purely internal router, NO auth/API key middleware
+  // (explicit product decision: zero friction for trusted internal automation,
+  // never exposed publicly). Reuses the SAME use-case instances wired above for
+  // /api/scheduling — no duplicated DI, no duplicated business logic.
+  app.use('/api/internal/tasks', createInternalTaskRouter({
+    createTask,
+    updateTask,
+    setTaskGeneralStatus,
+    sendTaskToIClass,
+    assignIClassTeam,
+    stageRepo,
+  }));
+
   const projectRepo = new PrismaProjectRepository();
   const listProjectsUC   = new ListProjects(projectRepo);
   const getProjectUC     = new GetProject(projectRepo);
@@ -2708,14 +2724,27 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   ));
 
   // iclass-os-actions (Ola B) — team catalog: GET /teams, POST /teams/sync
+  // listIClassTeams is a named const (not inline) so it can be REUSED as-is by
+  // internal-catalogs.routes.ts right below — no duplicated DI (bridge-cse).
+  const listIClassTeams = new ListIClassTeams(iclassTeamRepo);
   app.use('/api/admin/iclass', createIClassTeamsRouter(
     new SyncIClassTeams(buildIClassClient(), iclassTeamRepo),
-    new ListIClassTeams(iclassTeamRepo),
+    listIClassTeams,
     authAdapter,
     sessionRepo,
     requirePerm('iclass', 'read'),
     requirePerm('iclass', 'manage'),
   ));
+
+  // internal-catalogs-bridge — purely internal, read-only, NO auth middleware
+  // (same explicit product decision as internal-tasks.routes.ts). Mounted here
+  // because this is the earliest point where BOTH listIClassNodeCatalog (built
+  // earlier, ~line 2460) and listIClassTeams (just above) are available —
+  // reuses both instances, no duplicated DI.
+  app.use('/api/internal/catalogs', createInternalCatalogsRouter({
+    listIClassNodeCatalog,
+    listIClassTeams,
+  }));
 
   // iclass-gps-audit — ubicación de cuadrillas + auditoría de presencia en sitio.
   // DOS permisos SEPARADOS: location_read (mapa en vivo, despacho) vs location_audit
