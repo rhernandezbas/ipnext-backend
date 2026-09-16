@@ -2744,6 +2744,10 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   app.use('/api/internal/catalogs', createInternalCatalogsRouter({
     listIClassNodeCatalog,
     listIClassTeams,
+    listClients,
+    getContracts,
+    listProjectsUC,
+    listNetworkSites,
   }));
 
   // iclass-gps-audit — ubicación de cuadrillas + auditoría de presencia en sitio.

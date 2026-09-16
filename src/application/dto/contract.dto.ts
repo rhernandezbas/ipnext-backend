@@ -1,3 +1,5 @@
+import { Contract } from '@domain/entities/customer';
+
 /**
  * Output DTOs for the contracts page (GET /api/services).
  * Field names mirror the frontend contract EXACTLY:
@@ -33,4 +35,34 @@ export interface PaginatedContractsDto {
   page: number;
   pageSize: number;
   totalPages: number;
+}
+
+/**
+ * internal-catalogs-bridge — minimal contract shape so an internal caller (the
+ * IClass task-creation bridge) can pick the RIGHT contract when a client has
+ * several. Deliberately narrow: NO `services[]`, NO lat/lng/vendedor — just
+ * enough to distinguish contracts at a glance. Raw `technology`/`status` as
+ * stored on the entity (no derivation/canonicalization — this is an internal,
+ * unauthenticated bridge, not the external-facing surface).
+ */
+export interface InternalContractDto {
+  id: string;
+  code: string | null;
+  status: string;
+  address: string | null;
+  technology: string | null;
+  plan: string;
+  startDate: string;
+}
+
+export function toInternalContractDto(c: Contract): InternalContractDto {
+  return {
+    id: c.id,
+    code: c.code,
+    status: c.status,
+    address: c.address,
+    technology: c.technology,
+    plan: c.plan,
+    startDate: c.startDate,
+  };
 }
