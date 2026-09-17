@@ -193,6 +193,150 @@ describe('IngestClosedServiceOrders', () => {
     expect(closed.orders.size).toBe(0);
   });
 
+  describe('OS awaiting approval (status 50 — the technician already closed it in the app)', () => {
+    const HISTORY_APPROVAL: SoStatusHistoryEntry[] = [
+      { iclassOsStatusId: '1', occurredAt: '2026-09-16T18:51:00.000Z', statusCode: '3', statusDescription: 'ANDAMENTO', durationMinutes: 1, teamLogin: 'x', commentary: null },
+      { iclassOsStatusId: '2', occurredAt: '2026-09-16T18:53:00.000Z', statusCode: '4', statusDescription: 'FECHADA', durationMinutes: 0, teamLogin: 'x', commentary: null },
+      { iclassOsStatusId: '3', occurredAt: '2026-09-16T18:53:05.000Z', statusCode: '50', statusDescription: 'APROVAÇÃO', durationMinutes: 0, teamLogin: 'x', commentary: null },
+    ];
+
+    function approvalSummary(over: Partial<ClosedServiceOrderSummary> = {}) {
+      return summary({
+        iclassId: '950', iclassCodigo: '4013', statusCode: '50', statusDescription: 'Aprovação',
+        iclassUpdatedAt: '2026-09-16T18:53:05.000Z', ...over,
+      });
+    }
+
+    it('mirrors it and closes the task through the mapped result code, without waiting for the office approval', async () => {
+      const { scheduling, iclass, resultCodes, closed, useCase } = setup();
+      scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+      iclass.serviceOrders = [approvalSummary()];
+      iclass.historyByOrder['950'] = HISTORY_APPROVAL;
+      await mapResultCode(resultCodes, 'Instalacion Completa Fibra', INSTALADO.id);
+
+      const counts = await useCase.execute();
+
+      expect(counts.skippedNotClosed).toBe(0);
+      expect(counts.mirrored).toBe(1);
+      expect(counts.transitioned).toBe(1);
+      const task = await scheduling.getTask('t1');
+      expect(task!.stageId).toBe(INSTALADO.id);
+      expect(task!.generalStatus).toBe('closed');
+      const stored = closed.orders.get('950')!.order;
+      expect(stored.closedAt).toBeNull();
+      expect(stored.firstClosedAt).toBe('2026-09-16T18:53:00.000Z');
+      expect(stored.approvedAt).toBe('2026-09-16T18:53:05.000Z');
+    });
+
+    // The office sends "client absent" / "postponed" SOs back for a new visit straight from
+    // approval (seen in production: 6044, 6293), so only a successful outcome closes early.
+    it('does not act on a non-successful outcome while it awaits approval, even when mapped to a done stage', async () => {
+      const { scheduling, iclass, resultCodes, closed, useCase } = setup();
+      scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+      await resultCodes.upsert({ soTypeId: '1', code: 'Cliente Ausente', type: 'Pendente' });
+      await resultCodes.assignStage((await resultCodes.findByCode('Cliente Ausente'))!.id, INSTALADO.id);
+      iclass.serviceOrders = [approvalSummary({ resultCodeName: 'Cliente Ausente.' })];
+      iclass.historyByOrder['950'] = HISTORY_APPROVAL;
+
+      const counts = await useCase.execute();
+
+      expect(counts.skippedNotClosed).toBe(1);
+      expect(counts.mirrored).toBe(0);
+      expect(closed.orders.size).toBe(0);
+      const task = await scheduling.getTask('t1');
+      expect(task!.stageId).toBe(REGISTRADO.id);
+      expect(task!.generalStatus).not.toBe('closed');
+    });
+
+    describe('when the office later approves it (50 → 7)', () => {
+      const approvedHistory: SoStatusHistoryEntry[] = [
+        ...HISTORY_APPROVAL,
+        { iclassOsStatusId: '4', occurredAt: '2026-09-17T10:00:00.000Z', statusCode: '7', statusDescription: 'ENCERRADO', durationMinutes: 0, teamLogin: 'x', commentary: null },
+      ];
+
+      async function closedAtApproval() {
+        const ctx = setup();
+        ctx.scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+        await mapResultCode(ctx.resultCodes, 'Instalacion Completa Fibra', INSTALADO.id);
+        ctx.iclass.serviceOrders = [approvalSummary()];
+        ctx.iclass.historyByOrder['950'] = HISTORY_APPROVAL;
+        await ctx.useCase.execute();
+        expect((await ctx.scheduling.getTask('t1'))!.generalStatus).toBe('closed');
+        return ctx;
+      }
+
+      function approve(ctx: ReturnType<typeof setup>, over: Partial<ClosedServiceOrderSummary> = {}) {
+        ctx.iclass.serviceOrders = [approvalSummary({ statusCode: '7', statusDescription: 'Concluida', iclassUpdatedAt: '2026-09-17T10:00:00.000Z', ...over })];
+        ctx.iclass.historyByOrder['950'] = approvedHistory;
+      }
+
+      it('does not re-close a task an operator reopened in between, but refreshes the mirror', async () => {
+        const ctx = await closedAtApproval();
+        await ctx.scheduling.updateTask('t1', { generalStatus: 'open' });
+        await ctx.scheduling.moveTaskToStage('t1', REGISTRADO.id);
+        approve(ctx);
+
+        const counts = await ctx.useCase.execute();
+
+        expect(counts.errored).toBe(0);
+        expect(counts.mirrored).toBe(1);
+        expect(counts.transitioned).toBe(0);
+        const task = await ctx.scheduling.getTask('t1');
+        expect(task!.generalStatus).toBe('open');
+        expect(task!.stageId).toBe(REGISTRADO.id);
+        const stored = ctx.closed.orders.get('950')!.order;
+        expect(stored.statusCode).toBe('7');
+        expect(stored.closedAt).toBe('2026-09-17T10:00:00.000Z');
+      });
+
+      it('does not re-close a reopened task when IClass bumps the SO while it is still awaiting approval', async () => {
+        const ctx = await closedAtApproval();
+        await ctx.scheduling.updateTask('t1', { generalStatus: 'open' });
+        await ctx.scheduling.moveTaskToStage('t1', REGISTRADO.id);
+        ctx.iclass.serviceOrders = [approvalSummary({ iclassUpdatedAt: '2026-09-16T20:00:00.000Z' })];
+
+        const counts = await ctx.useCase.execute();
+
+        expect(counts.transitioned).toBe(0);
+        const task = await ctx.scheduling.getTask('t1');
+        expect(task!.generalStatus).toBe('open');
+        expect(task!.stageId).toBe(REGISTRADO.id);
+      });
+
+      it('treats a new approval cycle the cron never saw (rejected and redone between runs) as a new decision', async () => {
+        const ctx = await closedAtApproval();
+        await ctx.scheduling.updateTask('t1', { generalStatus: 'open' });
+        await ctx.scheduling.moveTaskToStage('t1', REGISTRADO.id);
+        approve(ctx);
+        ctx.iclass.historyByOrder['950'] = [
+          ...HISTORY_APPROVAL,
+          { iclassOsStatusId: '10', occurredAt: '2026-09-16T19:30:00.000Z', statusCode: '29', statusDescription: 'AGENDADA', durationMinutes: 0, teamLogin: 'x', commentary: null },
+          { iclassOsStatusId: '11', occurredAt: '2026-09-17T09:00:00.000Z', statusCode: '4', statusDescription: 'FECHADA', durationMinutes: 0, teamLogin: 'x', commentary: null },
+          { iclassOsStatusId: '12', occurredAt: '2026-09-17T09:00:05.000Z', statusCode: '50', statusDescription: 'APROVAÇÃO', durationMinutes: 0, teamLogin: 'x', commentary: null },
+          { iclassOsStatusId: '13', occurredAt: '2026-09-17T10:00:00.000Z', statusCode: '7', statusDescription: 'ENCERRADO', durationMinutes: 0, teamLogin: 'x', commentary: null },
+        ];
+
+        const counts = await ctx.useCase.execute();
+
+        expect(counts.transitioned).toBe(1);
+        const task = await ctx.scheduling.getTask('t1');
+        expect(task!.generalStatus).toBe('closed');
+        expect(task!.stageId).toBe(INSTALADO.id);
+      });
+
+      it('applies the new mapping when the office changed the result code on approval', async () => {
+        const ctx = await closedAtApproval();
+        await mapResultCode(ctx.resultCodes, 'Retiro completo Servicio Fibra', FACTURADO.id);
+        approve(ctx, { resultCodeName: 'Retiro completo Servicio Fibra' });
+
+        const counts = await ctx.useCase.execute();
+
+        expect(counts.transitioned).toBe(1);
+        expect((await ctx.scheduling.getTask('t1'))!.stageId).toBe(FACTURADO.id);
+      });
+    });
+  });
+
   it('skips an OS that is not ours (codigo == iclass id, no matching task)', async () => {
     const { iclass, useCase, closed } = setup();
     iclass.serviceOrders = [summary({ iclassId: '101040485363', iclassCodigo: '101040485363' })];

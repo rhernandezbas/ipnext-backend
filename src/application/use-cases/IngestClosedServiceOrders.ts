@@ -25,6 +25,7 @@ import { FeatureFlagRepository } from '@domain/ports/FeatureFlagRepository';
 import { TaskActivityRecorder } from '@domain/ports/TaskActivityRecorder';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 import { applyTaskClosure } from './applyTaskClosure';
+import { normalizeResultCode } from './normalizeResultCode';
 import {
   ClosedServiceOrder,
   ClosedServiceOrderSummary,
@@ -33,8 +34,15 @@ import {
 
 /** SyncState key for this ingest (distinct from clients 'gr-clients'). */
 const SYNC_ENTITY = 'iclass-closed';
-/** Terminal status — the only state we mirror (ENCERRADO / Concluida). */
-const TERMINAL_STATUS = '7';
+/** ENCERRADO / Concluida — approved by the office. */
+const APPROVED_STATUS = '7';
+/**
+ * APROVAÇÃO — the technician closed the SO in the app and it awaits office approval.
+ * Acted on only for a successful outcome: the office sends absent/postponed visits back
+ * for a new visit straight from this status.
+ */
+const AWAITING_APPROVAL_STATUS = '50';
+const SUCCESS_RESULT_TYPE = 'Sucesso';
 /** IClass enforces a 30-day max window; stay safely under it on bootstrap. */
 const BOOTSTRAP_DAYS = 25;
 /** Overlap re-scanned each steady-state run (approval flips 4→50→7 days later). */
@@ -52,7 +60,7 @@ export interface IngestClosedCounts {
   mirrored: number;
   /** Tasks moved to a mapped stage. */
   transitioned: number;
-  /** SOs whose status is not terminal ('7'). */
+  /** SOs not approved ('7') nor awaiting approval ('50') with a successful result code. */
   skippedNotClosed: number;
   /** SOs with no matching local task (codigo is the iclass id, not our sequenceNumber). */
   skippedNotOurs: number;
@@ -264,7 +272,7 @@ export class IngestClosedServiceOrders {
     }
     // ── end iclass-status-sync ───────────────────────────────────────────────
 
-    if (s.statusCode !== TERMINAL_STATUS) {
+    if (!(await this.isClosureDecision(s))) {
       counts.skippedNotClosed++;
       return;
     }
@@ -343,6 +351,10 @@ export class IngestClosedServiceOrders {
     // Resolve the configured closure mapping by result-code name.
     const rc = await this.resolveResultCode(s);
 
+    // Read before the upsert overwrites the mirrored status/result code.
+    const repeatsAppliedDecision =
+      existing?.closureAttemptedAt != null && (await this.repeatsMirroredDecision(s, history));
+
     const order: ClosedServiceOrder = {
       ...s,
       closedAt: latestTransition(history, '7'),
@@ -366,8 +378,10 @@ export class IngestClosedServiceOrders {
       return;
     }
 
-    // Move the task only when the operator mapped this result code to a stage.
-    if (rc?.mappedStageId) {
+    // Move the task only when the operator mapped this result code to a stage. A re-read of
+    // an outcome already applied at '50' (office approval, or any bump in the same approval
+    // cycle) is not a new decision: re-applying it would re-close a task an operator reopened.
+    if (rc?.mappedStageId && !repeatsAppliedDecision) {
       const moved = await this.scheduling.moveTaskToStage(task.id, rc.mappedStageId);
       counts.transitioned++;
       // #41 REQ-GS-ICLASS-CLOSEDBY-FLOW-1 — when the closure flow lands the task in a
@@ -582,6 +596,22 @@ export class IngestClosedServiceOrders {
     }
   }
 
+  private async isClosureDecision(s: ClosedServiceOrderSummary): Promise<boolean> {
+    if (s.statusCode === APPROVED_STATUS) return true;
+    if (s.statusCode !== AWAITING_APPROVAL_STATUS) return false;
+    const rc = await this.resolveResultCode(s);
+    return rc?.type === SUCCESS_RESULT_TYPE;
+  }
+
+  private async repeatsMirroredDecision(s: ClosedServiceOrderSummary, history: SoStatusHistoryEntry[]): Promise<boolean> {
+    const prior = await this.closed.getByIclassId(s.iclassId);
+    return (
+      prior?.statusCode === AWAITING_APPROVAL_STATUS &&
+      sameInstant(prior.approvedAt, latestTransition(history, AWAITING_APPROVAL_STATUS)) &&
+      normalizeResultCode(prior.resultCodeName ?? '') === normalizeResultCode(s.resultCodeName ?? '')
+    );
+  }
+
   /**
    * Resolve the closure mapping for an SO. Disambiguates by (soTypeId, code) first
    * — the same result code maps to different stages across SO types (e.g. Posponer
@@ -625,6 +655,13 @@ export function emptyClosedCounts(): IngestClosedCounts {
 
 function newCounts(): IngestClosedCounts {
   return emptyClosedCounts();
+}
+
+function sameInstant(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return false;
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  return !Number.isNaN(ta) && ta === tb;
 }
 
 /** Most-recent occurredAt among history entries with the given status code, or null. */
