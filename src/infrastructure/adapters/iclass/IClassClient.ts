@@ -584,12 +584,17 @@ export class IClassClient implements IClassPort {
    * // TODO: confirmar el token de éxito real en la prueba en vivo (§10)
    */
   async closeServiceOrder(input: CloseServiceOrderInput): Promise<void> {
+    // CloseSOIn.commentary is a NESTED object, not a plain string — sending it as a
+    // string returns HTTP 400 "Unable to deserialize property 'commentary'" (verified
+    // live). visibleToCustomer travels INSIDE commentary, not at the top level.
     const payload = {
       serviceOrderCode: input.serviceOrderCode,
       resultCode: input.resultCode,
       closeDate: formatCloseDate(input.closeDate),
-      commentary: input.commentary,
-      visibleToCustomer: input.visibleToCustomer ?? true,
+      commentary: {
+        commentary: input.commentary,
+        visibleToCustomer: input.visibleToCustomer ?? false,
+      },
     };
     const data = await this.authedPost<unknown>('/serviceorders/close', payload);
 

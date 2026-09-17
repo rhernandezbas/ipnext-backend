@@ -120,6 +120,13 @@ export class InMemoryIClassClient implements IClassPort {
   /** Mode for closeServiceOrder: undefined = success, 'rejected' = IClassRejectedError, 'unavailable' = IClassUnavailableError */
   private closeMode?: 'rejected' | 'unavailable';
 
+  /**
+   * One-shot rejection messages, consumed in order before falling back to `closeMode`.
+   * Lets a test simulate "first close attempt rejected with THIS message, next one
+   * succeeds" — needed to exercise a retry (e.g. ICLERR_0216/0217 fallback).
+   */
+  private closeRejectionQueue: string[] = [];
+
   /** Recorded calls to closeServiceOrder for assertions. */
   private closeCalls: CloseServiceOrderInput[] = [];
 
@@ -137,6 +144,11 @@ export class InMemoryIClassClient implements IClassPort {
   /** Configure how closeServiceOrder behaves. */
   setCloseMode(mode: 'rejected' | 'unavailable' | undefined): void {
     this.closeMode = mode;
+  }
+
+  /** Queue one rejection message for the next closeServiceOrder call(s), in order. */
+  queueCloseRejection(message: string): void {
+    this.closeRejectionQueue.push(message);
   }
 
   getCloseCalls(): CloseServiceOrderInput[] {
@@ -163,7 +175,17 @@ export class InMemoryIClassClient implements IClassPort {
 
   async closeServiceOrder(input: CloseServiceOrderInput): Promise<void> {
     if (this.failureMode === 'unavailable' || this.closeMode === 'unavailable') throw new IClassUnavailableError();
-    if (this.closeMode === 'rejected') throw new IClassRejectedError('ICLERR_CLOSE: motivo rechazo de prueba');
+    const queuedMessage = this.closeRejectionQueue.shift();
+    if (queuedMessage !== undefined) {
+      // A REJECTED attempt still reached IClass with a real body — record it too, so
+      // a test can assert what the FIRST (rejected) attempt actually carried.
+      this.closeCalls.push({ ...input });
+      throw new IClassRejectedError(queuedMessage);
+    }
+    if (this.closeMode === 'rejected') {
+      this.closeCalls.push({ ...input });
+      throw new IClassRejectedError('ICLERR_CLOSE: motivo rechazo de prueba');
+    }
     this.closeCalls.push({ ...input });
   }
 

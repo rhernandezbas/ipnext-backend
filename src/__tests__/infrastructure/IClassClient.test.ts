@@ -563,8 +563,30 @@ describe('IClassClient', () => {
     const body = closeCall.body as Record<string, unknown>;
     expect(body['serviceOrderCode']).toBe('OS-100');
     expect(body['resultCode']).toBe('RESOLVIDO');
-    expect(body['commentary']).toBe('Cierre manual desde Prominense');
     expect(typeof body['closeDate']).toBe('string');
+    // CloseSOIn.commentary is a NESTED object `{ commentary, visibleToCustomer }` — the
+    // live API returns HTTP 400 "Unable to deserialize property 'commentary'" when it is
+    // sent as a plain string (the shape this adapter sent before this fix).
+    expect(body['commentary']).toEqual({ commentary: 'Cierre manual desde Prominense', visibleToCustomer: false });
+    expect(body['visibleToCustomer']).toBeUndefined();
+  });
+
+  it('A3b: closeServiceOrder sets commentary.visibleToCustomer=true when the input requests it', async () => {
+    const CLOSE_OK = { ok: { data: { erros: null } } };
+    const { http, calls } = makeHttp({ post: [LOGIN_OK, CLOSE_OK], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    await client.closeServiceOrder({
+      serviceOrderCode: 'OS-100',
+      resultCode: 'RESOLVIDO',
+      closeDate: new Date('2026-07-25T10:30:00.000Z'),
+      commentary: 'Visible al cliente',
+      visibleToCustomer: true,
+    });
+
+    const closeCall = calls.find(c => c.url === '/serviceorders/close')!;
+    const body = closeCall.body as Record<string, unknown>;
+    expect(body['commentary']).toEqual({ commentary: 'Visible al cliente', visibleToCustomer: true });
   });
 
   // ── A4: closeServiceOrder erros → IClassRejectedError ────────────────────
