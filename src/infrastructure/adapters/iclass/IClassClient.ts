@@ -1,4 +1,5 @@
-import axios, { AxiosInstance } from 'axios';
+import { AxiosInstance } from 'axios';
+import { createIClassHttp } from './parseJsonPreservingBigInts';
 import {
   IClassPort,
   IClassNodeDescriptor,
@@ -157,13 +158,7 @@ export class IClassClient implements IClassPort {
     this.sleep = opts._sleep ?? sleep;
     this.now = opts.now ?? (() => new Date());
     this.nodesCacheTtlMs = opts.nodesCacheTtlMs ?? 5 * 60 * 1000;
-    this.http =
-      opts.http ??
-      axios.create({
-        baseURL: opts.baseUrl,
-        timeout: opts.timeoutMs ?? 30000,
-        headers: { 'Content-Type': 'application/json' },
-      });
+    this.http = opts.http ?? createIClassHttp({ baseUrl: opts.baseUrl, timeoutMs: opts.timeoutMs ?? 30000 });
   }
 
   async listNodes(): Promise<IClassNodeDescriptor[]> {
