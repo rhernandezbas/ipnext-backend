@@ -577,6 +577,7 @@ import { GetClosureStatus } from '@application/use-cases/GetClosureStatus';
 import { IngestClosedServiceOrders } from '@application/use-cases/IngestClosedServiceOrders';
 // iclass-os-actions (Ola A + B)
 import { CloseIClassServiceOrder } from '@application/use-cases/CloseIClassServiceOrder';
+import { PushIClassClosureOnTaskEnd } from '@application/use-cases/PushIClassClosureOnTaskEnd';
 import { AssignIClassTeam } from '@application/use-cases/AssignIClassTeam';
 import { SyncIClassTeams } from '@application/use-cases/SyncIClassTeams';
 import { ListIClassTeams } from '@application/use-cases/ListIClassTeams';
@@ -1551,11 +1552,15 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   const featureFlagRepo = new PrismaFeatureFlagRepository();
   // Audit repo for IClass dispatch attempts — injected as 4th arg (AD-6: optional on SendTaskToIClass).
   const iclassDispatchAttemptRepo = new PrismaIClassDispatchAttemptRepository();
+  // iclass-close-push — best-effort push of the IClass closure when a task ends in
+  // Prominense OUTSIDE the "Cerrar OS" button (SetTaskGeneralStatus / UpdateTask).
+  // Reuses the same IClass client factory + feature flag as CloseIClassServiceOrder below.
+  const iclassClosurePush = new PushIClassClosureOnTaskEnd(buildIClassClient(), featureFlagRepo);
   // sendTaskToIClass + moveTaskToStage + bulkMoveTasksToStage are declared after autoAssignIClassTeam
   // (iclass-ops-config block) so autoAssignIClassTeam can be passed as the 7th arg (#130).
   const setTaskInventoryReview = new SetTaskInventoryReview(schedulingRepo, taskActivityRecorder);
   // #41 — general status (open / closed / dismissed) writer.
-  const setTaskGeneralStatus = new SetTaskGeneralStatus(schedulingRepo, taskActivityRecorder);
+  const setTaskGeneralStatus = new SetTaskGeneralStatus(schedulingRepo, taskActivityRecorder, iclassClosurePush);
 
   const listWorkflows = new ListWorkflows(workflowRepo);
   const getWorkflow = new GetWorkflow(workflowRepo);
@@ -2305,6 +2310,7 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
     { findById: (id: string) => prismaProjectKindLookup(id) },
     taskActivityRecorder,
     autoAssignIClassTeam, // AD-2: optional best-effort IClass auto-assigner
+    iclassClosurePush, // iclass-close-push: optional best-effort push on task end
   );
 
   // #130 — assign-at-register: sendTaskToIClass declared here (after autoAssignIClassTeam)

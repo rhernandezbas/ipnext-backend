@@ -10,6 +10,7 @@ import { SYSTEM_ACTOR } from './taskActivityActor';
 import { normalizeOnuSerial } from '@domain/services/fiberProvisioning';
 import { applyTaskClosure } from './applyTaskClosure';
 import { readClearedClosureStamp, effectiveGeneralStatus } from './reopenClosureStamp';
+import { PushIClassClosureOnTaskEnd } from './PushIClassClosureOnTaskEnd';
 
 export class UpdateTask {
   constructor(
@@ -27,6 +28,8 @@ export class UpdateTask {
      * that NEVER propagates — the local update always completes.
      */
     private readonly autoAssigner?: IClassAutoAssigner,
+    /** Optional best-effort push of the IClass closure when the task ends (AD-2 style). */
+    private readonly iclassClosurePush?: PushIClassClosureOnTaskEnd,
   ) {}
 
   async execute(id: string, data: UpdateTaskInput, actor?: ActorContext): Promise<ScheduledTask | null> {
@@ -165,7 +168,11 @@ export class UpdateTask {
     // needed whenever this patch CLOSES the task, to know if it's a real open→closed
     // transition (route through the atomic guard) or a no-op on an already-closed one.
     const isClosingPatch = data.generalStatus === 'closed';
-    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined) || isClosingPatch);
+    // #iclass-close-push — a patch that DISMISSES the task also needs `prev` (to
+    // know whether this is a real open/closed→dismissed transition or a no-op on an
+    // already-dismissed task) so the best-effort IClass push below can fire correctly.
+    const isDismissingPatch = data.generalStatus === 'dismissed';
+    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined) || isClosingPatch || isDismissingPatch);
     const prev = needsPrev ? await this.repo.getTask(id) : null;
 
     // FIX-C (fix wave 2 W1a) — si este patch REABRE la tarea, el sello de cierre se lee
@@ -206,6 +213,10 @@ export class UpdateTask {
     // spanning two ports and would throw away work the operator did.
     let updated: ScheduledTask | null;
     let diffData: UpdateTaskInput = data;
+    // #iclass-close-push — tracks whether THIS write is the one that actually closed
+    // the task (vs. losing the atomic race to a concurrent closer), so the best-effort
+    // IClass push below only fires for the writer that really won.
+    let closedByThisWrite = false;
     if (isClosingPatch && prev && prev.generalStatus !== 'closed') {
       const { generalStatus: _gs, isClosed: _ic, ...restData } = data;
       const hasRest = Object.keys(restData).length > 0;
@@ -225,6 +236,7 @@ export class UpdateTask {
       if (!closeResult.closed) {
         diffData = restData;
       }
+      closedByThisWrite = closeResult.closed;
 
       // closeResult.task is the freshest read (post-close, and post-rest since the rest
       // ran first); fall back to the rest write when the task vanished mid-flight.
@@ -275,6 +287,18 @@ export class UpdateTask {
       } catch {
         // Best-effort: swallow any unexpected error from the assigner.
         // The local update already persisted — never abort it.
+      }
+    }
+
+    // #iclass-close-push — best-effort push to IClass when THIS patch really ends the
+    // task: closing (and this writer WON the atomic race) or dismissing (change-not-
+    // presence — `prev` was NOT already dismissed). `prev` is passed as it was BEFORE
+    // the change so it still carries the untouched iclassOrderCode.
+    if (this.iclassClosurePush && updated && prev) {
+      if (isClosingPatch && closedByThisWrite) {
+        void this.iclassClosurePush.execute(prev, 'closed', actor?.actorName ?? 'Sistema');
+      } else if (isDismissingPatch && prev.generalStatus !== 'dismissed') {
+        void this.iclassClosurePush.execute(prev, 'dismissed', actor?.actorName ?? 'Sistema');
       }
     }
 

@@ -12,6 +12,9 @@ import { SetTaskGeneralStatus } from '../../application/use-cases/SetTaskGeneral
 import { TaskNotFoundError, InvalidGeneralStatusError } from '../../domain/errors/scheduling';
 import { TaskActivityRecorder, ActorContext } from '../../domain/ports/TaskActivityRecorder';
 import { ActivityType } from '../../domain/entities/taskActivity';
+import { PushIClassClosureOnTaskEnd } from '../../application/use-cases/PushIClassClosureOnTaskEnd';
+import { InMemoryIClassClient } from '../../infrastructure/adapters/in-memory/InMemoryIClassClient';
+import { InMemoryFeatureFlagRepository } from '../../infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 
 const CREATE_INPUT = {
   title: 'Tarea de prueba',
@@ -49,6 +52,11 @@ class FakeRecorder implements TaskActivityRecorder {
     this.events.push({ taskId, type, actor: payload.actor, fromValue: payload.fromValue, toValue: payload.toValue });
   }
   async recordMany(): Promise<void> { /* unused here */ }
+}
+
+/** The IClass push is fire-and-forget: let its microtasks run before asserting. */
+async function flushPush(): Promise<void> {
+  await new Promise(resolve => setImmediate(resolve));
 }
 
 describe('SetTaskGeneralStatus use case', () => {
@@ -161,5 +169,108 @@ describe('SetTaskGeneralStatus use case', () => {
 
     expect(result.generalStatus).toBe('open');
     expect(recorder.events).toHaveLength(0);
+  });
+});
+
+describe('SetTaskGeneralStatus — push to IClass on task end (PushIClassClosureOnTaskEnd)', () => {
+  const ORDER_CODE = 'OS-300';
+
+  function makeIClassSetup() {
+    const iclass = new InMemoryIClassClient();
+    const flagRepo = new InMemoryFeatureFlagRepository();
+    flagRepo.seed('iclass-close-action', true);
+    iclass.setServiceOrderSnapshot(ORDER_CODE, { iclassId: 'i1', iclassCodigo: ORDER_CODE, statusCode: '1', statusDescription: 'Aberta' });
+    const iclassClosurePush = new PushIClassClosureOnTaskEnd(iclass, flagRepo);
+    return { iclass, flagRepo, iclassClosurePush };
+  }
+
+  it("transition open → closed WINS the race → pushes IClass closure with the task as it was BEFORE the change", async () => {
+    const repo = new InMemorySchedulingRepository();
+    const { iclass, iclassClosurePush } = makeIClassSetup();
+    const useCase = new SetTaskGeneralStatus(repo, undefined, iclassClosurePush);
+    const task = await repo.createTask(CREATE_INPUT);
+    await repo.setIClassOrderCode(task.id, ORDER_CODE);
+
+    await useCase.execute(task.id, 'closed', { actorId: 'u-1', actorName: 'Ana' });
+
+    await flushPush();
+    const calls = iclass.getCloseCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.serviceOrderCode).toBe(ORDER_CODE);
+    expect(calls[0]!.commentary).toBe('Tarea cerrada en Prominense por Ana');
+  });
+
+  it('transition open → closed, no actor → pushes with actorName "Sistema"', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const { iclass, iclassClosurePush } = makeIClassSetup();
+    const useCase = new SetTaskGeneralStatus(repo, undefined, iclassClosurePush);
+    const task = await repo.createTask(CREATE_INPUT);
+    await repo.setIClassOrderCode(task.id, ORDER_CODE);
+
+    await useCase.execute(task.id, 'closed');
+
+    await flushPush();
+    expect(iclass.getCloseCalls()[0]!.commentary).toBe('Tarea cerrada en Prominense por Sistema');
+  });
+
+  it('transition open → dismissed → pushes IClass closure with CANCELADA', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const { iclass, iclassClosurePush } = makeIClassSetup();
+    const useCase = new SetTaskGeneralStatus(repo, undefined, iclassClosurePush);
+    const task = await repo.createTask(CREATE_INPUT);
+    await repo.setIClassOrderCode(task.id, ORDER_CODE);
+
+    await useCase.execute(task.id, 'dismissed', { actorId: 'u-1', actorName: 'Ana' });
+
+    await flushPush();
+    const calls = iclass.getCloseCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.commentary).toBe('Tarea descartada en Prominense por Ana');
+  });
+
+  it('no-op transition (already open → open) does NOT push to IClass', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const { iclass, iclassClosurePush } = makeIClassSetup();
+    const useCase = new SetTaskGeneralStatus(repo, undefined, iclassClosurePush);
+    const task = await repo.createTask(CREATE_INPUT);
+    await repo.setIClassOrderCode(task.id, ORDER_CODE);
+
+    await useCase.execute(task.id, 'open');
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(0);
+  });
+
+  it('reopen (closed → open) does NOT push a close to IClass', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const { iclass, iclassClosurePush } = makeIClassSetup();
+    const useCase = new SetTaskGeneralStatus(repo, undefined, iclassClosurePush);
+    const task = await repo.createTask(CREATE_INPUT);
+    await repo.setIClassOrderCode(task.id, ORDER_CODE);
+    await useCase.execute(task.id, 'closed');
+    iclass.getCloseCalls(); // drain not needed — closeCalls only grows, check length after next call
+
+    await useCase.execute(task.id, 'open');
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(1); // only the earlier close, not a second push on reopen
+  });
+
+  it('loses the local race (a concurrent iclass close already won) → does NOT push again', async () => {
+    const repo = new InMemorySchedulingRepository();
+    const { iclass, iclassClosurePush } = makeIClassSetup();
+    const useCase = new SetTaskGeneralStatus(repo, undefined, iclassClosurePush);
+    const task = await repo.createTask(CREATE_INPUT);
+    await repo.setIClassOrderCode(task.id, ORDER_CODE);
+
+    repo.setBeforeCloseWriteHook(async () => {
+      repo.setBeforeCloseWriteHook(undefined);
+      await repo.closeTaskIfOpen(task.id, { origin: 'iclass', resultCode: 'REAGENDADO' });
+    });
+
+    await useCase.execute(task.id, 'closed', { actorId: 'u-1', actorName: 'Ana' });
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(0);
   });
 });

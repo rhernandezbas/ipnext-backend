@@ -193,6 +193,86 @@ describe('IngestClosedServiceOrders', () => {
     expect(closed.orders.size).toBe(0);
   });
 
+  describe('SO closed from Prominense (result code COMPLETADA/CANCELADA EN PROMINENSE)', () => {
+    it.each(['COMPLETADA EN PROMINENSE', 'CANCELADA EN PROMINENSE'])(
+      'mirrors %s without moving or re-closing the task the operator already ended',
+      async (code) => {
+        const { scheduling, iclass, resultCodes, closed, useCase } = setup();
+        scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: INSTALADO.id });
+        await scheduling.updateTask('t1', { generalStatus: 'closed' });
+        await mapResultCode(resultCodes, code, FACTURADO.id);
+        iclass.serviceOrders = [summary({ iclassId: '960', iclassCodigo: '4013', resultCodeName: code })];
+        iclass.historyByOrder['960'] = HISTORY_CLOSED;
+
+        const counts = await useCase.execute();
+
+        expect(counts.mirrored).toBe(1);
+        expect(counts.transitioned).toBe(0);
+        expect((await scheduling.getTask('t1'))!.stageId).toBe(INSTALADO.id);
+        expect(closed.orders.has('960')).toBe(true);
+      },
+    );
+
+    // A task reopened after Prominense pushed the close must NOT be closed again by the
+    // cron; the operator reopened it on purpose. The rare "pushed but the local close
+    // failed" case is left open on purpose too, and only warned about.
+    it('never closes nor moves a task that is open, and warns so the mismatch is visible', async () => {
+      const { scheduling, iclass, resultCodes, useCase } = setup();
+      // Parked in the in-flight stage: the reconcile would move it if the guard were missing.
+      scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+      await mapResultCode(resultCodes, 'COMPLETADA EN PROMINENSE', FACTURADO.id);
+      iclass.serviceOrders = [summary({ iclassId: '961', iclassCodigo: '4013', resultCodeName: 'COMPLETADA EN PROMINENSE' })];
+      iclass.historyByOrder['961'] = HISTORY_CLOSED;
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      const counts = await useCase.execute();
+
+      const task = await scheduling.getTask('t1');
+      expect(task!.generalStatus).toBe('open');
+      expect(task!.stageId).toBe(REGISTRADO.id);
+      expect(counts.transitioned).toBe(0);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toContain('4013');
+      warn.mockRestore();
+    });
+
+    it('does not post the closure comment on a task the operator reopened', async () => {
+      const { scheduling, iclass, resultCodes, closed, state } = setup();
+      scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+      await mapResultCode(resultCodes, 'COMPLETADA EN PROMINENSE', FACTURADO.id);
+      iclass.serviceOrders = [summary({ iclassId: '962', iclassCodigo: '4013', resultCodeName: 'COMPLETADA EN PROMINENSE' })];
+      iclass.historyByOrder['962'] = HISTORY_CLOSED;
+      const commentRepo = new InMemoryTaskCommentRepository();
+      const useCase = new IngestClosedServiceOrders(iclass, closed, resultCodes, scheduling, state, {
+        now: () => new Date('2026-05-29T12:00:00Z'),
+        postComment: new PostClosureComment(commentRepo),
+      });
+      jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      await useCase.execute();
+
+      expect(await commentRepo.listByTask('t1')).toHaveLength(0);
+      expect(closed.orders.has('962')).toBe(true);
+      jest.restoreAllMocks();
+    });
+
+    it('still takes a task ended in Prominense out of the in-flight stage', async () => {
+      const { scheduling, iclass, resultCodes, useCase } = setup();
+      scheduling.seedTask({ id: 't1', sequenceNumber: 4013, stageId: REGISTRADO.id });
+      await scheduling.updateTask('t1', { generalStatus: 'closed' });
+      await mapResultCode(resultCodes, 'COMPLETADA EN PROMINENSE', FACTURADO.id);
+      iclass.serviceOrders = [summary({ iclassId: '960', iclassCodigo: '4013', resultCodeName: 'COMPLETADA EN PROMINENSE' })];
+      iclass.historyByOrder['960'] = HISTORY_CLOSED;
+
+      const counts = await useCase.execute();
+
+      expect(counts.transitioned).toBe(1);
+      const task = await scheduling.getTask('t1');
+      expect(task!.stageId).toBe(FACTURADO.id);
+      expect(task!.generalStatus).toBe('closed');
+    });
+  });
+
   describe('OS awaiting approval (status 50 — the technician already closed it in the app)', () => {
     const HISTORY_APPROVAL: SoStatusHistoryEntry[] = [
       { iclassOsStatusId: '1', occurredAt: '2026-09-16T18:51:00.000Z', statusCode: '3', statusDescription: 'ANDAMENTO', durationMinutes: 1, teamLogin: 'x', commentary: null },

@@ -8,6 +8,9 @@ import { UpdateTask } from '@application/use-cases/UpdateTask';
 import { InMemorySchedulingRepository } from '@infrastructure/adapters/in-memory/InMemorySchedulingRepository';
 import { EntityLookup } from '@domain/ports/EntityLookup';
 import { FakeTaskActivityRecorder } from '../helpers/FakeTaskActivityRecorder';
+import { PushIClassClosureOnTaskEnd } from '@application/use-cases/PushIClassClosureOnTaskEnd';
+import { InMemoryIClassClient } from '@infrastructure/adapters/in-memory/InMemoryIClassClient';
+import { InMemoryFeatureFlagRepository } from '@infrastructure/adapters/in-memory/InMemoryFeatureFlagRepository';
 
 const ACTOR = { actorId: 'u1', actorName: 'Alice' };
 
@@ -18,6 +21,11 @@ class AnyLookup implements EntityLookup {
 function makeUseCase(repo: InMemorySchedulingRepository) {
   const any = new AnyLookup();
   return new UpdateTask(repo, any, any, any, any, any);
+}
+
+/** The IClass push is fire-and-forget: let its microtasks run before asserting. */
+async function flushPush(): Promise<void> {
+  await new Promise(resolve => setImmediate(resolve));
 }
 
 describe('UpdateTask — isClosed → generalStatus normalization (#41)', () => {
@@ -126,5 +134,110 @@ describe('UpdateTask — wave-1a (cierre atómico): generalStatus=closed routes 
 
     const statusEvents = recorder.manyCalls.flatMap(m => m.events).filter(e => e.type === 'status_changed');
     expect(statusEvents).toHaveLength(0);
+  });
+});
+
+describe('UpdateTask — push to IClass on task end (PushIClassClosureOnTaskEnd)', () => {
+  const ORDER_CODE = 'OS-400';
+
+  function makeSetup() {
+    const repo = new InMemorySchedulingRepository();
+    const iclass = new InMemoryIClassClient();
+    const flagRepo = new InMemoryFeatureFlagRepository();
+    flagRepo.seed('iclass-close-action', true);
+    iclass.setServiceOrderSnapshot(ORDER_CODE, { iclassId: 'i1', iclassCodigo: ORDER_CODE, statusCode: '1', statusDescription: 'Aberta' });
+    const iclassClosurePush = new PushIClassClosureOnTaskEnd(iclass, flagRepo);
+    const any = new AnyLookup();
+    const uc = new UpdateTask(repo, any, any, any, any, any, undefined, undefined, iclassClosurePush);
+    return { repo, iclass, uc };
+  }
+
+  it("patch closes the task (WINS the race) → pushes IClass closure with the actor's name", async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'open', isClosed: false, iclassOrderCode: ORDER_CODE });
+
+    await uc.execute('task-1', { generalStatus: 'closed' }, ACTOR);
+
+    await flushPush();
+    const calls = iclass.getCloseCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.serviceOrderCode).toBe(ORDER_CODE);
+    expect(calls[0]!.commentary).toBe('Tarea cerrada en Prominense por Alice');
+  });
+
+  it('patch closes the task, no actor → pushes with actorName "Sistema"', async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'open', isClosed: false, iclassOrderCode: ORDER_CODE });
+
+    await uc.execute('task-1', { generalStatus: 'closed' }, undefined);
+
+    await flushPush();
+    expect(iclass.getCloseCalls()[0]!.commentary).toBe('Tarea cerrada en Prominense por Sistema');
+  });
+
+  it('patch dismisses the task (open → dismissed) → pushes IClass closure with CANCELADA', async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'open', isClosed: false, iclassOrderCode: ORDER_CODE });
+
+    await uc.execute('task-1', { generalStatus: 'dismissed' }, ACTOR);
+
+    await flushPush();
+    const calls = iclass.getCloseCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.commentary).toBe('Tarea descartada en Prominense por Alice');
+  });
+
+  it('patch closes the task but LOSES the race → does NOT push (the winner is responsible)', async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'open', isClosed: false, iclassOrderCode: ORDER_CODE });
+    repo.setBeforeCloseWriteHook(async () => {
+      repo.setBeforeCloseWriteHook(undefined);
+      await repo.closeTaskIfOpen('task-1', { origin: 'iclass', resultCode: 'REAGENDADO' });
+    });
+
+    await uc.execute('task-1', { generalStatus: 'closed' }, ACTOR);
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(0);
+  });
+
+  it('re-sending generalStatus=closed on an already-closed task (no-op) does NOT push', async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'closed', isClosed: true, iclassOrderCode: ORDER_CODE });
+
+    await uc.execute('task-1', { generalStatus: 'closed', notes: 'edit' }, ACTOR);
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(0);
+  });
+
+  it('re-sending generalStatus=dismissed on an already-dismissed task (no-op) does NOT push', async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'dismissed', isClosed: false, iclassOrderCode: ORDER_CODE });
+
+    await uc.execute('task-1', { generalStatus: 'dismissed', notes: 'edit' }, ACTOR);
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(0);
+  });
+
+  it('reopening a task (closed → open) does NOT push a close to IClass', async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'closed', isClosed: true, iclassOrderCode: ORDER_CODE });
+
+    await uc.execute('task-1', { generalStatus: 'open' }, ACTOR);
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(0);
+  });
+
+  it('an unrelated patch (no generalStatus change) does NOT push', async () => {
+    const { repo, iclass, uc } = makeSetup();
+    repo.seedTask({ id: 'task-1', generalStatus: 'open', isClosed: false, iclassOrderCode: ORDER_CODE });
+
+    await uc.execute('task-1', { notes: 'just a note' }, ACTOR);
+
+    await flushPush();
+    expect(iclass.getCloseCalls()).toHaveLength(0);
   });
 });

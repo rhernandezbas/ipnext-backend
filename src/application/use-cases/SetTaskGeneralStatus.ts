@@ -5,6 +5,7 @@ import { TaskActivityRecorder, ActorContext } from '@domain/ports/TaskActivityRe
 import { SYSTEM_ACTOR } from './taskActivityActor';
 import { applyTaskClosure } from './applyTaskClosure';
 import { readClearedClosureStamp, clearedClosureMetadata } from './reopenClosureStamp';
+import { PushIClassClosureOnTaskEnd } from './PushIClassClosureOnTaskEnd';
 
 const VALID_STATUSES: readonly TaskGeneralStatus[] = ['open', 'closed', 'dismissed'];
 
@@ -19,6 +20,8 @@ export class SetTaskGeneralStatus {
   constructor(
     private readonly repo: SchedulingRepository,
     private readonly recorder?: TaskActivityRecorder,
+    /** Optional best-effort push of the IClass closure when the task ends (AD-2 style). */
+    private readonly iclassClosurePush?: PushIClassClosureOnTaskEnd,
   ) {}
 
   async execute(id: string, status: string, actor?: ActorContext): Promise<ScheduledTask> {
@@ -56,6 +59,12 @@ export class SetTaskGeneralStatus {
           toValue: status,
         });
       }
+      // Best-effort IClass push — ONLY when THIS call actually won the closure race,
+      // and with `prev` (the task as it was BEFORE the change, still carrying its
+      // iclassOrderCode untouched by the write above).
+      if (result.closed && this.iclassClosurePush) {
+        void this.iclassClosurePush.execute(prev, 'closed', actor?.actorName ?? 'Sistema');
+      }
       return updated;
     }
 
@@ -77,6 +86,13 @@ export class SetTaskGeneralStatus {
         toValue: status,
         ...(metadata ? { metadata } : {}),
       });
+    }
+
+    // Best-effort IClass push on a real transition INTO 'dismissed' (not raced — this
+    // branch always writes unconditionally, so reaching it means this call is the one
+    // that made the change).
+    if (status === 'dismissed' && this.iclassClosurePush) {
+      void this.iclassClosurePush.execute(prev, 'dismissed', actor?.actorName ?? 'Sistema');
     }
 
     return updated;

@@ -26,6 +26,9 @@ import { TaskActivityRecorder } from '@domain/ports/TaskActivityRecorder';
 import { SYSTEM_ACTOR } from './taskActivityActor';
 import { applyTaskClosure } from './applyTaskClosure';
 import { normalizeResultCode } from './normalizeResultCode';
+import { ICLASS_COMPLETED_IN_PROMINENSE, ICLASS_CANCELLED_IN_PROMINENSE } from './iclassProminenseResultCodes';
+
+const PROMINENSE_RESULT_CODES = new Set([ICLASS_COMPLETED_IN_PROMINENSE, ICLASS_CANCELLED_IN_PROMINENSE].map(normalizeResultCode));
 import {
   ClosedServiceOrder,
   ClosedServiceOrderSummary,
@@ -354,6 +357,13 @@ export class IngestClosedServiceOrders {
     // Read before the upsert overwrites the mirrored status/result code.
     const repeatsAppliedDecision =
       existing?.closureAttemptedAt != null && (await this.repeatsMirroredDecision(s, history));
+    // The task was ended in Prominense and that pushed this close: never move or close it
+    // from here — an open task here was reopened on purpose (or its local close failed).
+    const decidedInProminense = PROMINENSE_RESULT_CODES.has(normalizeResultCode(s.resultCodeName ?? ''));
+    const reopenedAfterProminenseClose = decidedInProminense && task.generalStatus === 'open';
+    if (reopenedAfterProminenseClose) {
+      console.warn(`[iclass-closed] SO ${s.iclassCodigo} closed in IClass from Prominense but its task is open — left untouched`);
+    }
 
     const order: ClosedServiceOrder = {
       ...s,
@@ -381,7 +391,13 @@ export class IngestClosedServiceOrders {
     // Move the task only when the operator mapped this result code to a stage. A re-read of
     // an outcome already applied at '50' (office approval, or any bump in the same approval
     // cycle) is not a new decision: re-applying it would re-close a task an operator reopened.
-    if (rc?.mappedStageId && !repeatsAppliedDecision) {
+    if (reopenedAfterProminenseClose) {
+      // Nothing: the operator owns this task now.
+    } else if (rc?.mappedStageId && decidedInProminense) {
+      if (await this.scheduling.reconcileStuckTaskStage(task.id, rc.mappedStageId, this.inFlightStageCode)) {
+        counts.transitioned++;
+      }
+    } else if (rc?.mappedStageId && !repeatsAppliedDecision) {
       const moved = await this.scheduling.moveTaskToStage(task.id, rc.mappedStageId);
       counts.transitioned++;
       // #41 REQ-GS-ICLASS-CLOSEDBY-FLOW-1 — when the closure flow lands the task in a
@@ -451,6 +467,9 @@ export class IngestClosedServiceOrders {
         }
       }
     }
+
+    // The operator owns a task they reopened: no closure comment, inventory nor audit on it.
+    if (reopenedAfterProminenseClose) return;
 
     await this.runClosureSideEffects(order, task.id, scraped);
   }
