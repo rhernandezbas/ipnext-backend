@@ -108,7 +108,7 @@ Cuando el técnico (`assigneeId`) de una tarea CAMBIA mediante `UpdateTask`, el 
 #### Scenario: Desasignar técnico no toca IClass
 - **GIVEN** una tarea con técnico asignado
 - **WHEN** `UpdateTask` setea `assigneeId = null`
-- **THEN** el sistema NO llama a IClass (skip `no-mapping`)
+- **THEN** el sistema NO llama a IClass (skip `unassigned`)
 
 ### Requirement: Togglear los feature flags de acciones de OS desde la config
 

@@ -32,10 +32,10 @@ export interface IClassResultCodeDescriptor {
 
 /** Parameters for the closed-SO list query (cluster + date window). */
 export interface ListServiceOrdersParams {
-  /** Lower bound of the updatedDate window. */
-  updatedDateBegin: Date;
-  /** Upper bound of the updatedDate window. */
-  updatedDateEnd: Date;
+  /** Lower bound of the updatedDate window. Opcional SÓLO con `serviceOrderCode`. */
+  updatedDateBegin?: Date;
+  /** Upper bound of the updatedDate window. Opcional SÓLO con `serviceOrderCode`. */
+  updatedDateEnd?: Date;
   /** Optional exact `serviceOrderCode` filter — used by the per-task backfill reconcile. */
   serviceOrderCode?: string;
 }

@@ -49,7 +49,7 @@
 ```ts
 export interface AutoAssignOutcome {
   outcome: 'assigned' | 'skipped' | 'failed';
-  reason?: 'flag-off' | 'no-order-code' | 'no-mapping' | 'team-inactive'
+  reason?: 'flag-off' | 'no-order-code' | 'unassigned' | 'no-mapping' | 'team-inactive' | 'order-not-found' | 'no-schedule'
          | 'order-closed' | 'rejected' | 'unavailable' | 'not-open';
   teamLogin?: string;
 }
@@ -59,20 +59,30 @@ export interface IClassAutoAssigner {
 ```
 
 **Flujo de `AutoAssignIClassTeamOnTaskUpdate.maybeAssign`:**
-1. `assigneeId == null` → `skipped: no-mapping` (desasignar técnico no toca IClass).
+0. `getTask(taskId)` PRIMERO — sin saber si la tarea está atada a una OS de IClass no se
+   puede decidir si un skip merece quedar registrado o es puro ruido. Sin `iclassOrderCode`
+   (o tarea inexistente) → `skipped: no-order-code`, SIN registrar actividad (la tarea nunca
+   estuvo en IClass). A partir de acá (tarea CON `iclassOrderCode`) todo skip registra
+   `iclass_team_auto_assign_skipped`.
+1. `assigneeId == null` → `skipped: unassigned` (desasignar técnico no toca IClass).
 2. flag `iclass-assign-action` OFF → `skipped: flag-off`.
-3. `getTask(taskId)`; sin `iclassOrderCode` → `skipped: no-order-code`.
-4. `generalStatus !== 'open'` → `skipped: not-open`.
-5. `rbacUserRepo.findById(assigneeId)`; sin `iclassTeamLogin` → `skipped: no-mapping`.
-6. `teamRepo.getByLogin(login)`; no existe / `!active` / `!selectable` → `skipped: team-inactive`.
-7. `getServiceOrder` pre-check; null → `skipped: order-closed` (sin OS); `statusCode==='7'` → `skipped: order-closed`.
-8. `updateServiceOrder({ serviceOrderCode, requiredTeam: login })`:
-   - OK → recorder `iclass_team_auto_assigned` → `assigned`.
+3. `generalStatus !== 'open'` → `skipped: not-open`.
+4. `rbacUserRepo.findById(assigneeId)`; sin `iclassTeamLogin` → `skipped: no-mapping`.
+5. `teamRepo.getByLogin(login)`; no existe / `!active` / `!selectable` → `skipped: team-inactive`.
+6. sin `startDate`/`endDate` en la tarea → `skipped: no-schedule`. Chequeo LOCAL, va ANTES
+   del pre-check remoto: una tarea sin ventana nunca se puede empujar, no hay que gastar
+   un round-trip a IClass —que puede rate-limitar— para terminar en el mismo skip.
+7. `getServiceOrder` pre-check; null → `skipped: order-not-found`; `statusCode` 7 o 50 → `skipped: order-closed`.
+8. `updateServiceOrder({ serviceOrderCode, requiredTeam: login, scheduleStart, scheduleEnd })`:
+   - OK → recorder `iclass_team_auto_assigned` (metadata con la ventana empujada) → `assigned`.
    - `IClassRejectedError` → recorder `iclass_team_auto_assign_failed` (reason en metadata) → `failed: rejected`.
    - `IClassUnavailableError` → idem → `failed: unavailable`.
-9. Cualquier error inesperado dentro de `maybeAssign` se captura y se devuelve `failed` (NUNCA propaga). `UpdateTask` además lo envuelve en su propio try/catch como segunda red.
+9. Cualquier error inesperado — incluido un throw en el paso 0 — se captura en el catch
+   EXTERNO de `maybeAssign`, se registra como `iclass_team_auto_assign_failed` y se
+   devuelve `failed` con el MISMO motivo que quedó en la actividad (NUNCA propaga).
+   `UpdateTask` además lo envuelve en su propio try/catch como segunda red.
 
-**Guard de cambio en `UpdateTask`:** invocar `maybeAssign` solo si `data.assigneeId !== undefined && updated.assigneeId !== prev.assigneeId`. Reusa el `prev` snapshot (ya se carga cuando hay recorder; si no hay recorder, se carga el prev solo para este guard cuando el auto-assigner está presente y `assigneeId` viene en el body).
+**Guard de cambio en `UpdateTask`:** invocar `maybeAssign` cuando `data.assigneeId !== undefined && updated.assigneeId !== prev.assigneeId`, **o** cuando `startDate`/`endDate` cambiaron (comparados por epoch, no por string — reprogramar manteniendo el técnico también debe empujar la ventana). Excepción: un patch que REALMENTE transiciona la tarea a `closed`/`dismissed` (comparado contra `prev.generalStatus`, no contra el valor del body) no invoca al asignador — nada que reprogramar en una tarea que termina. Reusa el `prev` snapshot (ya se carga cuando hay recorder; si no hay recorder, se carga el prev solo para este guard cuando el auto-assigner está presente y el body toca `assigneeId`/`startDate`/`endDate`).
 
 ### AD-3 — Ola C: preview de despacho es READ-ONLY agregando datos existentes
 
@@ -114,7 +124,7 @@ El "estado devuelto" (Fase 1) NO se duplica acá: el FE enlaza la sub-tab existe
 | B2 | maybeAssign: flag OFF → `skipped: flag-off`, NO toca IClass | idem | idem |
 | B3 | maybeAssign: tarea sin `iclassOrderCode` → `skipped: no-order-code` | idem | idem |
 | B4 | maybeAssign: técnico sin `iclassTeamLogin` → `skipped: no-mapping` | idem | idem |
-| B5 | maybeAssign: assigneeId null → `skipped: no-mapping` | idem | idem |
+| B5 | maybeAssign: assigneeId null → `skipped: unassigned` | idem | idem |
 | B6 | maybeAssign: cuadrilla mapeada quedó inactiva → `skipped: team-inactive`, NO toca IClass | idem | idem |
 | B7 | maybeAssign: tarea no `open` → `skipped: not-open` | idem | idem |
 | B8 | maybeAssign: OS terminal en IClass (statusCode '7') → `skipped: order-closed`, NO updateServiceOrder | idem | idem |

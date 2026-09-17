@@ -212,6 +212,98 @@ describe('IClassClient', () => {
     expect(err.detail).toContain('codigoCliente ultrapassou o limite');
   });
 
+  // El endpoint de update responde en INGLÉS (`errors`), a diferencia del de cierre
+  // (`erros`): leerlo como caída enmascaró cientos de rechazos reales en producción.
+  it('HTTP 400 with an English errors body → IClassRejectedError (NOT IClassUnavailableError)', async () => {
+    const { http } = makeHttp({
+      post: [
+        LOGIN_OK,
+        { err: axiosError(400, { errors: [{ code: 'ICLERR_0212', description: 'Status da OS [Concluida] não permite esta ação.' }], success: false }) },
+      ],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err).not.toBeInstanceOf(IClassUnavailableError);
+    expect(err.detail).toContain('ICLERR_0212');
+  });
+
+  // Un 400 es determinista: sigue siendo RECHAZO (reintentarlo no lo arregla), pero el
+  // detalle en blanco no le sirve a nadie — tiene que decir que IClass no informó motivo.
+  it('HTTP 400 with an EMPTY errors array is a rejection that SAYS there was no reason', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, { errors: [], success: false }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err).not.toBeInstanceOf(IClassUnavailableError);
+    expect(err.detail).not.toBe('');
+    expect(err.detail).toContain('400');
+  });
+
+  // La misma regla vale para la clave PORTUGUESA, que es la que usa el endpoint de CIERRE.
+  it('HTTP 400 with an EMPTY erros array is a rejection with an explicit no-reason detail', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, { erros: [] }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).not.toBe('');
+  });
+
+  // Un payload sin lista pero igual de vacío (cadena vacía) es el mismo agujero.
+  it('HTTP 400 with a blank erros value still carries a usable detail', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, { erros: '' }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).not.toBe('');
+  });
+
   it('HTTP 400 with erros body → IClassRejectedError (NOT IClassUnavailableError)', async () => {
     const { http } = makeHttp({
       post: [
@@ -226,6 +318,125 @@ describe('IClassClient', () => {
     expect(err).toBeInstanceOf(IClassRejectedError);
     expect(err).not.toBeInstanceOf(IClassUnavailableError);
     expect(err.detail).toContain('ICLERR_0050');
+  });
+
+  // Un 400 en el body-`erros` de CREAR/CERRAR (no en el catch de axios) es el mismo hueco
+  // que el de mapError: una lista vacía no puede dejar el detalle en blanco.
+  it('createServiceOrder: an empty erros array is a rejection with an explicit no-reason detail', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { ok: { data: { codigoOS: null, erros: [] } } }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.createServiceOrder(baseInput).catch(e => e);
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).not.toBe('');
+  });
+
+  it('closeServiceOrder: an empty erros array is a rejection with an explicit no-reason detail', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { ok: { data: { erros: [] } } }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .closeServiceOrder({ serviceOrderCode: 'OS-100', resultCode: 'R', closeDate: new Date(), commentary: 'x' })
+      .catch(e => e);
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).not.toBe('');
+  });
+
+  // Un LOGIN roto (credenciales, auth mal armada) NUNCA es un rechazo de negocio: la
+  // tarea del operador ni siquiera llegó a viajar. Aunque IClass responda 400 con la
+  // misma forma de "erros de negocio", tiene que verse como caída (502), no como rechazo.
+  it('login failing with HTTP 400 (even with a business-shaped erros body) is IClassUnavailableError', async () => {
+    const { http } = makeHttp({
+      post: [{ err: axiosError(400, { erros: [{ code: 'AUTH', description: 'bad credentials' }] }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.createServiceOrder(baseInput).catch(e => e);
+    expect(err).toBeInstanceOf(IClassUnavailableError);
+    expect(err).not.toBeInstanceOf(IClassRejectedError);
+  });
+
+  // Un 400 SIN ninguna clave de negocio (`erros`/`errors`) no dice "IClass rechazó tu
+  // pedido" — dice que el request ni llegó a evaluarse. Eso es una caída, no un rechazo.
+  it('HTTP 400 with NEITHER erros NOR errors present is IClassUnavailableError', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, { message: 'Bad Request' }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.createServiceOrder(baseInput).catch(e => e);
+    expect(err).toBeInstanceOf(IClassUnavailableError);
+    expect(err).not.toBeInstanceOf(IClassRejectedError);
+  });
+
+  // El body de un error HTTP puede llegar como STRING crudo (HTML, texto plano, JSON
+  // inválido) — `parseJsonPreservingBigInts` devuelve el texto tal cual cuando no puede
+  // parsear. Un `'erros' in body` sobre eso explota; tiene que degradar a caída, no crashear.
+  it('HTTP 400 with a non-object (string) body is IClassUnavailableError, no crash', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, '<html>Bad Request</html>') }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.createServiceOrder(baseInput).catch(e => e);
+    expect(err).toBeInstanceOf(IClassUnavailableError);
+    expect(err).not.toBeInstanceOf(IClassRejectedError);
+  });
+
+  // Un objeto VACÍO es truthy pero no dice nada — mismo agujero que la lista vacía.
+  it('HTTP 400 with an empty-object erros payload is a rejection with an explicit no-reason detail', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, { erros: {} }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    // Exacto, no "no es esto ni aquello": un objeto vacío tiene que caer al MISMO
+    // fallback explícito que la lista vacía, no a un genérico tipo "[object Object]".
+    expect(err.detail).toBe('IClass rechazó con HTTP 400 sin informar motivo');
+  });
+
+  // Una forma no reconocida (mapa de campo→errores, no {code,description}) tiene que
+  // seguir dando un diagnóstico, pero JAMÁS el JSON crudo cross-layer.
+  it('HTTP 400 with an unrecognized object shape never leaks raw JSON in the detail', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, { errors: { campo: ['inválido'] }, success: false }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).not.toBe('');
+    expect(err.detail).not.toContain('{');
+    expect(err.detail).not.toContain('[');
   });
 
   it('caches listNodes within the TTL (single HTTP fetch)', async () => {
@@ -381,6 +592,46 @@ describe('IClassClient', () => {
   // GET /serviceorders/4949 → 204 (internal id 4949 doesn't exist). Fix: use
   // listServiceOrders with serviceOrderCode filter, then exact-match on codigo.
 
+  // Verificado en vivo: el filtro por código NO exige rango de fechas. La ventana de 29
+  // días dejaba "no encontrada" a cualquier OS quieta hace más de un mes — justo las que
+  // se reprograman.
+  it('A1b: getServiceOrder looks up by code WITHOUT the 29-day window', async () => {
+    const LIST_PAGE = {
+      ok: {
+        data: {
+          objects: [{
+            id: '101040619043', codigo: '5303', status: { id: '29', descricao: 'Agendada' },
+            contrato: {}, endereco: {}, node: {}, equipe: {}, tipoOs: {},
+            criadoPor: {}, alteradoPor: {}, credenciada: {}, coordenadasFechamento: {},
+          }],
+          hasMoreElements: false,
+        },
+      },
+    };
+    const { http, calls } = makeHttp({ post: [], get: [LIST_PAGE] });
+    const client = new IClassClient({ ...opts, http: http as never });
+    (client as any).token = 'TKN1';
+
+    const snapshot = await client.getServiceOrder('5303');
+
+    expect(snapshot!.iclassCodigo).toBe('5303');
+    const getCall = calls.find(c => c.method === 'GET')!;
+    expect(getCall.url).toContain('serviceOrderCode=5303');
+    expect(getCall.url).not.toContain('updatedDate_begin');
+    expect(getCall.url).not.toContain('updatedDate_end');
+  });
+
+  // Sin código no queda NINGÚN filtro ni ventana: el listado barrería el cluster entero.
+  it('A1f: getServiceOrder with a blank code returns null WITHOUT calling IClass', async () => {
+    const { http, calls } = makeHttp({ post: [], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+    (client as any).token = 'TKN1';
+
+    expect(await client.getServiceOrder('')).toBeNull();
+    expect(await client.getServiceOrder('   ')).toBeNull();
+    expect(calls.filter(c => c.method === 'GET')).toHaveLength(0);
+  });
+
   it('A1: getServiceOrder resolves code "4949" via list — NOT GET /serviceorders/4949', async () => {
     // The list response — paginator shape required by fetchAllPages
     const LIST_PAGE = {
@@ -421,7 +672,7 @@ describe('IClassClient', () => {
     expect(getCall.url).not.toMatch(/\/serviceorders\/4949($|\?)/);
   });
 
-  it('A1b: getServiceOrder returns iclassId + statusCode from list result', async () => {
+  it('A1e: getServiceOrder returns iclassId + statusCode from list result', async () => {
     // Verifies the 4 snapshot fields come from parseServiceOrderSummary on the list item
     const LIST_PAGE = {
       ok: {
@@ -749,6 +1000,146 @@ describe('IClassClient', () => {
     expect(err).toBeInstanceOf(IClassRejectedError);
     expect(err.detail).toContain('ICLERR_0208');
     expect(err.detail).toContain('OS não encontrada');
+  });
+
+  // La clave `errors` PRESENTE (sea array vacío, objeto de campo→mensajes o lo que sea)
+  // es lo que dice que IClass evaluó y rechazó — mismo criterio que el catch de axios.
+  // Antes sólo un array NO VACÍO contaba como rechazo: todo lo demás caía a "forma no
+  // reconocida" (unavailable), disfrazando un rechazo determinista de una caída.
+  it('A8d: updateServiceOrder with an EMPTY errors array on a 200 body is a rejection, not unavailable', async () => {
+    const UPDATE_EMPTY = { ok: { data: { errors: [], success: false } } };
+    const { http } = makeHttp({ post: [LOGIN_OK, UPDATE_EMPTY], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.updateServiceOrder({
+      serviceOrderCode: 'OS-100',
+      requiredTeam: 'IPNXEMAV',
+      scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+      scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+    }).catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).toBe('IClass rechazó el update sin informar motivo');
+  });
+
+  it('A8e: updateServiceOrder with a non-array (object) errors payload on a 200 body is a rejection', async () => {
+    const UPDATE_OBJ = { ok: { data: { errors: { campo: ['inválido'] }, success: false } } };
+    const { http } = makeHttp({ post: [LOGIN_OK, UPDATE_OBJ], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.updateServiceOrder({
+      serviceOrderCode: 'OS-100',
+      requiredTeam: 'IPNXEMAV',
+      scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+      scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+    }).catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).not.toBe('');
+    expect(err.detail).not.toContain('{');
+    expect(err.detail).not.toContain('[object Object]');
+  });
+
+  // `success: false` YA es la señal de negocio explícita — no hace falta que `errors`
+  // aporte nada. Sin esto, este body caía a "forma no reconocida" (unavailable).
+  it('A8e2: updateServiceOrder with success:false and NO errors key at all is still a rejection', async () => {
+    const UPDATE_NO_ERRORS_KEY = { ok: { data: { success: false } } };
+    const { http } = makeHttp({ post: [LOGIN_OK, UPDATE_NO_ERRORS_KEY], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.updateServiceOrder({
+      serviceOrderCode: 'OS-100',
+      requiredTeam: 'IPNXEMAV',
+      scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+      scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+    }).catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).toBe('IClass rechazó el update sin informar motivo');
+  });
+
+  // `errors: null` en soledad (sin success) NO es rechazo — mismo criterio que el cierre,
+  // donde `erros === null` significa éxito explícito. Tratarlo como rechazo confundiría
+  // los dos únicos significados que IClass le da a "null" en esta familia de endpoints.
+  it('A8e3: updateServiceOrder with errors:null and no success key is IClassUnavailableError, NOT a rejection', async () => {
+    const UPDATE_NULL_ERRORS = { ok: { data: { errors: null } } };
+    const { http } = makeHttp({ post: [LOGIN_OK, UPDATE_NULL_ERRORS], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.updateServiceOrder({
+      serviceOrderCode: 'OS-100',
+      requiredTeam: 'IPNXEMAV',
+      scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+      scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+    }).catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassUnavailableError);
+    expect(err).not.toBeInstanceOf(IClassRejectedError);
+  });
+
+  // Sin ni siquiera la clave `errors`, no hay señal de negocio: eso SÍ es forma no
+  // reconocida.
+  it('A8f: updateServiceOrder with neither success:true nor an errors key is IClassUnavailableError', async () => {
+    const UPDATE_UNKNOWN = { ok: { data: { weird: true } } };
+    const { http } = makeHttp({ post: [LOGIN_OK, UPDATE_UNKNOWN], get: [] });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client.updateServiceOrder({
+      serviceOrderCode: 'OS-100',
+      requiredTeam: 'IPNXEMAV',
+      scheduleStart: new Date('2026-06-18T11:00:00.000Z'),
+      scheduleEnd: new Date('2026-06-18T15:00:00.000Z'),
+    }).catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassUnavailableError);
+  });
+
+  // Un elemento del array SIN code/description/message tampoco puede degradar a
+  // "[object Object]" — mismo criterio que el objeto suelto.
+  it('A8g: an array error element without code/description never leaks "[object Object]"', async () => {
+    const { http } = makeHttp({
+      post: [
+        LOGIN_OK,
+        { err: axiosError(400, { errors: [{ campo: 'nombre' }], success: false }) },
+      ],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).not.toBe('');
+    expect(err.detail).not.toContain('[object Object]');
+  });
+
+  // Un array con elementos que igual formatean a VACÍO ('', []) es el mismo agujero un
+  // paso más adentro: el contenedor no estaba vacío, pero el texto final sí.
+  it('A8h: an errors array whose elements all format to blank still gets the explicit fallback', async () => {
+    const { http } = makeHttp({
+      post: [LOGIN_OK, { err: axiosError(400, { errors: [''], success: false }) }],
+      get: [],
+    });
+    const client = new IClassClient({ ...opts, http: http as never });
+
+    const err = await client
+      .updateServiceOrder({
+        serviceOrderCode: '6422',
+        requiredTeam: 'IPNXANDYM',
+        scheduleStart: new Date('2026-09-18T12:00:00Z'),
+        scheduleEnd: new Date('2026-09-18T16:00:00Z'),
+      })
+      .catch(e => e);
+
+    expect(err).toBeInstanceOf(IClassRejectedError);
+    expect(err.detail).toBe('IClass rechazó con HTTP 400 sin informar motivo');
   });
 
   it('A8c: formatScheduleDate reflects Argentina wall-clock for a known UTC instant', () => {

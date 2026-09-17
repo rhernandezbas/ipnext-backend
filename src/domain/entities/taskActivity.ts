@@ -49,6 +49,10 @@ export type ActivityType =
   // IClass auto-assign (Ola A — best-effort, triggered by UpdateTask)
   | 'iclass_team_auto_assigned'
   | 'iclass_team_auto_assign_failed'
+  // La asignación/reprogramación NO llegó a IClass por una condición previa (flag
+  // apagada, técnico sin cuadrilla, OS cerrada...). Sin este evento la tarea queda
+  // reprogramada en Prominense y con la ventana vieja en IClass, en silencio.
+  | 'iclass_team_auto_assign_skipped'
   // noc-broadcast-traceability — la tarea de RED se difundió al canal NOC (WhatsApp).
   | 'noc_broadcast_sent'
   // wave-1a (cierre atómico) — dos orígenes distintos aportaron un resultado de cierre

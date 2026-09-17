@@ -102,6 +102,93 @@ describe('UpdateTask — IClassAutoAssigner collaborator (C1-C5)', () => {
     expect(result!.assigneeId).toBe(NEW_ASSIGNEE);
   });
 
+  // Reprogramar: cambiar el día sin tocar el técnico también tiene que llegar a IClass,
+  // o el técnico sigue viendo la visita el día viejo.
+  it('C6: schedule changed with the same assignee → maybeAssign called with the current assignee', async () => {
+    const { schedulingRepo, spy, anyLookup } = await makeContext();
+    const uc = makeUpdateTask(schedulingRepo, anyLookup, spy);
+
+    await uc.execute(TASK_ID, { startDate: '2026-09-18T12:00:00.000Z', endDate: '2026-09-18T16:00:00.000Z' });
+
+    expect(spy.calls).toEqual([{ taskId: TASK_ID, assigneeId: OLD_ASSIGNEE }]);
+  });
+
+  it('C7: a patch that changes neither the assignee nor the schedule does not call maybeAssign', async () => {
+    const { schedulingRepo, spy, anyLookup } = await makeContext();
+    const uc = makeUpdateTask(schedulingRepo, anyLookup, spy);
+
+    await uc.execute(TASK_ID, { title: 'Sólo el título' });
+
+    expect(spy.calls).toEqual([]);
+  });
+
+  // El MISMO instante escrito con otro offset. Con comparación de strings esto parece
+  // un cambio de fecha y dispara un push a IClass que no cambia nada.
+  it('C8: resubmitting the same instant in another representation does not call maybeAssign', async () => {
+    const { schedulingRepo, spy, anyLookup } = await makeContext();
+    const uc = makeUpdateTask(schedulingRepo, anyLookup, spy);
+    await uc.execute(TASK_ID, { startDate: '2026-09-18T12:00:00.000Z', endDate: '2026-09-18T16:00:00.000Z' });
+    spy.calls.length = 0;
+
+    await uc.execute(TASK_ID, { startDate: '2026-09-18T09:00:00.000-03:00', endDate: '2026-09-18T13:00:00.000-03:00', title: 'Otra cosa' });
+
+    expect(spy.calls).toEqual([]);
+  });
+
+  // Cerrar y mover fechas en el mismo PUT (el FE reenvía el body completo) no debe
+  // ensuciar la timeline con un "no llegó a IClass" al lado de los eventos de cierre.
+  it('C10: a patch that closes the task does not call maybeAssign', async () => {
+    const { schedulingRepo, spy, anyLookup } = await makeContext();
+    const uc = makeUpdateTask(schedulingRepo, anyLookup, spy);
+
+    await uc.execute(TASK_ID, {
+      generalStatus: 'closed',
+      startDate: '2026-09-18T12:00:00.000Z',
+      endDate: '2026-09-18T16:00:00.000Z',
+    });
+
+    expect(spy.calls).toEqual([]);
+  });
+
+  it('C11: a patch that dismisses the task does not call maybeAssign', async () => {
+    const { schedulingRepo, spy, anyLookup } = await makeContext();
+    const uc = makeUpdateTask(schedulingRepo, anyLookup, spy);
+
+    await uc.execute(TASK_ID, {
+      generalStatus: 'dismissed',
+      startDate: '2026-09-18T12:00:00.000Z',
+      endDate: '2026-09-18T16:00:00.000Z',
+    });
+
+    expect(spy.calls).toEqual([]);
+  });
+
+  // El FE reenvía el body completo: una tarea YA cerrada llega con generalStatus 'closed'
+  // en cada guardado. Si eso silenciara al asignador, mover sus fechas se guardaría en
+  // Prominense sin llegar a IClass y SIN dejar rastro. La condición es de TRANSICIÓN.
+  it('C12: moving the dates of an ALREADY closed task still reaches the assigner', async () => {
+    const { schedulingRepo, spy, anyLookup } = await makeContext();
+    schedulingRepo.seedTask({ id: 'task-ya-cerrada', title: 'Cerrada', generalStatus: 'closed', assigneeId: OLD_ASSIGNEE });
+    const uc = makeUpdateTask(schedulingRepo, anyLookup, spy);
+
+    await uc.execute('task-ya-cerrada', {
+      generalStatus: 'closed',
+      startDate: '2026-09-18T12:00:00.000Z',
+      endDate: '2026-09-18T16:00:00.000Z',
+    });
+
+    expect(spy.calls).toEqual([{ taskId: 'task-ya-cerrada', assigneeId: OLD_ASSIGNEE }]);
+  });
+
+  it('C9: changing assignee and schedule in one patch calls maybeAssign once', async () => {
+    const { schedulingRepo, spy, anyLookup } = await makeContext();
+    const uc = makeUpdateTask(schedulingRepo, anyLookup, spy);
+
+    await uc.execute(TASK_ID, { assigneeId: NEW_ASSIGNEE, startDate: '2026-09-18T12:00:00.000Z', endDate: '2026-09-18T16:00:00.000Z' });
+
+    expect(spy.calls).toEqual([{ taskId: TASK_ID, assigneeId: NEW_ASSIGNEE }]);
+  });
+
   // C5: no assigner injected → behavior identical to current (no crash)
   it('C5: no assigner injected → executes normally without any assigner interaction', async () => {
     const { schedulingRepo, anyLookup } = await makeContext();

@@ -172,7 +172,8 @@ export class UpdateTask {
     // know whether this is a real open/closed→dismissed transition or a no-op on an
     // already-dismissed task) so the best-effort IClass push below can fire correctly.
     const isDismissingPatch = data.generalStatus === 'dismissed';
-    const needsPrev = !!(this.recorder || (this.autoAssigner && data.assigneeId !== undefined) || isClosingPatch || isDismissingPatch);
+    const touchesIClassSchedule = data.assigneeId !== undefined || data.startDate !== undefined || data.endDate !== undefined;
+    const needsPrev = !!(this.recorder || (this.autoAssigner && touchesIClassSchedule) || isClosingPatch || isDismissingPatch);
     const prev = needsPrev ? await this.repo.getTask(id) : null;
 
     // FIX-C (fix wave 2 W1a) — si este patch REABRE la tarea, el sello de cierre se lee
@@ -275,12 +276,39 @@ export class UpdateTask {
     // Guard: ONLY if assigneeId is in the body AND changed from the prior value.
     // The try/catch is a second safety net — maybeAssign itself NEVER throws,
     // but we wrap it anyway to ensure the local update ALWAYS completes.
+    // Reprogramar también viaja por acá: la llamada a IClass manda equipo y ventana
+    // juntos, así que un cambio de fecha con el mismo técnico usa el mismo camino.
+    // Comparar por epoch, no por string: el mismo instante escrito con otro offset
+    // no es un cambio de fecha. Una fecha impresentable cae al valor crudo — así dos
+    // basuras IGUALES no disparan un push a IClass que no cambia nada.
+    const instantOf = (v: Date | string | null | undefined) => {
+      if (!v) return null;
+      const ms = new Date(v).getTime();
+      return Number.isNaN(ms) ? String(v) : ms;
+    };
+    const sameInstant = (a: Date | string | null | undefined, b: Date | string | null | undefined) =>
+      instantOf(a) === instantOf(b);
+    const scheduleChanged =
+      !!updated && !!prev &&
+      ((data.startDate !== undefined && !sameInstant(updated.startDate, prev.startDate)) ||
+        (data.endDate !== undefined && !sameInstant(updated.endDate, prev.endDate)));
+
+    // Un patch que realmente CIERRA o DESCARTA la tarea no reprograma nada: el FE reenvía
+    // el body completo, así que las fechas viajan igual, y mandarlo al asignador sólo
+    // ensucia la línea de tiempo al lado de los eventos de cierre.
+    // Ojo: la condición es de TRANSICIÓN, no de presencia. Un PUT sobre una tarea YA
+    // cerrada reenvía `generalStatus:'closed'` en cada guardado; si eso silenciara al
+    // asignador, mover las fechas de una tarea cerrada volvería a guardarse en Prominense
+    // sin llegar a IClass y sin dejar rastro — justo el agujero que vinimos a tapar.
+    const endsTheTask =
+      (isClosingPatch && prev?.generalStatus !== 'closed') ||
+      (isDismissingPatch && prev?.generalStatus !== 'dismissed');
     if (
       this.autoAssigner &&
-      data.assigneeId !== undefined &&
       updated &&
       prev &&
-      updated.assigneeId !== prev.assigneeId
+      !endsTheTask &&
+      ((data.assigneeId !== undefined && updated.assigneeId !== prev.assigneeId) || scheduleChanged)
     ) {
       try {
         await this.autoAssigner.maybeAssign(id, updated.assigneeId ?? null, actor);

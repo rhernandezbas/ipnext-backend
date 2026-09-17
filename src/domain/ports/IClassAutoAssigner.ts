@@ -12,9 +12,14 @@ import type { ActorContext } from './TaskActivityRecorder';
 export type AutoAssignSkipReason =
   | 'flag-off'
   | 'no-order-code'
+  /** Nadie asignado (desasignar). Distinto de `no-mapping`: no falta configuración. */
+  | 'unassigned'
+  /** Hay técnico asignado pero no tiene cuadrilla de IClass configurada. */
   | 'no-mapping'
   | 'team-inactive'
   | 'order-closed'
+  /** The OS code exists on the task but IClass does not know it (404/204). */
+  | 'order-not-found'
   | 'not-open'
   | 'no-schedule';
 

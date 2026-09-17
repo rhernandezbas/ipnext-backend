@@ -31,11 +31,6 @@ const SUBRESOURCE_BACKOFF_MS = 400;
 /** Window (days) scanned over recent SOs to discover active soType ids for the
  * result-code catalog sync. Under the IClass 30-day list cap. */
 const RESULT_CODE_DISCOVERY_DAYS = 28;
-/** Window (days) used by getServiceOrder to find the OS via the list endpoint.
- * IClass caps the updatedDate range at 30 days; we use 29 to stay safely under.
- * A Prominense-created OS that was last updated more than 29 days ago won't be
- * found by the pre-check — acceptable since assign/close act on recent OS. */
-const SERVICE_ORDER_LOOKUP_DAYS = 29;
 /** Máximo de reintentos ante un HTTP 429 (rate-limit de estado). */
 const MAX_RATE_LIMIT_RETRIES = 4;
 /**
@@ -83,7 +78,7 @@ export interface IClassClientOptions {
 
 /** Minimal shape of an axios-style transport error. */
 function isAxiosLikeError(e: unknown): e is {
-  response?: { status?: number; headers?: Record<string, unknown>; data?: { erros?: unknown } };
+  response?: { status?: number; headers?: Record<string, unknown>; data?: { erros?: unknown; errors?: unknown } };
 } {
   return typeof e === 'object' && e !== null && 'isAxiosError' in e;
 }
@@ -106,21 +101,53 @@ export function parseRetryAfterMs(e: unknown): number | undefined {
  * joined by "; ". Falls back to String() for unexpected shapes. Never leaks raw JSON
  * across the layer boundary — the result is a plain string carried by the domain error.
  */
+/**
+ * Formatea UNA entrada de error. Nunca cae a `String({…})` === "[object Object]" — eso
+ * no es un diagnóstico, es un estorbo. Compartida entre el elemento de un array y el
+ * objeto suelto, para que ambos caminos degraden IGUAL ante una forma no reconocida.
+ */
+function describeOneError(e: unknown): string {
+  if (!e || typeof e !== 'object') return String(e);
+  const o = e as { code?: unknown; description?: unknown; message?: unknown };
+  const code = o.code != null ? String(o.code) : '';
+  const desc = o.description != null ? String(o.description) : o.message != null ? String(o.message) : '';
+  if (code && desc) return `${code}: ${desc}`;
+  if (code || desc) return code || desc;
+  // Ni code/description/message: forma no reconocida (ej. un mapa de campo→errores).
+  // NUNCA el JSON crudo — el invariante de la función es no filtrarlo cross-layer.
+  const keys = Object.keys(o);
+  return keys.length > 0 ? `IClass devolvió un error con campos: ${keys.join(', ')}` : String(e);
+}
+
 function formatIClassErrors(erros: unknown): string {
   if (Array.isArray(erros)) {
-    return erros
-      .map(e => {
-        if (e && typeof e === 'object') {
-          const o = e as { code?: unknown; description?: unknown };
-          const code = o.code != null ? String(o.code) : '';
-          const desc = o.description != null ? String(o.description) : '';
-          return code && desc ? `${code}: ${desc}` : code || desc || String(e);
-        }
-        return String(e);
-      })
-      .join('; ');
+    return erros.map(describeOneError).join('; ');
   }
-  return String(erros);
+  return describeOneError(erros);
+}
+
+/**
+ * Devuelve el payload de errores SÓLO si aporta un motivo. Una lista vacía o una cadena
+ * vacía no dicen nada: como rechazo dejan el detalle en blanco y tapan el error real.
+ */
+function withDetail(v: unknown): unknown {
+  if (Array.isArray(v)) return v.length > 0 ? v : undefined;
+  // Un objeto {} es truthy pero no dice nada — mismo hueco que la lista vacía.
+  if (v && typeof v === 'object') return Object.keys(v).length > 0 ? v : undefined;
+  return v ? v : undefined;
+}
+
+/**
+ * Motivo legible para un rechazo de IClass. Cuando el payload no aporta nada, lo dice
+ * explícitamente en vez de devolver una cadena vacía.
+ */
+function rejectionDetail(raw: unknown, fallback: string): string {
+  const useful = withDetail(raw);
+  if (useful === undefined) return fallback;
+  // El contenedor no estaba vacío, pero podría formatear a una cadena vacía igual
+  // (ej. `['']` o `[[]]`) — ese es el MISMO hueco, un paso más adentro.
+  const formatted = formatIClassErrors(useful).trim();
+  return formatted === '' ? fallback : formatted;
 }
 
 /**
@@ -211,7 +238,9 @@ export class IClassClient implements IClassPort {
       payload,
     );
     if (data.erros !== null && data.erros !== undefined) {
-      throw new IClassRejectedError(formatIClassErrors(data.erros));
+      // Una lista vacía sigue siendo un rechazo (no asumimos éxito al crear), pero el
+      // detalle tiene que decir algo. Mismo criterio que mapError.
+      throw new IClassRejectedError(rejectionDetail(data.erros, 'IClass rechazó la creación sin informar motivo'));
     }
     const orderCode = data.codigoOS;
     if (!orderCode) {
@@ -223,12 +252,13 @@ export class IClassClient implements IClassPort {
   // ── Closure loop (read path) ──────────────────────────────────────────────
 
   async listServiceOrders(params: ListServiceOrdersParams): Promise<ClosedServiceOrderSummary[]> {
-    const base = new URLSearchParams({
-      clusterName: this.clusterName,
-      updatedDate_begin: formatListDate(params.updatedDateBegin),
-      updatedDate_end: formatListDate(params.updatedDateEnd),
-      pagesize: '60',
-    });
+    const base = new URLSearchParams({ clusterName: this.clusterName, pagesize: '60' });
+    // Verificado en vivo: el rango de fechas es obligatorio SALVO cuando se filtra por
+    // código exacto. Mandarlo igual limita la búsqueda a las OS movidas hace poco.
+    if (params.updatedDateBegin && params.updatedDateEnd) {
+      base.set('updatedDate_begin', formatListDate(params.updatedDateBegin));
+      base.set('updatedDate_end', formatListDate(params.updatedDateEnd));
+    }
     if (params.serviceOrderCode) base.set('serviceOrderCode', params.serviceOrderCode);
     // strict: verified live — 3 consecutive FULL pages of 60 on /serviceorders,
     // then nothing more. No evidence of the /teams/{id}/locations anomaly here.
@@ -485,7 +515,14 @@ export class IClassClient implements IClassPort {
       if (!token) throw new IClassUnavailableError('IClass login returned no access_token');
       this.token = token;
     } catch (e) {
-      throw this.mapError(e);
+      // Un fallo de LOGIN nunca es un rechazo de negocio: la tarea del operador ni
+      // siquiera llegó a viajar. Credenciales o auth rotas son una caída de nuestra
+      // integración, y como tal tiene que verse (502), no como "IClass rechazó tu pedido".
+      const mapped = this.mapError(e);
+      if (mapped instanceof IClassRejectedError) {
+        throw new IClassUnavailableError(`IClass login failed: ${mapped.detail}`);
+      }
+      throw mapped;
     }
   }
 
@@ -544,9 +581,9 @@ export class IClassClient implements IClassPort {
    * filter and returns the full summary shape, so we resolve the OS via the list
    * and return the first exact-code match.
    *
-   * Lookback window: IClass caps the updatedDate range at 30 days; we use 29
-   * (SERVICE_ORDER_LOOKUP_DAYS). An OS last updated more than 29 days ago won't
-   * be found — acceptable since assign/close act on recently-created OS.
+   * Sin ventana de fechas: verificado en vivo que el filtro por código exacto NO exige
+   * el rango (que sí es obligatorio para un listado general). Mandarlo dejaba "no
+   * encontrada" a toda OS quieta hace más de 29 días, justo las que se reprograman.
    *
    * Exact-match guard: the IClass filter may behave as a LIKE/prefix match, so
    * we require `String(m.iclassCodigo) === String(code)` — not just matches[0].
@@ -557,13 +594,10 @@ export class IClassClient implements IClassPort {
    * null = "OS not found"). A true HTTP 429 also propagates as IClassUnavailableError.
    */
   async getServiceOrder(code: string): Promise<ServiceOrderSnapshot | null> {
-    const now = this.now();
-    const begin = new Date(now.getTime() - SERVICE_ORDER_LOOKUP_DAYS * 24 * 60 * 60 * 1000);
-    const matches = await this.listServiceOrders({
-      serviceOrderCode: code,
-      updatedDateBegin: begin,
-      updatedDateEnd: now,
-    });
+    // Sin código no hay filtro NI ventana: el listado quedaría sin ningún límite y
+    // barrería el cluster entero página por página. Ningún código = ninguna OS.
+    if (!code || !String(code).trim()) return null;
+    const matches = await this.listServiceOrders({ serviceOrderCode: code });
     const m = matches.find(s => String(s.iclassCodigo) === String(code)) ?? null;
     if (!m) return null;
     return {
@@ -613,7 +647,9 @@ export class IClassClient implements IClassPort {
       throw new IClassUnavailableError('IClass close returned unrecognized response shape');
     }
     if (typed.erros !== null && typed.erros !== undefined) {
-      throw new IClassRejectedError(formatIClassErrors(typed.erros));
+      // Sólo `erros === null` es éxito explícito. Una lista vacía NO se asume éxito —
+      // daríamos por cerrada una OS que sigue abierta — pero el detalle no queda en blanco.
+      throw new IClassRejectedError(rejectionDetail(typed.erros, 'IClass rechazó el cierre sin informar motivo'));
     }
     // erros === null → explicit success.
   }
@@ -896,10 +932,19 @@ export class IClassClient implements IClassPort {
       // Explicit success.
       return;
     }
-    if (Array.isArray(typed.errors) && typed.errors.length > 0) {
-      throw new IClassRejectedError(formatIClassErrors(typed.errors));
+    // `success === false` YA es la señal de negocio explícita, independientemente de lo
+    // que traiga `errors` (vacío, ausente): IClass evaluó el pedido y dijo que no.
+    // La PRESENCIA de `errors` CON CONTENIDO (array, objeto de campo→mensajes, string) es
+    // la MISMA señal aunque `success` no viniera. `errors: null` en soledad NO cuenta —
+    // mismo criterio que el endpoint de cierre, donde `erros === null` es éxito explícito;
+    // tratarlo como rechazo confundiría los dos únicos significados que IClass le da a
+    // "null" en esta familia de endpoints. Antes sólo un array no-vacío contaba como
+    // rechazo: `{success:false}` sin `errors`, o `{errors:{campo:[...]}}`, caían a "forma
+    // no reconocida" (unavailable), disfrazando un rechazo determinista de una caída.
+    if (typed.success === false || ('errors' in typed && typed.errors !== null)) {
+      throw new IClassRejectedError(rejectionDetail(typed.errors, 'IClass rechazó el update sin informar motivo'));
     }
-    // Neither success:true nor errors array — unrecognized shape (AD-4).
+    // Ni success:true ni la clave errors — de verdad una forma no reconocida (AD-4).
     throw new IClassUnavailableError('IClass update returned unrecognized response shape');
   }
 
@@ -965,10 +1010,25 @@ export class IClassClient implements IClassPort {
     if (e instanceof IClassUnavailableError || e instanceof IClassRejectedError) return e;
     if (isAxiosLikeError(e)) {
       const status = e.response?.status;
-      // HTTP 400 carrying business `erros` is an explicit rejection, not an outage.
-      const erros = e.response?.data?.erros;
-      if (status === 400 && erros !== null && erros !== undefined) {
-        return new IClassRejectedError(formatIClassErrors(erros));
+      // HTTP 400 con errores de negocio es un RECHAZO, no una caída. El endpoint de
+      // cierre los manda como `erros` (portugués) y el de update como `errors` (inglés):
+      // mirar sólo uno hacía pasar cientos de rechazos reales por "IClass no disponible".
+      // Una lista vacía no es un rechazo con motivo: deja el detalle en blanco y tapa el 400.
+      // La PRESENCIA de la clave (aunque venga vacía) es lo que dice que IClass está
+      // hablando de negocio; su ausencia es un 400 crudo (login roto, request mal armado)
+      // y eso es una caída nuestra, no un rechazo del operador.
+      // El body puede llegar como STRING (HTML, texto plano, JSON inválido — ver
+      // parseJsonPreservingBigInts, que devuelve el string crudo cuando no puede parsear):
+      // `in` sobre un primitivo explota. Sin objeto no hay negocio que hablar.
+      const rawBody = e.response?.data;
+      const body = rawBody && typeof rawBody === 'object' ? (rawBody as { erros?: unknown; errors?: unknown }) : undefined;
+      const speaksBusiness = body !== undefined && ('erros' in body || 'errors' in body);
+      if (status === 400 && speaksBusiness) {
+        // Preferimos la clave que TENGA contenido útil — si ambas vinieran vacías,
+        // rejectionDetail cae al mismo fallback explícito.
+        return new IClassRejectedError(
+          rejectionDetail(withDetail(body?.erros) ?? withDetail(body?.errors), 'IClass rechazó con HTTP 400 sin informar motivo'),
+        );
       }
       return new IClassUnavailableError(
         status ? `IClass responded with HTTP ${status}` : 'IClass connection failed',
