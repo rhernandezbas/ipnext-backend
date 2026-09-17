@@ -111,6 +111,279 @@ describe('GetTeamsLiveStatus', () => {
 
     expect(res.map((r) => r.login).sort()).toEqual(['IPNXANDYM', 'IPNXSEBAM']);
   });
+
+  // The stored trail is refreshed every 6h by an ingest that is OFF in production, so the
+  // live view asks IClass for the last position of each team (one cheap call per team).
+  describe('live read from IClass', () => {
+    function liveSource(teams: TeamDescriptor[], byLogin: Record<string, TeamLocationPoint | Error | null>) {
+      const calls: string[] = [];
+      return {
+        calls,
+        source: {
+          ...source(teams),
+          async getLastTeamLocation(login: string) {
+            calls.push(login);
+            const value = byLogin[login];
+            if (value instanceof Error) throw value;
+            return value ?? null;
+          },
+        } as TeamLocationSource,
+      };
+    }
+
+    it('serves the position IClass reports now, over an older stored one', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      await repo.saveMany([point('2026-07-24T10:00:00Z', 'IPNXDENIC', -34.10, -59.10)]);
+      const { source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC', -34.65197742, -59.44804661) },
+      );
+
+      const res = await new GetTeamsLiveStatus({ repo, source: live, now: () => NOW }).execute();
+
+      expect(res[0].state).toBe('ACTIVA');
+      expect(res[0].latitude).toBe(-34.65197742);
+      expect(res[0].minutesSinceLastPoint).toBeCloseTo(1, 1);
+    });
+
+    it('persists what it reads, so the history keeps growing without the ingest', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const { source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC') },
+      );
+
+      await new GetTeamsLiveStatus({ repo, source: live, now: () => NOW }).execute();
+
+      expect(await repo.findLatestPerTeam()).toHaveLength(1);
+    });
+
+    it('falls back to the stored point when IClass fails for that team', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      await repo.saveMany([point('2026-07-26T12:41:45Z', 'IPNXDENIC')]);
+      const { source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: new Error('IClass unavailable') },
+      );
+
+      const res = await new GetTeamsLiveStatus({ repo, source: live, now: () => NOW }).execute();
+
+      expect(res[0].state).toBe('ACTIVA');
+      expect(res[0].lastPointAt!.toISOString()).toBe('2026-07-26T12:41:45.000Z');
+    });
+
+    it('reuses the reading for a short while, so refreshing the map does not hammer IClass', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const { calls, source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC') },
+      );
+      let now = NOW;
+      const useCase = new GetTeamsLiveStatus({ repo, source: live, now: () => now, liveCacheSeconds: 90 });
+
+      await useCase.execute();
+      await useCase.execute();
+      expect(calls).toHaveLength(1);
+
+      now = new Date(NOW.getTime() + 91_000);
+      await useCase.execute();
+      expect(calls).toHaveLength(2);
+    });
+
+    it('serves the stored point when it is NEWER than what IClass returns', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      await repo.saveMany([point('2026-07-26T12:44:00Z', 'IPNXDENIC', -34.65, -59.44)]);
+      const { source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: point('2026-07-26T10:00:00Z', 'IPNXDENIC', -34.10, -59.10) },
+      );
+
+      const res = await new GetTeamsLiveStatus({ repo, source: live, now: () => NOW }).execute();
+
+      expect(res[0].lastPointAt!.toISOString()).toBe('2026-07-26T12:44:00.000Z');
+      expect(res[0].latitude).toBe(-34.65);
+    });
+
+    it('does not fan out once per concurrent reader of the map', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const { calls, source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC') },
+      );
+      const useCase = new GetTeamsLiveStatus({ repo, source: live, now: () => NOW });
+
+      await Promise.all([useCase.execute(), useCase.execute(), useCase.execute()]);
+
+      expect(calls).toEqual(['IPNXDENIC']);
+    });
+
+    // Ante un "Espere um pouco" de IClass todas fallan: reintentar en cada refresco del
+    // mapa hostiga a la API que acaba de pedir espera, pero esperar 90s es demasiado.
+    it('backs off briefly when IClass failed for every team, then retries', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      await repo.saveMany([point('2026-07-26T12:41:45Z', 'IPNXDENIC')]);
+      const { calls, source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: new Error('IClass unavailable') },
+      );
+      let now = NOW;
+      const useCase = new GetTeamsLiveStatus({ repo, source: live, now: () => now, liveRetrySeconds: 15 });
+
+      await useCase.execute();
+      const res = await useCase.execute();
+      expect(calls).toHaveLength(1);
+      expect(res[0].state).toBe('ACTIVA'); // sigue sirviendo lo persistido
+
+      now = new Date(NOW.getTime() + 16_000);
+      await useCase.execute();
+      expect(calls).toHaveLength(2);
+    });
+
+    it('retries on the next request the teams IClass failed for, without waiting the full window', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const responses: Record<string, TeamLocationPoint | Error | null> = {
+        IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC'),
+        IPNXANDYM: new Error('IClass unavailable'),
+      };
+      const { calls, source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis'), team('IPNXANDYM', 'Andy')],
+        responses,
+      );
+      const useCase = new GetTeamsLiveStatus({ repo, source: live, now: () => NOW });
+
+      await useCase.execute();
+      responses.IPNXANDYM = point('2026-07-26T12:44:30Z', 'IPNXANDYM');
+      const res = await useCase.execute();
+
+      expect(calls.filter(c => c === 'IPNXANDYM')).toHaveLength(2);
+      // …y sólo a esa: releer el roster entero amplificaría la carga sobre un IClass ya lento.
+      expect(calls.filter(c => c === 'IPNXDENIC')).toHaveLength(1);
+      expect(res.find(r => r.login === 'IPNXANDYM')!.state).toBe('ACTIVA');
+      expect(res.find(r => r.login === 'IPNXDENIC')!.state).toBe('ACTIVA');
+    });
+
+    it('gives up on IClass when the reading budget is spent, serving what is stored', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      await repo.saveMany([point('2026-07-26T12:41:45Z', 'IPNXDENIC')]);
+      const { calls, source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC') },
+      );
+
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const res = await new GetTeamsLiveStatus({ repo, source: live, now: () => NOW, liveBudgetSeconds: 0 }).execute();
+
+      expect(calls).toHaveLength(0);
+      expect(res[0].lastPointAt!.toISOString()).toBe('2026-07-26T12:41:45.000Z');
+      // Apagado por configuración: no corresponde acusar a IClass de no responder.
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    // Al vencer el presupuesto la respuesta ya se fue: lo que llegue tarde no puede
+    // colarse en el cache ni marcar a esa cuadrilla como leída.
+    it('ignores a reply that arrives after the reading budget expired', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      let releaseLate: (() => void) | undefined;
+      const late = new Promise<void>((resolve) => {
+        releaseLate = resolve;
+      });
+      const calls: string[] = [];
+      const live: TeamLocationSource = {
+        ...source([team('IPNXDENIC', 'Denis'), team('IPNXANDYM', 'Andy')]),
+        async getLastTeamLocation(login: string) {
+          calls.push(login);
+          if (login === 'IPNXANDYM') await late;
+          return point('2026-07-26T12:44:00Z', login);
+        },
+      };
+      const useCase = new GetTeamsLiveStatus({
+        repo, source: live, now: () => NOW, liveBudgetSeconds: 0.05, liveConcurrency: 2,
+      });
+
+      const res = await useCase.execute();
+      expect(res.find(r => r.login === 'IPNXANDYM')!.state).toBe('SIN_RASTRO'); // no esperó
+      releaseLate!();
+      await late;
+      await new Promise((r) => setImmediate(r));
+
+      // El punto tardío no se coló en el rastro a espaldas del guardado…
+      expect((await repo.findLatestPerTeam()).map(p => p.teamLogin)).toEqual(['IPNXDENIC']);
+
+      await useCase.execute();
+
+      // …ni dejó la cuadrilla marcada como leída.
+      expect(calls.filter(c => c === 'IPNXANDYM')).toHaveLength(2);
+    });
+
+    // Releer una cuadrilla no puede extenderle la ventana a las demás: si no, una que
+    // falla seguido mantiene al resto del mapa congelado ventana tras ventana.
+    it('does not renew the cache window for the teams it did not re-read', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const responses: Record<string, TeamLocationPoint | Error | null> = {
+        IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC'),
+        IPNXANDYM: new Error('IClass unavailable'),
+      };
+      const { calls, source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis'), team('IPNXANDYM', 'Andy')],
+        responses,
+      );
+      let now = NOW;
+      const useCase = new GetTeamsLiveStatus({ repo, source: live, now: () => now, liveCacheSeconds: 90 });
+
+      await useCase.execute();
+      now = new Date(NOW.getTime() + 50_000);
+      responses.IPNXANDYM = point('2026-07-26T12:45:00Z', 'IPNXANDYM');
+      await useCase.execute();
+      expect(calls.filter(c => c === 'IPNXDENIC')).toHaveLength(1);
+
+      now = new Date(NOW.getTime() + 95_000);
+      await useCase.execute();
+
+      expect(calls.filter(c => c === 'IPNXDENIC')).toHaveLength(2);
+    });
+
+    it('reads again for a team that joined the roster inside the cache window', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const roster = [team('IPNXDENIC', 'Denis Corzo')];
+      const { calls, source: live } = liveSource(roster, {
+        IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC'),
+        IPNXNUEVO: point('2026-07-26T12:44:30Z', 'IPNXNUEVO'),
+      });
+      const useCase = new GetTeamsLiveStatus({ repo, source: live, now: () => NOW });
+
+      await useCase.execute();
+      roster.push(team('IPNXNUEVO', 'Nuevo'));
+      const res = await useCase.execute();
+
+      expect(calls).toContain('IPNXNUEVO');
+      expect(res.find(r => r.login === 'IPNXNUEVO')!.state).toBe('ACTIVA');
+    });
+
+    it('persists the position exactly as IClass reported it', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const { source: live } = liveSource(
+        [team('IPNXDENIC', 'Denis Corzo')],
+        { IPNXDENIC: point('2026-07-26T12:44:00Z', 'IPNXDENIC', -34.65197742, -59.44804661) },
+      );
+
+      await new GetTeamsLiveStatus({ repo, source: live, now: () => NOW }).execute();
+
+      const [stored] = await repo.findLatestPerTeam();
+      expect(stored.latitude).toBe(-34.65197742);
+      expect(stored.longitude).toBe(-59.44804661);
+      expect(stored.recordedAt.toISOString()).toBe('2026-07-26T12:44:00.000Z');
+    });
+
+    it('keeps a team without any position as SIN_RASTRO', async () => {
+      const repo = new InMemoryTeamLocationRepository();
+      const { source: live } = liveSource([team('IPNXSEBAM', 'Seba M')], { IPNXSEBAM: null });
+
+      const res = await new GetTeamsLiveStatus({ repo, source: live, now: () => NOW }).execute();
+
+      expect(res[0].state).toBe('SIN_RASTRO');
+    });
+  });
 });
 
 describe('GetTeamDailyJourney', () => {

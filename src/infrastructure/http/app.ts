@@ -1265,6 +1265,18 @@ const prismaFiberInstallTaskWriter: FiberInstallTaskWriter = {
 // existence AND the isNetworkProject flag, so CreateTask's symmetric project↔kind
 // guard runs from ONE query (no N+1). Replaces the old prismaClientLookup('Project')
 // wrapper at the CreateTask project slot.
+/**
+ * Valor numérico de una env var; `undefined` (= default del consumidor) si falta o no es
+ * válida, para que un env mal cargado nunca desactive una protección en silencio.
+ */
+function envNumber(name: string, opts: { min: number; max: number; integer?: boolean }): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < opts.min || value > opts.max) return undefined;
+  return opts.integer ? Math.floor(value) : value;
+}
+
 function prismaProjectKindLookup(id: string): Promise<{ id: string; isNetworkProject: boolean } | null> {
   return (prisma.project as any).findUnique({ where: { id }, select: { id: true, isNetworkProject: true } });
 }
@@ -2766,7 +2778,17 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
   if (teamLocationSource) {
     const teamLocationRepo = new PrismaTeamLocationRepository();
     app.use('/api/technicians', createTechnicianLocationRouter({
-      getTeamsLiveStatus: new GetTeamsLiveStatus({ repo: teamLocationRepo, source: teamLocationSource }),
+      // Las perillas de la lectura en vivo se ajustan por env: si IClass cambia su rate
+      // limit o su latencia, se mueven sin tocar código.
+      getTeamsLiveStatus: new GetTeamsLiveStatus({
+        repo: teamLocationRepo,
+        source: teamLocationSource,
+        liveCacheSeconds: envNumber('TEAMS_LIVE_CACHE_SECONDS', { min: 1, max: 600 }),
+        // 0 apaga la lectura en vivo: el mapa sirve sólo el rastro persistido.
+        liveBudgetSeconds: envNumber('TEAMS_LIVE_BUDGET_SECONDS', { min: 0, max: 60 }),
+        liveRetrySeconds: envNumber('TEAMS_LIVE_RETRY_SECONDS', { min: 1, max: 600 }),
+        liveConcurrency: envNumber('TEAMS_LIVE_CONCURRENCY', { min: 1, max: 16, integer: true }),
+      }),
       getTeamDailyJourney: new GetTeamDailyJourney({ repo: teamLocationRepo }),
       auditServiceOrderPresence: new AuditServiceOrderPresence({
         iclass: buildIClassClient(),

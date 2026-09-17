@@ -832,8 +832,23 @@ export class IClassClient implements IClassPort {
     const data = await this.authedGet<unknown>(
       `/teams/lastlocation?login=${encodeURIComponent(login)}`,
     );
+    // El rate limit de IClass viaja como 200 con texto plano: leerlo como "sin rastro"
+    // marcaría a toda la flota como SIN_RASTRO sin que nadie se entere.
+    if (isRateLimited(data)) {
+      throw new IClassUnavailableError(`IClass rate-limited (Espere um pouco) on lastlocation for ${login}`);
+    }
     if (!data || typeof data !== 'object') return null;
-    return parseTeamLocationPoint(data, login);
+    const point = parseTeamLocationPoint(data, login);
+    if (!point) return null;
+    // Mismo criterio que el rastro histórico: un reloj adelantado quedaría ACTIVA para
+    // siempre y contaminaría el rastro persistido.
+    const maxAcceptableMs = this.now().getTime() + IClassClient.LOCATIONS_FUTURE_TOLERANCE_MS;
+    if (point.recordedAt.getTime() > maxAcceptableMs) {
+      // Sin esta línea, un reloj adelantado es indistinguible de una cuadrilla sin rastro.
+      console.warn(`[iclass-locations] ${login}: última posición descartada por fecha futura (${point.recordedAt.toISOString()})`);
+      return null;
+    }
+    return point;
   }
 
   /**

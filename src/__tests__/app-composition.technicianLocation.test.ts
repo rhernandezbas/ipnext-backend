@@ -96,9 +96,19 @@ describe('app.ts wiring — technician location & presence audit', () => {
   });
 });
 
-/** El bloque de texto del mount, para acotar las assertions y no matchear en otro lado. */
+/**
+ * El bloque del mount, para acotar las assertions y no matchear en otro lado. Se corta por
+ * paréntesis balanceados: un tope fijo de caracteres deja fuera argumentos reales en cuanto
+ * el wiring crece, y la assertion falla por recorte, no por regresión.
+ */
 function technicianRouterBlock(): string {
   const start = APP_SOURCE.indexOf("app.use('/api/technicians'");
   expect(start).toBeGreaterThan(-1);
-  return APP_SOURCE.slice(start, start + 1400);
+  const open = APP_SOURCE.indexOf('(', start);
+  let depth = 0;
+  for (let i = open; i < APP_SOURCE.length; i++) {
+    if (APP_SOURCE[i] === '(') depth++;
+    else if (APP_SOURCE[i] === ')' && --depth === 0) return APP_SOURCE.slice(start, i + 1);
+  }
+  throw new Error('no se pudo cerrar la llamada app.use(/api/technicians)');
 }

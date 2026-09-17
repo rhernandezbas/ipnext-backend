@@ -1,4 +1,5 @@
 import { IClassClient } from '@infrastructure/adapters/iclass/IClassClient';
+import { IClassUnavailableError } from '@domain/errors/iclass';
 
 /**
  * Paginación del rastro GPS de cuadrillas (change `iclass-gps-audit`, delta REQ-ICLASS-LOC-*).
@@ -61,7 +62,7 @@ function locationPage(n: number, startMinute = 0) {
 /** IClass responde 204 con cuerpo vacío (no un objeto). */
 const EMPTY_204 = { ok: { data: '' } };
 
-function makeClient(script: Scripted) {
+function makeClient(script: Scripted, now?: () => Date) {
   const { http, calls } = makeHttp(script);
   const client = new IClassClient({
     baseUrl: 'http://iclass.test',
@@ -72,6 +73,7 @@ function makeClient(script: Scripted) {
     http: http as any,
     subresourceBackoffMs: 0,
     _sleep: async () => undefined,
+    ...(now ? { now } : {}),
   });
   return { client, calls };
 }
@@ -259,6 +261,32 @@ describe('IClassClient — getLastTeamLocation (REQ-ICLASS-LOC-1)', () => {
     expect(p).not.toBeNull();
     expect(p!.teamLogin).toBe('IPNXDENIC');
     expect(p!.recordedAt.toISOString()).toBe('2026-07-26T12:41:45.000Z');
+  });
+
+  // El rate limit de IClass llega como HTTP 200 con texto plano: si se leyera como
+  // "sin rastro", el mapa marcaría a TODAS las cuadrillas como SIN_RASTRO en silencio.
+  it('throws instead of reporting "no trail" when IClass answers its rate limit as 200', async () => {
+    const { client } = makeClient({
+      post: [LOGIN_OK],
+      get: [{ ok: { data: 'Espere um pouco antes de fazer outra requisição' } }],
+    });
+
+    await expect(client.getLastTeamLocation('IPNXDENIC')).rejects.toBeInstanceOf(IClassUnavailableError);
+  });
+
+  // Mismo criterio que el rastro histórico: un dispositivo con el reloj adelantado
+  // quedaría "ACTIVA" para siempre y contaminaría el rastro persistido.
+  it('drops a point dated in the future beyond the tolerance', async () => {
+    // 09:41 AR del 26-07 es 12:41Z; el punto dice 12:41 AR = 15:41Z, 3 h en el futuro.
+    const { client } = makeClient(
+      {
+        post: [LOGIN_OK],
+        get: [{ ok: { data: { latitude: -34.65, longitude: -59.45, dataRegistro: '26-07-2026 12:41:45', raio: 6.4, origem: 1 } } }],
+      },
+      () => new Date('2026-07-26T12:41:45Z'),
+    );
+
+    await expect(client.getLastTeamLocation('IPNXDENIC')).resolves.toBeNull();
   });
 
   it('returns null on 204 instead of throwing (cancelled/duplicate logins)', async () => {
