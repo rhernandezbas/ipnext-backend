@@ -900,16 +900,18 @@ describe('IClassClient', () => {
 
   // ── A7: listTeams → maps login/name/thirdPartyCode, filters empty login ──
 
-  it('A7: listTeams maps login/name/thirdPartyCode and filters empty login', async () => {
+  it('A7: listTeams maps login/name/thirdPartyCode/status and filters empty login', async () => {
     const TEAMS_OK = {
       ok: {
         data: {
           // IClass returns the team name in `nome` (Portuguese), NOT `name` (#128) — the
           // fixture must be faithful to the live API or the bug stays hidden.
+          // `status` (#134) — verified live values: Visita | Espera | Inativo | Cancelado.
           objects: [
-            { login: 'equipe-01', nome: 'Equipe Alpha', thirdPartyCode: '6808841' },
+            { login: 'equipe-01', nome: 'Equipe Alpha', thirdPartyCode: '6808841', status: 'Espera' },
             { login: '  ', nome: 'Empty login team', thirdPartyCode: null }, // filtered
-            { login: 'equipe-02', nome: 'Equipe Beta', thirdPartyCode: null },
+            { login: 'equipe-02', nome: 'Equipe Beta', thirdPartyCode: null, status: 'Cancelado' },
+            { login: 'equipe-03', nome: 'Equipe Gamma', thirdPartyCode: null }, // status absent
           ],
           hasMoreElements: false,
         },
@@ -921,9 +923,10 @@ describe('IClassClient', () => {
 
     const teams = await client.listTeams();
 
-    expect(teams).toHaveLength(2);
-    expect(teams[0]).toEqual({ login: 'equipe-01', name: 'Equipe Alpha', thirdPartyCode: '6808841' });
-    expect(teams[1]).toEqual({ login: 'equipe-02', name: 'Equipe Beta', thirdPartyCode: null });
+    expect(teams).toHaveLength(3);
+    expect(teams[0]).toEqual({ login: 'equipe-01', name: 'Equipe Alpha', thirdPartyCode: '6808841', status: 'Espera' });
+    expect(teams[1]).toEqual({ login: 'equipe-02', name: 'Equipe Beta', thirdPartyCode: null, status: 'Cancelado' });
+    expect(teams[2]).toEqual({ login: 'equipe-03', name: 'Equipe Gamma', thirdPartyCode: null, status: null });
     const getCall = calls.find(c => c.method === 'GET' && String(c.url).includes('/teams'));
     expect(getCall).toBeTruthy();
     expect(getCall!.url).toContain(opts.thirdPartyId);

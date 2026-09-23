@@ -123,6 +123,16 @@ export interface IClassTeamDescriptor {
   login: string;
   name: string;
   thirdPartyCode: string | null;
+  /**
+   * Live IClass team status. Observed values: `Visita`, `Espera`, `Inativo`, `Cancelado`.
+   * Only `Cancelado` means the team was terminated in IClass — `Inativo`/`Espera`/`Visita`
+   * are live working states (e.g. a technician shows `Inativo` when offline) and must NOT
+   * be treated as inactive. `null`/absent when IClass omits the field — optional so
+   * existing callers/fixtures that don't care about status keep compiling. Used by
+   * SyncIClassTeams to deactivate cancelled logins instead of leaving them selectable
+   * forever (#134).
+   */
+  status?: string | null;
 }
 
 /**

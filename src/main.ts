@@ -15,6 +15,7 @@ import { bootstrapChatMediaDownload } from './infrastructure/scheduling/bootstra
 import { bootstrapAutoProvisionFiber } from './infrastructure/scheduling/bootstrapAutoProvisionFiber';
 import { bootstrapSnoozeReactivation } from './infrastructure/scheduling/bootstrapSnoozeReactivation';
 import { bootstrapTeamLocationIngest } from './infrastructure/scheduling/bootstrapTeamLocationIngest';
+import { bootstrapIClassTeamSync } from './infrastructure/scheduling/bootstrapIClassTeamSync';
 import { bootstrapFinanceReceiptsIngest } from './infrastructure/scheduling/bootstrapFinanceReceiptsIngest';
 import { bootstrapFinanceSnapshotJob } from './infrastructure/scheduling/bootstrapFinanceSnapshotJob';
 import { bootstrapSuricataSync } from './infrastructure/scheduling/bootstrapSuricataSync';
@@ -129,6 +130,13 @@ void (async () => {
   void bootstrapTeamLocationIngest()
     .then((scheduler) => scheduler?.start())
     .catch((err) => console.error('[gps-ingest] bootstrap failed (server kept alive):', (err as Error).message));
+  // iclass-team-catalog-sync (#134) — periodic refresh of the IClass team catalog
+  // (was manual-only: GET /api/internal/catalogs/teams and /api/admin/iclass/teams
+  // went stale between manual POST /teams/sync calls). Opt-in (envs ICLASS_*), dark
+  // by default (flag 'iclass-team-sync'), same criterion as the other IClass syncs.
+  void bootstrapIClassTeamSync()
+    .then((scheduler) => scheduler?.start())
+    .catch((err) => console.error('[iclass-team-sync] bootstrap failed (server kept alive):', (err as Error).message));
 
   // messaging-inbox-v2-media (F1.5 fase A, Tanda 1) — reintento de descarga de media
   // entrante — opt-in, dark by default (flag 'chat-media-download').

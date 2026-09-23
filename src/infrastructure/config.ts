@@ -189,6 +189,22 @@ export const config = {
   },
 
   /**
+   * IClass team catalog auto-sync (#134). Before this, the catalog (IClassTeam,
+   * served by GET /api/internal/catalogs/teams and GET /api/admin/iclass/teams)
+   * was only refreshed by a manual POST /teams/sync — new technicians never
+   * appeared and cancelled logins stayed selectable forever, so IClass rejected
+   * every schedule slot sent for them. Same opt-in/fail-safe contract as
+   * pppoeAutoMove/radiusAutoCure: invalid/absent env → default, never fails boot.
+   */
+  iclassTeamSync: {
+    intervalMs: parseIntervalMs(process.env.ICLASS_TEAM_SYNC_INTERVAL_MS, {
+      default: 6 * 60 * 60 * 1000, // 6h — same cadence as the IClass GPS ingest.
+      min: 15 * 60 * 1000, // 15min floor — avoid hammering IClass's rate limit.
+      max: 24 * 60 * 60 * 1000, // 24h ceiling.
+    }),
+  },
+
+  /**
    * IClass SEAM portal (fs2.iclass.com.br) — closure-loop photo scraper. The API
    * v2 is photo-blind; the portal HTML is the only source for checklist photo
    * URLs and the signature. Opt-in like `iclass` (no fail-fast at boot).

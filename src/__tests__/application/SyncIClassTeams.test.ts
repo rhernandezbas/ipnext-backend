@@ -144,6 +144,107 @@ describe('SyncIClassTeams', () => {
   it('S4-const: NON_SELECTABLE_TEAM_LOGINS is exported and is an array', () => {
     expect(Array.isArray(NON_SELECTABLE_TEAM_LOGINS)).toBe(true);
   });
+
+  // #134 — live IClass `status` drives active/inactive, not "present vs absent".
+  describe('status-driven deactivation (#134)', () => {
+    it('status Cancelado → team persisted with active=false and counted as cancelled/deactivated', async () => {
+      const { iclass, syncUC, repo } = setup();
+      iclass.teams = [
+        { login: 'IPNXJULIO', name: 'Julio (old)', thirdPartyCode: null, status: 'Cancelado' },
+      ];
+
+      const result = await syncUC.execute();
+
+      expect(result.cancelled).toBe(1);
+      expect(result.deactivated).toBe(1);
+      expect(result.created).toBe(0);
+      expect(result.updated).toBe(0);
+      expect(result.reactivated).toBe(0);
+
+      const team = await repo.getByLogin('IPNXJULIO');
+      expect(team).not.toBeNull();
+      expect(team!.active).toBe(false);
+    });
+
+    it.each(['Visita', 'Espera', 'Inativo', null])(
+      'status %s stays active — only Cancelado deactivates',
+      async (status) => {
+        const { iclass, syncUC, repo } = setup();
+        iclass.teams = [{ login: 'IPNXjulio', name: 'Julio', thirdPartyCode: null, status }];
+
+        const result = await syncUC.execute();
+
+        expect(result.cancelled).toBe(0);
+        expect(result.created).toBe(1);
+        const team = await repo.getByLogin('IPNXjulio');
+        expect(team!.active).toBe(true);
+      },
+    );
+
+    it('comparison is trimmed and case-insensitive ("  cancelado  ", "CANCELADO")', async () => {
+      const { iclass, syncUC, repo } = setup();
+      iclass.teams = [
+        { login: 'TEAM-A', name: 'A', thirdPartyCode: null, status: '  cancelado  ' },
+        { login: 'TEAM-B', name: 'B', thirdPartyCode: null, status: 'CANCELADO' },
+      ];
+
+      const result = await syncUC.execute();
+
+      expect(result.cancelled).toBe(2);
+      expect((await repo.getByLogin('TEAM-A'))!.active).toBe(false);
+      expect((await repo.getByLogin('TEAM-B'))!.active).toBe(false);
+    });
+
+    it('a previously-active team that becomes Cancelado gets deactivated (not left active)', async () => {
+      const { iclass, syncUC, repo } = setup();
+      iclass.teams = [{ login: 'IPNXjulio', name: 'Julio', thirdPartyCode: null, status: 'Espera' }];
+      await syncUC.execute();
+      expect((await repo.getByLogin('IPNXjulio'))!.active).toBe(true);
+
+      iclass.teams = [{ login: 'IPNXjulio', name: 'Julio', thirdPartyCode: null, status: 'Cancelado' }];
+      const result = await syncUC.execute();
+
+      expect(result.cancelled).toBe(1);
+      expect(result.reactivated).toBe(0);
+      expect(result.updated).toBe(0);
+      expect((await repo.getByLogin('IPNXjulio'))!.active).toBe(false);
+    });
+
+    it('a Cancelado login re-synced again stays counted as cancelled, never as reactivated', async () => {
+      const { iclass, syncUC, repo } = setup();
+      iclass.teams = [{ login: 'IPNXJULIO', name: 'Julio (old)', thirdPartyCode: null, status: 'Cancelado' }];
+      await syncUC.execute();
+
+      const result = await syncUC.execute(); // same Cancelado team synced again
+
+      expect(result.cancelled).toBe(1);
+      expect(result.reactivated).toBe(0);
+      expect((await repo.getByLogin('IPNXJULIO'))!.active).toBe(false);
+    });
+
+    it('case-distinct logins (IPNXJULIO vs IPNXjulio vs IPNXIPNXJULIO) are kept as separate rows', async () => {
+      const { iclass, syncUC, repo } = setup();
+      iclass.teams = [
+        { login: 'IPNXJULIO', name: 'Julio (old A)', thirdPartyCode: null, status: 'Cancelado' },
+        { login: 'IPNXIPNXJULIO', name: 'Julio (old B)', thirdPartyCode: null, status: 'Cancelado' },
+        { login: 'IPNXjulio', name: 'Julio (current)', thirdPartyCode: null, status: 'Espera' },
+      ];
+
+      const result = await syncUC.execute();
+
+      expect(result.synced).toBe(3);
+      expect(result.cancelled).toBe(2);
+      expect(result.created).toBe(1);
+
+      const all = await repo.list();
+      expect(all).toHaveLength(3);
+      expect((await repo.getByLogin('IPNXJULIO'))!.active).toBe(false);
+      expect((await repo.getByLogin('IPNXIPNXJULIO'))!.active).toBe(false);
+      const current = await repo.getByLogin('IPNXjulio');
+      expect(current!.active).toBe(true);
+      expect(current!.name).toBe('Julio (current)');
+    });
+  });
 });
 
 // S3 — list for selector

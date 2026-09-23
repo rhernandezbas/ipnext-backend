@@ -19,6 +19,15 @@ const ListCitiesQuerySchema = z.object({
   active: BoolQueryFlag,
 });
 
+// Unlike ListCitiesQuerySchema (no filter by default — the caller decides), /teams
+// DEFAULTS to active=true when the query param is absent: the only consumer of this
+// bridge is the assignment automation, which only ever wants assignable technicians
+// (#134 — a cancelled/terminated login left selectable rejects every schedule slot
+// IClass receives for it). Pass ?active=false explicitly to see deactivated teams.
+const ListTeamsQuerySchema = z.object({
+  active: BoolQueryFlag,
+});
+
 // Same coercion criterion as the rest of this router's numeric/boolean query params —
 // zod coerce so `?page=2&limit=10` (always strings on req.query) parse cleanly.
 const ListClientsQuerySchema = z.object({
@@ -48,7 +57,9 @@ export interface InternalCatalogsDeps {
  * authenticated equivalents elsewhere in app.ts — no duplicated DI.
  *
  * GET /cities             — IClass node catalog (nodes ARE the cities in Prominense).
- * GET /teams              — IClass team catalog (technicians/cuadrillas).
+ * GET /teams              — IClass team catalog (technicians/cuadrillas). Defaults to
+ *                            active=true (only assignable technicians); ?active=false
+ *                            to see deactivated/cancelled logins too (#134).
  * GET /clients            — client search, to find WHO the task is for.
  * GET /clients/:id/contracts — a client's contracts, to pick WHICH one when there are several.
  * GET /projects           — project catalog, to pick the IClass SO type target.
@@ -90,10 +101,18 @@ export function createInternalCatalogsRouter(deps: InternalCatalogsDeps): Router
     }
   });
 
-  // GET /teams — same DTO/mapping as GET /api/admin/iclass/teams (iclassTeams.routes.ts).
-  router.get('/teams', async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+  // GET /teams — same DTO/mapping as GET /api/admin/iclass/teams (iclassTeams.routes.ts),
+  // but filtered to active=true by default (#134) — see ListTeamsQuerySchema above.
+  router.get('/teams', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const teams = await listIClassTeams.execute();
+      const parsed = ListTeamsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'Validation error', code: 'VALIDATION_ERROR', details: parsed.error.issues });
+        return;
+      }
+
+      const active = parsed.data.active ?? true;
+      const teams = await listIClassTeams.execute({ active });
       res.status(200).json({ items: teams.map(toIClassTeamDTO) });
     } catch (err) {
       next(err);
