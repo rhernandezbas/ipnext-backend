@@ -18,6 +18,7 @@ import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemo
 import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { OrchestratorEnforcementAdapter } from '@infrastructure/adapters/orchestrator/OrchestratorEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
 import { AssociatePppoeToContract } from '@application/use-cases/AssociatePppoeToContract';
@@ -155,7 +156,7 @@ async function buildApp(opts?: { unreachableNas?: string[]; orchestratorEnforcem
     preview,
     runner,
     batchRepo,
-    new IngestPppoeFromNas(pppoeRepo, nasRepo, new InMemoryRadiusOrchestratorGateway()),
+    new IngestPppoeFromNas(pppoeRepo, nasRepo, new InMemoryRadiusOrchestratorGateway(), new InMemoryIpNetworkRepository()),
     new AssociatePppoeToContract(pppoeRepo, ensure),
     new GetPppoeCredentials(pppoeRepo),
     new ListUnassignedPppoe(pppoeRepo),

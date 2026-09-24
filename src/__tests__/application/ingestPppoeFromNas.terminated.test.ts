@@ -12,9 +12,30 @@
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
 import { IngestPppoeFromNas } from '@application/use-cases/IngestPppoeFromNas';
+import { IpPool } from '@domain/entities/network';
 
 const NAS_RADIUS_ID = '3'; // radius_orchestrator (InMemoryNasRepository seed)
+
+/** Pool del NAS RADIUS_ID cubriendo los framedIp usados en estos tests (ingest-pppoe-filter-by-nas-pools). */
+function makeIpNetworkRepo(): InMemoryIpNetworkRepository {
+  const repo = new InMemoryIpNetworkRepository();
+  (repo as unknown as { pools: IpPool[] }).pools = [];
+  repo.seedPool({
+    id: 'radius-nas-pool',
+    name: 'radius-nas-pool',
+    networkId: 'net-radius',
+    rangeStart: '100.64.9.0',
+    rangeEnd: '100.64.9.255',
+    type: 'dynamic',
+    assignedCount: 0,
+    totalCount: 254,
+    nasId: NAS_RADIUS_ID,
+    ipKind: null,
+  });
+  return repo;
+}
 
 describe('IngestPppoeFromNas — re-ingest de registros terminated', () => {
   it('re-ingesta un PPPoE terminated (lo pone enabled+contractId null) en vez de skipearlo', async () => {
@@ -25,7 +46,7 @@ describe('IngestPppoeFromNas — re-ingest de registros terminated', () => {
         { username: 'CintiaMoyanoMercFibra', password: 'newpass', plan: 'IP-Fibra-100', framedIp: '100.64.9.245' },
       ],
     });
-    const ingest = new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator);
+    const ingest = new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator, makeIpNetworkRepo());
 
     // Simular el estado post-baja: terminated + contractId=null (después del fix de TerminatePppoeService)
     await pppoeRepo.upsertByUsername({
@@ -56,10 +77,10 @@ describe('IngestPppoeFromNas — re-ingest de registros terminated', () => {
     const nasRepo     = new InMemoryNasRepository();
     const orchestrator = new InMemoryRadiusOrchestratorGateway({
       usersInventory: [
-        { username: 'OtroClienteUser', password: 'newpass', plan: 'IP-Fibra-50', framedIp: null },
+        { username: 'OtroClienteUser', password: 'newpass', plan: 'IP-Fibra-50', framedIp: '100.64.9.50' },
       ],
     });
-    const ingest = new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator);
+    const ingest = new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator, makeIpNetworkRepo());
 
     await pppoeRepo.upsertByUsername({
       username:   'OtroClienteUser',

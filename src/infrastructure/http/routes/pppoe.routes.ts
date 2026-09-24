@@ -107,6 +107,7 @@ import {
   PppoeAlreadyAssociatedError,
   PppoeContractAlreadyHasServiceError,
   PppoeIngestNotSupportedError,
+  PppoeNasHasNoPoolsError,
   PppoeRenameNasNotSupportedError,
   PppoePendingInstallError,
   NasNotFoundError,
@@ -526,6 +527,12 @@ export function createPppoeRouter(
         }
         // Tipo de NAS sin soporte de adopción todavía (no es radius_orchestrator).
         if (err instanceof PppoeIngestNotSupportedError) {
+          res.status(422).json({ code: err.code, error: err.message });
+          return;
+        }
+        // ingest-pppoe-filter-by-nas-pools: el NAS radius_orchestrator no tiene pools IP →
+        // no hay forma de atribuirle el inventario RADIUS compartido sin contaminarlo.
+        if (err instanceof PppoeNasHasNoPoolsError) {
           res.status(422).json({ code: err.code, error: err.message });
           return;
         }

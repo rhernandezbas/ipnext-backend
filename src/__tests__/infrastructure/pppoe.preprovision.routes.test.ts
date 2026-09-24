@@ -213,7 +213,7 @@ async function buildApp(): Promise<Fixture> {
     preview,
     runner,
     batchRepo,
-    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator),
+    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator, netRepo),
     new AssociatePppoeToContract(pppoeRepo, ensure),
     new GetPppoeCredentials(pppoeRepo),
     new ListUnassignedPppoe(pppoeRepo),

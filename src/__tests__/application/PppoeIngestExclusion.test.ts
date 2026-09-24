@@ -13,25 +13,48 @@ import { ListUnassignedPppoe } from '@application/use-cases/ListUnassignedPppoe'
 import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryPppoeServiceRepository';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
+import { IpPool } from '@domain/entities/network';
 
 // NAS seed del InMemoryNasRepository: id '3' = radius_orchestrator
 const RADIUS_NAS = '3';
 
+// accesosurN llevan framedIp DENTRO del pool a propósito: cuando no hay exclusionPatterns
+// (BC test) también deben poder ingerirse — lo único que los descarta es el patrón, no el pool.
 const MIXED_INVENTORY = [
   { username: 'juanperez',  password: 'pass1234', plan: 'IP-Air-30-10', framedIp: '100.64.10.10' },
-  { username: 'accesosur1', password: 'pw',       plan: null,           framedIp: null },
-  { username: 'accesosur2', password: 'pw2',      plan: null,           framedIp: null },
-  { username: 'mariam',     password: 'otra',     plan: null,           framedIp: null },
+  { username: 'accesosur1', password: 'pw',       plan: null,           framedIp: '100.64.10.12' },
+  { username: 'accesosur2', password: 'pw2',      plan: null,           framedIp: '100.64.10.13' },
+  { username: 'mariam',     password: 'otra',     plan: null,           framedIp: '100.64.10.11' },
 ];
 
 const EXCLUDE = [/^accesosur\d+$/i];
+
+/** Pool del NAS RADIUS_NAS cubriendo el rango usado en los tests (ingest-pppoe-filter-by-nas-pools). */
+function makeIpNetworkRepo(): InMemoryIpNetworkRepository {
+  const repo = new InMemoryIpNetworkRepository();
+  (repo as unknown as { pools: IpPool[] }).pools = [];
+  repo.seedPool({
+    id: 'radius-nas-pool',
+    name: 'radius-nas-pool',
+    networkId: 'net-radius',
+    rangeStart: '100.64.10.0',
+    rangeEnd: '100.64.10.255',
+    type: 'dynamic',
+    assignedCount: 0,
+    totalCount: 254,
+    nasId: RADIUS_NAS,
+    ipKind: null,
+  });
+  return repo;
+}
 
 describe('IngestPppoeFromNas — exclusionPatterns (Bug 1)', () => {
   it('con exclusionPatterns filtra accesosurN y persiste el resto', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: MIXED_INVENTORY });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, EXCLUDE);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo(), EXCLUDE);
 
     const result = await uc.execute(RADIUS_NAS);
 
@@ -54,7 +77,7 @@ describe('IngestPppoeFromNas — exclusionPatterns (Bug 1)', () => {
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: MIXED_INVENTORY });
     // Sin pasar exclusionPatterns → usa default []
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo());
 
     const result = await uc.execute(RADIUS_NAS);
 
@@ -71,7 +94,7 @@ describe('IngestPppoeFromNas — exclusionPatterns (Bug 1)', () => {
     await repo.upsertByUsername({ username: 'juanperez', password: 'OLD', nasId: RADIUS_NAS, contractId: 'C1' });
 
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: MIXED_INVENTORY });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, EXCLUDE);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo(), EXCLUDE);
 
     const result = await uc.execute(RADIUS_NAS);
 
@@ -88,12 +111,12 @@ describe('IngestPppoeFromNas — exclusionPatterns (Bug 1)', () => {
   it('case-insensitive: AccesoSur1 también se excluye', async () => {
     const inventory = [
       { username: 'AccesoSur1', password: 'pw', plan: null, framedIp: null },
-      { username: 'normal',     password: 'pw', plan: null, framedIp: null },
+      { username: 'normal',     password: 'pw', plan: null, framedIp: '100.64.10.20' },
     ];
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: inventory });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, EXCLUDE);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo(), EXCLUDE);
 
     const result = await uc.execute(RADIUS_NAS);
 

@@ -49,11 +49,13 @@ import { DeassociatePppoeFromContract } from '@application/use-cases/Deassociate
 import { EnsureInternetContractService } from '@application/use-cases/EnsureInternetContractService';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
 
 import { AuthProvider } from '@domain/ports/AuthProvider';
 import { User } from '@domain/entities/auth';
 import type { RbacModuleCode, PermissionAction } from '@domain/entities/rbac';
 import { OrchestratorRejectedError, OrchestratorUnreachableError } from '@domain/errors/pppoe';
+import { IpPool } from '@domain/entities/network';
 
 // ── EchoAuthProvider — convierte el cookie value en { id } ──────────────────
 class EchoAuthProvider implements AuthProvider {
@@ -96,7 +98,7 @@ type RadiusInventory = ConstructorParameters<typeof InMemoryRadiusOrchestratorGa
   ? O extends { usersInventory?: infer U } ? U : never
   : never;
 
-async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: RadiusInventory; orchestrator?: InMemoryRadiusOrchestratorGateway }): Promise<Fixture> {
+async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: RadiusInventory; orchestrator?: InMemoryRadiusOrchestratorGateway; withoutIpPools?: boolean }): Promise<Fixture> {
   // RBAC plumbing
   const roleRepo     = new InMemoryRbacRoleRepository();
   const userRoleRepo = new InMemoryRbacUserRoleRepository();
@@ -154,6 +156,24 @@ async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: Rad
   const csRepo    = new InMemoryContractServiceRepository();
   const catalogRepo = new InMemoryServiceCatalogRepository();
   const ensure    = new EnsureInternetContractService(csRepo, catalogRepo);
+  // ingest-pppoe-filter-by-nas-pools: pool del NAS RADIUS_NAS ('3') cubriendo los framedIp
+  // usados por el inventario de estos tests (100.64.10.x).
+  const ipNetworkRepo = new InMemoryIpNetworkRepository();
+  (ipNetworkRepo as unknown as { pools: IpPool[] }).pools = [];
+  if (!opts?.withoutIpPools) {
+    ipNetworkRepo.seedPool({
+      id: 'radius-nas-pool',
+      name: 'radius-nas-pool',
+      networkId: 'net-radius',
+      rangeStart: '100.64.10.0',
+      rangeEnd: '100.64.10.255',
+      type: 'dynamic',
+      assignedCount: 0,
+      totalCount: 254,
+      nasId: RADIUS_NAS_ID,
+      ipKind: null,
+    });
+  }
 
   const requirePerm = (m: RbacModuleCode, a: PermissionAction) => requirePermission(userRepo, m, a);
 
@@ -181,7 +201,7 @@ async function buildApp(opts?: { unreachableNas?: string[]; usersInventory?: Rad
     preview,
     runner,
     batchRepo,
-    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator),
+    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator, ipNetworkRepo),
     new AssociatePppoeToContract(pppoeRepo, ensure),
     new GetPppoeCredentials(pppoeRepo),
     new ListUnassignedPppoe(pppoeRepo),
@@ -691,9 +711,11 @@ describe('DELETE /api/pppoe/:id', () => {
 
 // NAS id '3' del InMemoryNasRepository = radius_orchestrator; '1' = mikrotik_api
 const RADIUS_NAS = '3';
+// ingest-pppoe-filter-by-nas-pools: ambos framedIp caen dentro del pool 100.64.10.0-255
+// sembrado en buildApp() para RADIUS_NAS_ID — de lo contrario quedarían skippedOtherNas.
 const INVENTORY = [
   { username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10', framedIp: '100.64.10.10' },
-  { username: 'mariam',    password: 'otra',     plan: null,           framedIp: null },
+  { username: 'mariam',    password: 'otra',     plan: null,           framedIp: '100.64.10.11' },
 ];
 
 describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
@@ -712,7 +734,7 @@ describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
     const fx = await buildApp({ usersInventory: INVENTORY });
     const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ created: 2, skipped: 0, excluded: 0 });
+    expect(res.body).toEqual({ created: 2, skipped: 0, excluded: 0, skippedOtherNas: 0 });
     const orphans = await fx.pppoeRepo.findUnassigned();
     expect(orphans.map(s => s.username).sort()).toEqual(['juanperez', 'mariam']);
   });
@@ -722,7 +744,7 @@ describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
     await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
     const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ created: 0, skipped: 2, excluded: 0 });
+    expect(res.body).toEqual({ created: 0, skipped: 2, excluded: 0, skippedOtherNas: 0 });
   });
 
   it('NAS mikrotik_api → 422 PPPOE_INGEST_NOT_SUPPORTED', async () => {
@@ -730,6 +752,16 @@ describe('POST /api/nas/:id/ingest-pppoe (pppoe.manage)', () => {
     const res = await asUser(request(fx.app).post(`/api/nas/1/ingest-pppoe`), fx.manageUserId);
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('PPPOE_INGEST_NOT_SUPPORTED');
+  });
+
+  // ingest-pppoe-filter-by-nas-pools: sin pools no hay forma de atribuir el inventario RADIUS
+  // compartido a ESTE NAS — se rechaza en vez de ingerir a ciegas TODO el RADIUS.
+  it('NAS radius_orchestrator SIN IP pools → 422 PPPOE_NAS_HAS_NO_POOLS, nada se crea', async () => {
+    const fx = await buildApp({ usersInventory: INVENTORY, withoutIpPools: true });
+    const res = await asUser(request(fx.app).post(`/api/nas/${RADIUS_NAS}/ingest-pppoe`), fx.manageUserId);
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('PPPOE_NAS_HAS_NO_POOLS');
+    expect(await fx.pppoeRepo.findUnassigned()).toEqual([]);
   });
 
   it('NAS inexistente → 404 NAS_NOT_FOUND', async () => {

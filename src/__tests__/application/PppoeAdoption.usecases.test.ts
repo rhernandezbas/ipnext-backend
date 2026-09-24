@@ -18,6 +18,7 @@ import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemo
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { InMemoryContractServiceRepository } from '@infrastructure/adapters/in-memory/InMemoryContractServiceRepository';
 import { InMemoryServiceCatalogRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCatalogRepository';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
 
 import {
   NasNotFoundError,
@@ -25,6 +26,7 @@ import {
   PppoeServiceNotFoundError,
   PppoeAlreadyAssociatedError,
 } from '@domain/errors/pppoe';
+import { IpPool } from '@domain/entities/network';
 
 // NAS seed del InMemoryNasRepository: id '1' = mikrotik_api, id '3' = radius_orchestrator
 const RADIUS_NAS = '3';
@@ -32,19 +34,38 @@ const MK_NAS = '1';
 
 const INVENTORY = [
   { username: 'juanperez', password: 'pass1234', plan: 'IP-Air-30-10', framedIp: '100.64.10.10' },
-  { username: 'mariam',    password: 'otra',     plan: null,           framedIp: null },
+  { username: 'mariam',    password: 'otra',     plan: null,           framedIp: '100.64.10.11' },
 ];
+
+/** Pool del NAS RADIUS_NAS cubriendo el rango usado por INVENTORY (ingest-pppoe-filter-by-nas-pools). */
+function makeIpNetworkRepo(): InMemoryIpNetworkRepository {
+  const repo = new InMemoryIpNetworkRepository();
+  (repo as unknown as { pools: IpPool[] }).pools = [];
+  repo.seedPool({
+    id: 'radius-nas-pool',
+    name: 'radius-nas-pool',
+    networkId: 'net-radius',
+    rangeStart: '100.64.10.0',
+    rangeEnd: '100.64.10.255',
+    type: 'dynamic',
+    assignedCount: 0,
+    totalCount: 254,
+    nasId: RADIUS_NAS,
+    ipKind: null,
+  });
+  return repo;
+}
 
 describe('IngestPppoeFromNas', () => {
   it('radius_orchestrator → crea PPPoE huérfanos con password/profile/remoteAddress y status enabled', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: INVENTORY });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo());
 
     const result = await uc.execute(RADIUS_NAS);
 
-    expect(result).toEqual({ created: 2, skipped: 0, excluded: 0 });
+    expect(result).toEqual({ created: 2, skipped: 0, excluded: 0, skippedOtherNas: 0 });
     const juan = await repo.findByUsername('juanperez');
     expect(juan).not.toBeNull();
     expect(juan!.password).toBe('pass1234');         // password sembrado (verdad técnica)
@@ -63,11 +84,11 @@ describe('IngestPppoeFromNas', () => {
     await repo.upsertByUsername({
       username: 'juanperez', password: 'NO-CLOBBER', nasId: RADIUS_NAS, contractId: 'C1', profile: 'IP-VIP',
     });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo());
 
     const result = await uc.execute(RADIUS_NAS);
 
-    expect(result).toEqual({ created: 1, skipped: 1, excluded: 0 }); // mariam created, juanperez skipped
+    expect(result).toEqual({ created: 1, skipped: 1, excluded: 0, skippedOtherNas: 0 }); // mariam created, juanperez skipped
     const juan = await repo.findByUsername('juanperez');
     expect(juan!.password).toBe('NO-CLOBBER');   // ← intacto
     expect(juan!.contractId).toBe('C1');         // ← asociación intacta
@@ -78,7 +99,7 @@ describe('IngestPppoeFromNas', () => {
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: INVENTORY });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo());
     await expect(uc.execute('nas-99')).rejects.toBeInstanceOf(NasNotFoundError);
   });
 
@@ -86,16 +107,16 @@ describe('IngestPppoeFromNas', () => {
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: INVENTORY });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch);
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo());
     await expect(uc.execute(MK_NAS)).rejects.toBeInstanceOf(PppoeIngestNotSupportedError);
   });
 
-  it('inventario vacío → {created:0, skipped:0, excluded:0}', async () => {
+  it('inventario vacío → {created:0, skipped:0, excluded:0, skippedOtherNas:0}', async () => {
     const repo = new InMemoryPppoeServiceRepository();
     const nasRepo = new InMemoryNasRepository();
     const orch = new InMemoryRadiusOrchestratorGateway({ usersInventory: [] });
-    const uc = new IngestPppoeFromNas(repo, nasRepo, orch);
-    expect(await uc.execute(RADIUS_NAS)).toEqual({ created: 0, skipped: 0, excluded: 0 });
+    const uc = new IngestPppoeFromNas(repo, nasRepo, orch, makeIpNetworkRepo());
+    expect(await uc.execute(RADIUS_NAS)).toEqual({ created: 0, skipped: 0, excluded: 0, skippedOtherNas: 0 });
   });
 });
 

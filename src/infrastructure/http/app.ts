@@ -3186,7 +3186,9 @@ export function createApp(taskAutocomplete?: TaskAutocompleteScheduler | null, b
       cutBatchRepo,
       // Adopción del inventario — comparte el singleton `orchestrator` (listUsers vía GET /users).
       // exclusionPatterns filtra usernames placeholder (accesosurN) del ingest y del listado.
-      new IngestPppoeFromNas(pppoeRepo, nasRepoForPppoe, orchestrator, config.pppoe.ingestExcludePatterns),
+      // ipNetworkRepo (ingest-pppoe-filter-by-nas-pools): filtra el inventario RADIUS compartido
+      // por pertenencia al NAS (framedIp dentro de sus pools) — evita adoptar usuarios de OTROS NAS.
+      new IngestPppoeFromNas(pppoeRepo, nasRepoForPppoe, orchestrator, ipNetworkRepo, config.pppoe.ingestExcludePatterns),
       new AssociatePppoeToContract(pppoeRepo, ensureInternet, new PrismaServiceCatalogRepository(), new PrismaContractServiceEventRepository()),
       new GetPppoeCredentials(pppoeRepo),
       new ListUnassignedPppoe(pppoeRepo, config.pppoe.ingestExcludePatterns),

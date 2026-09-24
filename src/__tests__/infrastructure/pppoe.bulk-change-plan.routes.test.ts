@@ -25,6 +25,7 @@ import { InMemoryPppoeServiceRepository } from '@infrastructure/adapters/in-memo
 import { InMemoryRouterGateway } from '@infrastructure/adapters/in-memory/InMemoryRouterGateway';
 import { RouterOsEnforcementAdapter } from '@infrastructure/adapters/routeros/RouterOsEnforcementAdapter';
 import { InMemoryNasRepository } from '@infrastructure/adapters/in-memory/InMemoryNasRepository';
+import { InMemoryIpNetworkRepository } from '@infrastructure/adapters/in-memory/InMemoryIpNetworkRepository';
 import { InMemoryRadiusOrchestratorGateway } from '@infrastructure/adapters/in-memory/InMemoryRadiusOrchestratorGateway';
 import { InMemoryServiceCutBatchRepository } from '@infrastructure/adapters/in-memory/InMemoryServiceCutBatchRepository';
 import { InMemoryDistributedLock } from '@infrastructure/adapters/in-memory/InMemoryDistributedLock';
@@ -178,7 +179,7 @@ async function buildApp(opts?: BuildAppOptions): Promise<Fixture> {
     preview,
     runner,
     batchRepo,
-    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator),
+    new IngestPppoeFromNas(pppoeRepo, nasRepo, orchestrator, new InMemoryIpNetworkRepository()),
     new AssociatePppoeToContract(pppoeRepo, ensure),
     new GetPppoeCredentials(pppoeRepo),
     new ListUnassignedPppoe(pppoeRepo),

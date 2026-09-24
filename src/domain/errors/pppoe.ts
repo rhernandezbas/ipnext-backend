@@ -80,6 +80,24 @@ export class PppoeIngestNotSupportedError extends DomainError {
   }
 }
 
+/**
+ * ingest-pppoe-filter-by-nas-pools: el NAS `radius_orchestrator` no tiene NINGÚN IpPool
+ * asignado (`IpPool.nasId`). Sin pools no hay forma de saber qué usuarios del RADIUS
+ * compartido (~6300, de MUCHOS NAS) pertenecen a ESTE NAS — antes se atribuían TODOS,
+ * lo que contaminaba el NAS con usuarios de otros routers (NE8000, CGNAT de otro NAS,
+ * healthchecks sin IP). Se rechaza explícitamente en vez de ingerir a ciegas.
+ * Code → HTTP: PPPOE_NAS_HAS_NO_POOLS → 422.
+ */
+export class PppoeNasHasNoPoolsError extends DomainError {
+  constructor(public readonly nasId: string) {
+    super(
+      `NAS has no IP pools; cannot attribute RADIUS users to it (nasId: ${nasId})`,
+      'PPPOE_NAS_HAS_NO_POOLS',
+    );
+    this.name = 'PppoeNasHasNoPoolsError';
+  }
+}
+
 /** No existe el NasServer (router) referenciado por `nasId`. */
 export class NasNotFoundError extends DomainError {
   constructor(public readonly id: string) {
